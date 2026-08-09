@@ -27,6 +27,10 @@ func main() {
 		cmdRun(args[1:])
 	case "nodes":
 		cmdNodes(args[1:])
+	case "stats":
+		cmdStats(args[1:])
+	case "dashboard":
+		cmdDashboard(args[1:])
 	case "attach":
 		cmdAttach(args[1:])
 	case "detach":
@@ -49,6 +53,8 @@ verbs:
   daemon              run the node side (advertises via mDNS, serves jobs)
   run <node> -- <image> <cmd...>   stream a job to a node (ssh-like)
   nodes               list the fleet (mDNS browse + registry files)
+  stats               poll every node, emit fleet state as JSONL
+  dashboard           live TUI overview: nodes, containers, cpu/mem
   attach <name> <addr>    remember a static peer (for non-mDNS networks)
   detach <name>       forget a static peer
   version             print version
@@ -77,6 +83,13 @@ func cmdRun(args []string) {
 		die("usage: sandman run [-e K=V] <node> -- <image> <cmd...>", 2)
 	}
 	clientRun(rest[0], *state, rest[2], []string(env), rest[3:])
+}
+
+func cmdStats(args []string) {
+	fs := flag.NewFlagSet("stats", flag.ExitOnError)
+	state := fs.String("state", DefaultState, "state directory")
+	fs.Parse(args)
+	clientStats(*state)
 }
 
 func cmdNodes(args []string) {

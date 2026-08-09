@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"net"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,7 +75,7 @@ func (r *registry) mergeMdns(e *zeroconf.ServiceEntry) {
 	}
 	r.peers[e.Instance] = &peer{
 		Name:     e.Instance,
-		Addr:     fmt.Sprintf("%s:%d", addr, e.Port),
+		Addr:     net.JoinHostPort(addr, strconv.Itoa(e.Port)),
 		Docker:   textValue(e.Text, "docker"),
 		Source:   "mdns",
 		LastSeen: time.Now(),
@@ -90,7 +91,7 @@ func mdnsLookup(name string, timeout time.Duration) string {
 	for e := range ch {
 		if e.Instance == name {
 			if ip := firstAddr(e); ip != "" {
-				return fmt.Sprintf("%s:%d", ip, e.Port)
+				return net.JoinHostPort(ip, strconv.Itoa(e.Port))
 			}
 		}
 	}

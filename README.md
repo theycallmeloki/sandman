@@ -47,6 +47,8 @@ static peer; `detach` removes it.
 ```sh
 sandman daemon                # run the node side (TCP :4242, mDNS)
 sandman nodes                 # list the fleet
+sandman stats                 # poll every node; fleet state as JSONL on stdout
+sandman dashboard             # live TUI: nodes, containers, per-container cpu/mem
 sandman run <node> -- <image> <cmd...>   # stream a job; exit code is the container's
 sandman run -e K=V b2 -- alpine sh -c 'echo $K'
 sandman attach <name> <addr>  # static peer (non-mDNS networks)
@@ -62,6 +64,21 @@ sandman run b1 -- alpine true && sandman run b2 -- alpine echo done
 sandman run b2 -- alpine sh -c 'exit 7'; echo $?    # 7
 ```
 
+## Monitoring: stats and dashboard
+
+The `STATS` wire verb answers with every running container on the node plus
+live resource usage (cpu %, mem bytes/limit, pids) as JSON lines. The client
+polls every known node and emits **JSONL to stdout** — one object per node,
+pipe-friendly:
+
+```sh
+sandman stats | jq -r '[.node, ([.containers[].cpu] | add)] | @tsv'
+```
+
+`sandman dashboard` is a thin renderer over the same data: alternate-screen
+TUI with block-character memory bars, refreshed on a ticker. `q` quits.
+Any tool can consume the JSONL — the dashboard is just one consumer.
+
 ## How it works
 
 **Discovery.** Each daemon publishes a `_sandman._tcp.local.` service (TXT
@@ -75,7 +92,9 @@ the node immediately. The registry file is the transparent view — `cat
 with a scratch workdir, starts it attached, and relays the three fds over the
 connection. Exit codes come from `docker start -a` (never `docker wait`, which
 lies on `--rm` containers); signal deaths report 128+signal, shell-style. If
-the client vanishes, the daemon kills the container — no orphans.
+the client vanishes, the daemon kills the container — no orphans. Containers
+are named `sandman-<jobid>` and labeled with their owning node, so a fresh
+daemon prunes only the containers its own crashed predecessor left behind.
 
 **Wire protocol.** Line-oriented text over TCP; control lines, length-prefixed
 frames for data:

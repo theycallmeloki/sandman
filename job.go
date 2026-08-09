@@ -18,6 +18,7 @@ type jobSpec struct {
 	Env     []string // "K=V"
 	Workdir string
 	Argv    []string
+	Node    string // owning daemon, for orphan ownership on shared dockers
 }
 
 // job is a running container and its stdio pipes.
@@ -33,7 +34,14 @@ type job struct {
 // startJob creates and starts the container. The container id is known
 // synchronously (docker create -q), so signals work from the first frame.
 func startJob(spec jobSpec) (*job, error) {
-	args := []string{"create", "-q", "--rm", "-i", "-w", spec.Workdir}
+	// The container name is the job's identity on the node; the label is its
+	// owner. A fresh daemon prunes only containers carrying its own label, so
+	// jobs orphaned by a crash do not outlive their owner — without touching
+	// jobs a sibling daemon owns on a shared dockerd (Rule of Repair).
+	args := []string{"create", "-q", "--rm", "-i",
+		"--name", "sandman-" + spec.ID,
+		"--label", "sandman.node=" + spec.Node,
+		"-w", spec.Workdir}
 	for _, e := range spec.Env {
 		args = append(args, "-e", e)
 	}

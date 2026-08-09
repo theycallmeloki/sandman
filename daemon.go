@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -38,6 +39,25 @@ func dockerVersion() string {
 	return dockerVer
 }
 
+// pruneOrphans removes containers a previous instance of THIS daemon left
+// behind (a daemon crash cannot run the kill-on-disconnect path). The
+// sandman.node label scopes the prune so a daemon never touches jobs a
+// sibling daemon owns on a shared dockerd.
+func pruneOrphans(node string) {
+	out, err := exec.Command("docker", "ps", "-a", "--filter", "label=sandman.node="+node, "--format", "{{.ID}}").Output()
+	if err != nil {
+		log.Printf("orphan scan: %v", err)
+		return
+	}
+	for _, id := range strings.Fields(string(out)) {
+		if err := exec.Command("docker", "rm", "-f", id).Run(); err != nil {
+			log.Printf("orphan prune %s: %v", id, err)
+			continue
+		}
+		log.Printf("pruned orphan job container %s", id)
+	}
+}
+
 // daemon is the node side of the fabric: it advertises itself, browses for
 // peers, and serves jobs over one TCP port.
 type daemon struct {
@@ -60,6 +80,7 @@ func cmdDaemon(args []string) {
 	if err := d.reg.loadStatic(); err != nil {
 		log.Printf("peers file: %v", err)
 	}
+	pruneOrphans(*name)
 
 	server, err := advertise(*name, *port)
 	if err != nil {
@@ -139,6 +160,9 @@ func (d *daemon) handleConn(c net.Conn) {
 	case "NODES":
 		c.SetDeadline(time.Now().Add(10 * time.Second))
 		d.handleNodes(w)
+	case "STATS":
+		c.SetDeadline(time.Now().Add(15 * time.Second))
+		d.handleStats(w)
 	case "RUN":
 		c.SetDeadline(time.Time{}) // no idle timeout mid-job, like ssh
 		d.handleRun(r, w)
@@ -154,6 +178,77 @@ func (d *daemon) handleNodes(w *bufio.Writer) {
 	}
 	for _, p := range peers {
 		if err := writeLine(w, "NODE", p.Name, p.Addr, p.Docker, p.Source); err != nil {
+			return
+		}
+	}
+}
+
+// handleStats answers a STATS request with the node's running containers and
+// their live resource usage: "STATS <n>" then n JSON lines, one per
+// container. The docker CLI supplies the numbers; this relays them as a
+// stable schema the fleet can consume (Rule of Representation).
+func (d *daemon) handleStats(w *bufio.Writer) {
+	// docker stats samples all running containers and takes a few seconds
+	// on a busy node — give each call its own generous deadline.
+	psCtx, psCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer psCancel()
+	statsCtx, statsCancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer statsCancel()
+
+	type psLine struct {
+		ID, Names, Image, State, Status string
+	}
+	var conts []psLine
+	// --no-trunc: docker ps shortens IDs, but docker stats reports full IDs —
+	// the join must match on the full 64-char id.
+	if out, err := exec.CommandContext(psCtx, "docker", "ps", "--no-trunc", "--format", "{{json .}}").Output(); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line == "" {
+				continue
+			}
+			var c psLine
+			if json.Unmarshal([]byte(line), &c) == nil {
+				conts = append(conts, c)
+			}
+		}
+	}
+
+	type statsLine struct {
+		Container, CPUPerc, MemUsage, MemPerc, PIDs string
+	}
+	byID := map[string]containerInfo{}
+	if out, err := exec.CommandContext(statsCtx, "docker", "stats", "--no-stream", "--format", "{{json .}}").Output(); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line == "" {
+				continue
+			}
+			var s statsLine
+			if json.Unmarshal([]byte(line), &s) != nil {
+				continue
+			}
+			var c containerInfo
+			c.CPU, _ = strconv.ParseFloat(strings.TrimSuffix(s.CPUPerc, "%"), 64)
+			c.MemBytes, c.MemLimit = parseMemUsage(s.MemUsage)
+			c.MemPerc, _ = strconv.ParseFloat(strings.TrimSuffix(s.MemPerc, "%"), 64)
+			c.PIDs, _ = strconv.Atoi(s.PIDs)
+			byID[s.Container] = c
+		}
+	}
+
+	if err := writeLine(w, "STATS", strconv.Itoa(len(conts))); err != nil {
+		return
+	}
+	for _, c := range conts {
+		info := byID[c.ID]
+		info.ID = c.ID
+		info.Name = strings.TrimPrefix(c.Names, "/")
+		info.Image = c.Image
+		info.Status = c.Status
+		line, err := json.Marshal(info)
+		if err != nil {
+			continue
+		}
+		if err := writeLine(w, string(line)); err != nil {
 			return
 		}
 	}
@@ -213,7 +308,7 @@ func (d *daemon) handleRun(r *bufio.Reader, w *bufio.Writer) {
 		writeLine(w, "ERR", "workdir: "+err.Error())
 		return
 	}
-	j, err := startJob(jobSpec{ID: jobID, Image: image, Env: env, Workdir: workdir, Argv: argv})
+	j, err := startJob(jobSpec{ID: jobID, Image: image, Env: env, Workdir: workdir, Argv: argv, Node: d.name})
 	if err != nil {
 		writeLine(w, "ERR", err.Error())
 		return

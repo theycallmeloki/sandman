@@ -2,19 +2,15 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/grandcat/zeroconf"
 )
 
 func die(msg string, code int) {
@@ -153,54 +149,12 @@ func clientRun(node, state, image string, env, argv []string) {
 	}
 }
 
-// clientNodes prints the fleet: static + registry file views merged with a
-// live mDNS browse, so it works on any machine, node or not.
+// clientNodes prints the fleet: registry/peers files merged with a live mDNS
+// browse, so it works on any machine, node or not.
 func clientNodes(state string) {
-	seen := map[string][]string{} // name -> [name addr docker source]
-	for _, f := range []string{"registry", "peers"} {
-		b, err := os.ReadFile(filepath.Join(state, f))
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(b), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				seen[fields[0]] = fields
-			}
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
-	defer cancel()
-	ch := make(chan *zeroconf.ServiceEntry, 32)
-	go browse(ctx, ch)
-	for e := range ch {
-		ip := firstAddr(e)
-		if ip == "" {
-			continue
-		}
-		seen[e.Instance] = []string{e.Instance, fmt.Sprintf("%s:%d", ip, e.Port), textValue(e.Text, "docker"), "mdns"}
-	}
-
-	names := make([]string, 0, len(seen))
-	for n := range seen {
-		names = append(names, n)
-	}
-	sort.Strings(names)
+	nodes := fleet(state, true)
 	fmt.Printf("%-24s %-22s %-8s %s\n", "NAME", "ADDR", "DOCKER", "SOURCE")
-	for _, n := range names {
-		f := seen[n]
-		docker, src := "-", "-"
-		if len(f) > 2 {
-			docker = f[2]
-		}
-		if len(f) > 3 {
-			src = f[3]
-		}
-		fmt.Printf("%-24s %-22s %-8s %s\n", n, f[1], docker, src)
+	for _, n := range nodes {
+		fmt.Printf("%-24s %-22s %-8s %s\n", n.Name, n.Addr, n.Docker, n.Source)
 	}
 }
