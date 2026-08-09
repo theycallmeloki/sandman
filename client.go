@@ -1,0 +1,206 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/grandcat/zeroconf"
+)
+
+func die(msg string, code int) {
+	fmt.Fprintln(os.Stderr, "sandman:", msg)
+	os.Exit(code)
+}
+
+// resolveNode turns a node name into host:port. Resolution order: literal
+// addr, local registry/peers files, a quick mDNS browse, then hostname:4242.
+func resolveNode(node, state string) (string, error) {
+	if strings.Contains(node, ":") {
+		return node, nil
+	}
+	for _, f := range []string{"registry", "peers"} {
+		b, err := os.ReadFile(filepath.Join(state, f))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == node {
+				return fields[1], nil
+			}
+		}
+	}
+	if addr := mdnsLookup(node, 2500*time.Millisecond); addr != "" {
+		return addr, nil
+	}
+	return net.JoinHostPort(node, strconv.Itoa(DefaultPort)), nil
+}
+
+// clientRun streams a job from the local process table to a remote node:
+// stdin in, stdout/stderr out, signals across, the container's exit code
+// back. `sandman run` should feel like ssh: output appears as it happens.
+func clientRun(node, state, image string, env, argv []string) {
+	addr, err := resolveNode(node, state)
+	if err != nil {
+		die(err.Error(), 1)
+	}
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		die(fmt.Sprintf("%s: %v", node, err), 1)
+	}
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+	w := bufio.NewWriter(conn)
+
+	if err := writeLine(w, "HELLO", ProtoVersion); err != nil {
+		die("connect: "+err.Error(), 1)
+	}
+	ok, err := readLine(r)
+	if err != nil || len(ok) == 0 || ok[0] != "OK" {
+		die("handshake failed", 1)
+	}
+
+	jobID := fmt.Sprintf("%s-%d-%d", sanitizeName(hostname()), os.Getpid(), time.Now().UnixNano()%1_000_000)
+	if err := writeLine(w, "RUN"); err != nil {
+		die("send: "+err.Error(), 1)
+	}
+	writeLine(w, jobID)
+	writeLine(w, image)
+	for _, e := range env {
+		writeLine(w, "ENV", e)
+	}
+	writeLine(w, "CMD")
+	for _, a := range argv {
+		writeLine(w, a)
+	}
+	writeLine(w, "")
+
+	run, err := readLine(r)
+	if err != nil || len(run) == 0 || run[0] != "RUNNING" {
+		die("node rejected job", 1)
+	}
+
+	// Forward local signals as remote docker kill signals. The second
+	// Ctrl-C escalates to SIGKILL, like any self-respecting terminal.
+	signaled := map[string]bool{}
+	sigCh := make(chan os.Signal, 4)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	go func() {
+		for s := range sigCh {
+			name := "KILL"
+			switch s {
+			case syscall.SIGINT:
+				name = "INT"
+			case syscall.SIGTERM:
+				name = "TERM"
+			case syscall.SIGQUIT:
+				name = "QUIT"
+			}
+			if signaled[name] {
+				name = "KILL"
+			}
+			signaled[name] = true
+			writeLine(w, "SIGNAL", name)
+		}
+	}()
+
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 {
+				writeFrame(w, "DATA", buf[:n])
+			}
+			if err != nil {
+				writeLine(w, "EOF")
+				return
+			}
+		}
+	}()
+
+	for {
+		tag, fd, payload, err := readEvent(r)
+		if err != nil {
+			die(fmt.Sprintf("%s: connection lost", node), 1)
+		}
+		switch tag {
+		case "OUT":
+			if fd == "1" {
+				os.Stderr.Write([]byte(payload))
+			} else {
+				os.Stdout.Write([]byte(payload))
+			}
+		case "EXIT":
+			code, _ := strconv.Atoi(payload)
+			os.Exit(code)
+		case "ERR":
+			die(payload, 1)
+		}
+	}
+}
+
+// clientNodes prints the fleet: static + registry file views merged with a
+// live mDNS browse, so it works on any machine, node or not.
+func clientNodes(state string) {
+	seen := map[string][]string{} // name -> [name addr docker source]
+	for _, f := range []string{"registry", "peers"} {
+		b, err := os.ReadFile(filepath.Join(state, f))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				seen[fields[0]] = fields
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	ch := make(chan *zeroconf.ServiceEntry, 32)
+	go browse(ctx, ch)
+	for e := range ch {
+		ip := firstAddr(e)
+		if ip == "" {
+			continue
+		}
+		seen[e.Instance] = []string{e.Instance, fmt.Sprintf("%s:%d", ip, e.Port), textValue(e.Text, "docker"), "mdns"}
+	}
+
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	fmt.Printf("%-24s %-22s %-8s %s\n", "NAME", "ADDR", "DOCKER", "SOURCE")
+	for _, n := range names {
+		f := seen[n]
+		docker, src := "-", "-"
+		if len(f) > 2 {
+			docker = f[2]
+		}
+		if len(f) > 3 {
+			src = f[3]
+		}
+		fmt.Printf("%-24s %-22s %-8s %s\n", n, f[1], docker, src)
+	}
+}
