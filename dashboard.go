@@ -9,160 +9,160 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 	"golang.org/x/term"
 )
 
 // dashboard is a thin renderer over the stats layer: poll the fleet, draw
-// nodes and their containers with memory bars, refresh on a ticker. Plain
-// ANSI — alternate screen, block characters for bars, no TUI framework.
+// nodes and their containers with memory bars, refresh on a ticker.
+// tview/tcell (the Go equivalent of htop's ncurses) owns terminal handling:
+// alternate screen, raw mode, resize, colors, and key input — so layout is
+// cell-based and adapts to any terminal size instead of hand-padded ANSI.
 func cmdDashboard(args []string) {
 	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
 	state := fs.String("state", DefaultState, "state directory")
 	refresh := fs.Duration("refresh", 2*time.Second, "refresh interval")
 	fs.Parse(args)
 
-	fd := int(os.Stdin.Fd())
-	old, err := term.MakeRaw(fd)
-	if err != nil {
-		die("dashboard needs a terminal: "+err.Error(), 1)
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		die("dashboard needs a terminal", 1)
 	}
-	defer term.Restore(fd, old)
 
-	// alternate screen, clear scrollback so the first frame starts fresh,
-	// hide the cursor
-	fmt.Print("\x1b[?1049h\x1b[3J\x1b[2J\x1b[?25l")
-	defer fmt.Print("\x1b[?25h\x1b[?1049l")
+	app := tview.NewApplication()
 
-	// Raw mode disables ISIG, so Ctrl-C arrives as byte 0x03; q quits.
-	quit := make(chan struct{})
-	go func() {
-		buf := make([]byte, 16)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if err != nil {
-				close(quit)
-				return
-			}
-			for _, b := range buf[:n] {
-				if b == 'q' || b == 0x03 {
-					close(quit)
-					return
-				}
+	title := tview.NewTextView().SetDynamicColors(true).
+		SetText("[::b]sandman[::] · fabric overview")
+	info := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignRight)
+	header := tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(title, 0, 1, false).
+		AddItem(info, 0, 1, false)
+
+	table := tview.NewTable().
+		SetSelectable(false, false).
+		SetFixed(1, 0)
+	table.SetBorder(true).SetTitle(" nodes & containers ")
+
+	footer := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter).
+		SetText("[::d]q quit · ctrl-c quit[::]")
+
+	root := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(header, 1, 0, false).
+		AddItem(table, 0, 1, true).
+		AddItem(footer, 1, 0, false)
+	app.SetRoot(root, true)
+
+	app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case ev.Key() == tcell.KeyCtrlC, ev.Key() == tcell.KeyEscape:
+			app.Stop()
+		case ev.Key() == tcell.KeyRune && ev.Rune() == 'q':
+			app.Stop()
+		}
+		return ev
+	})
+
+	apply := func(stats []nodeStats, now time.Time) {
+		total, unreach := 0, 0
+		for _, ns := range stats {
+			total += len(ns.Containers)
+			if ns.Error != "" {
+				unreach++
 			}
 		}
+		info.SetText(fmt.Sprintf("[::d]nodes %d · containers %d · %s[::]", len(stats), total, now.Format("15:04:05")))
+		drawTable(table, stats)
+		if unreach > 0 {
+			footer.SetText(fmt.Sprintf("[red]%d node(s) unreachable[::] · [::d]q quit · ctrl-c quit[::]", unreach))
+		} else {
+			footer.SetText("[::d]q quit · ctrl-c quit[::]")
+		}
+	}
+
+	// Prime the first frame, then refresh off the UI thread: collection
+	// blocks on docker stats (~seconds), so it never runs on the event loop.
+	apply(collectStats(*state, 10*time.Second), time.Now())
+	go func() {
+		t := time.NewTicker(*refresh)
+		defer t.Stop()
+		for range t.C {
+			stats := collectStats(*state, 10*time.Second)
+			app.QueueUpdateDraw(func() { apply(stats, time.Now()) })
+		}
 	}()
-	// SIGTERM (systemd stop, hub stop) must restore the terminal too.
+
+	// SIGTERM (systemd stop, hub stop) must let tview restore the terminal.
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sig, syscall.SIGTERM)
 	go func() {
 		<-sig
-		os.Exit(0) // defers run on exit()
+		app.Stop()
 	}()
 
-	render := func() {
-		drawDashboard(collectStats(*state, 10*time.Second), time.Now())
-	}
-	render()
-	t := time.NewTicker(*refresh)
-	defer t.Stop()
-	for {
-		select {
-		case <-quit:
-			return
-		case <-t.C:
-			render()
-		}
+	if err := app.Run(); err != nil {
+		die("dashboard: "+err.Error(), 1)
 	}
 }
 
-func drawDashboard(stats []nodeStats, now time.Time) {
-	width := 80
-	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
-		width = w
+func drawTable(t *tview.Table, stats []nodeStats) {
+	t.Clear()
+	headers := []string{"CONTAINER", "IMAGE", "CPU", "MEM"}
+	for i, h := range headers {
+		t.SetCell(0, i, tview.NewTableCell(h).SetTextColor(tcell.ColorGray))
 	}
-
-	// Repaint in place: home + clear-below. Frames are rewritten over
-	// themselves instead of appended, so nothing stitches together and
-	// shrinking frames don't leave ghosts.
-	var b strings.Builder
-	b.WriteString("\x1b[H\x1b[J")
-
-	total, unreach := 0, 0
-	for _, ns := range stats {
-		total += len(ns.Containers)
-		if ns.Error != "" {
-			unreach++
-		}
-	}
-	info := fmt.Sprintf("nodes %d · containers %d · %s", len(stats), total, now.Format("15:04:05"))
-	b.WriteString("\x1b[1;36msandman\x1b[0m · fabric overview")
-	if pad := width - len("sandman · fabric overview") - len(info) - 3; pad > 4 {
-		b.WriteString(strings.Repeat(" ", pad) + "\x1b[2m" + info + "\x1b[0m")
-	} else {
-		b.WriteString("  " + info)
-	}
-	b.WriteString("\n" + strings.Repeat("─", width) + "\n")
-
 	if len(stats) == 0 {
-		b.WriteString("\n  no nodes in the fleet yet — start `sandman daemon` on any host\n")
-	} else {
-		b.WriteString(fmt.Sprintf("\n  \x1b[2m%-24s %-16s %8s  %s\x1b[0m\n", "CONTAINER", "IMAGE", "CPU", "MEM"))
-		for i, ns := range stats {
-			if i > 0 {
-				b.WriteString("\n")
-			}
-			drawNode(&b, ns)
-		}
-	}
-	if unreach > 0 {
-		fmt.Fprintf(&b, "\n\x1b[31m%d node(s) unreachable\x1b[0m\n", unreach)
-	}
-	b.WriteString("\n\x1b[2mq quit · ctrl-c quit\x1b[0m\n")
-	os.Stdout.WriteString(b.String())
-}
-
-func drawNode(b *strings.Builder, ns nodeStats) {
-	if ns.Error != "" {
-		fmt.Fprintf(b, "\x1b[1m%s\x1b[0m \x1b[2m%s\x1b[0m \x1b[31m✗ unreachable: %s\x1b[0m\n", ns.Node, ns.Addr, ns.Error)
+		t.SetCell(1, 0, tview.NewTableCell("no nodes in the fleet yet — start `sandman daemon` on any host").SetTextColor(tcell.ColorGray))
 		return
 	}
-	fmt.Fprintf(b, "\x1b[1m%s\x1b[0m ▸ %s · docker %s · %d running\n", ns.Node, ns.Addr, ns.Docker, len(ns.Containers))
-	for _, c := range ns.Containers {
-		drawContainer(b, c)
-	}
-}
-
-func drawContainer(b *strings.Builder, c containerInfo) {
-	// Our jobs are named sandman-<jobid>; trim the prefix for display and
-	// leave them full-brightness, while dimming containers the fabric does
-	// not own so the fleet's own work stands out.
-	ours := strings.HasPrefix(c.Name, "sandman-")
-	disp := c.Name
-	if ours {
-		disp = strings.TrimPrefix(disp, "sandman-")
-	}
-
-	cpu := ""
-	if c.CPU > 0 {
-		cpu = fmt.Sprintf("%7s", fmt.Sprintf("%.1f%%", c.CPU))
-		switch {
-		case c.CPU > 80:
-			cpu = "\x1b[31m" + cpu + "\x1b[0m"
-		case c.CPU > 40:
-			cpu = "\x1b[33m" + cpu + "\x1b[0m"
+	row := 1
+	for _, ns := range stats {
+		if ns.Error != "" {
+			t.SetCell(row, 0, tview.NewTableCell("✗ "+ns.Node).SetTextColor(tcell.ColorRed).SetAttributes(tcell.AttrBold))
+			t.SetCell(row, 1, tview.NewTableCell("unreachable: "+ns.Error).SetTextColor(tcell.ColorGray))
+			row++
+			continue
+		}
+		t.SetCell(row, 0, tview.NewTableCell(ns.Node).SetTextColor(tcell.ColorAqua).SetAttributes(tcell.AttrBold))
+		t.SetCell(row, 1, tview.NewTableCell(ns.Addr).SetTextColor(tcell.ColorGray))
+		t.SetCell(row, 2, tview.NewTableCell("docker "+ns.Docker).SetTextColor(tcell.ColorGray))
+		t.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%d running", len(ns.Containers))).SetTextColor(tcell.ColorGray))
+		row++
+		for _, c := range ns.Containers {
+			// Our jobs are named sandman-<jobid>; trim the prefix and leave
+			// them full-brightness, dimming containers the fabric does not
+			// own so the fleet's own work stands out.
+			ours := strings.HasPrefix(c.Name, "sandman-")
+			disp := c.Name
+			if ours {
+				disp = strings.TrimPrefix(disp, "sandman-")
+			}
+			color := tcell.ColorWhite
+			if !ours {
+				color = tcell.ColorGray
+			}
+			t.SetCell(row, 0, tview.NewTableCell(disp).SetTextColor(color))
+			t.SetCell(row, 1, tview.NewTableCell(c.Image).SetTextColor(color))
+			cpu := tview.NewTableCell("").SetTextColor(color)
+			if c.CPU > 0 {
+				cc := tcell.ColorGreen
+				switch {
+				case c.CPU > 80:
+					cc = tcell.ColorRed
+				case c.CPU > 40:
+					cc = tcell.ColorYellow
+				}
+				cpu = tview.NewTableCell(fmt.Sprintf("%.1f%%", c.CPU)).SetTextColor(cc).SetAlign(tview.AlignRight)
+			}
+			t.SetCell(row, 2, cpu)
+			mem := ""
+			if c.MemLimit > 0 {
+				ratio := float64(c.MemBytes) / float64(c.MemLimit)
+				mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 16), humanBytes(c.MemBytes), humanBytes(c.MemLimit))
+			}
+			t.SetCell(row, 3, tview.NewTableCell(mem).SetTextColor(color))
+			row++
 		}
 	}
-	mem := ""
-	if c.MemLimit > 0 {
-		ratio := float64(c.MemBytes) / float64(c.MemLimit)
-		mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 16), humanBytes(c.MemBytes), humanBytes(c.MemLimit))
-	}
-
-	open, close := "", ""
-	if !ours {
-		open, close = "\x1b[2m", "\x1b[0m"
-	}
-	fmt.Fprintf(b, "  %s%-24s %-16s %s  %s%s\n", open, clip(disp, 22), clip(c.Image, 16), cpu, mem, close)
 }
 
 // memBar renders a ratio as a block-character bar.
@@ -189,11 +189,4 @@ func humanBytes(n uint64) string {
 		return fmt.Sprintf("%dB", n)
 	}
 	return fmt.Sprintf("%.1f%s", f, units[i])
-}
-
-func clip(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
 }

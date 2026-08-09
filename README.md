@@ -75,9 +75,10 @@ pipe-friendly:
 sandman stats | jq -r '[.node, ([.containers[].cpu] | add)] | @tsv'
 ```
 
-`sandman dashboard` is a thin renderer over the same data: alternate-screen
-TUI with block-character memory bars, refreshed on a ticker. `q` quits.
-Any tool can consume the JSONL — the dashboard is just one consumer.
+`sandman dashboard` is a thin renderer over the same data: a tview/tcell TUI
+(the Go equivalent of htop's ncurses) — cell-based table layout that adapts
+to any terminal size, colors, and `q`/ctrl-c to quit. Any tool can consume
+the JSONL — the dashboard is just one consumer.
 
 ## How it works
 
