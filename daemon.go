@@ -89,22 +89,22 @@ func cmdDaemon(args []string) {
 		defer server.Shutdown()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	entries := make(chan *zeroconf.ServiceEntry, 32)
-	go browse(ctx, entries)
-	go func() {
-		for e := range entries {
-			d.reg.mergeMdns(e)
-		}
-	}()
-
-	// Periodic maintenance: pick up hand-edited peers, drop lapsed mdns
-	// peers, and keep the registry file fresh for `sandman nodes`.
+	// Discovery maintenance, every 5s: a short one-shot browse with a fresh
+	// resolver. Long-lived zeroconf resolvers on a shared 5353 (server +
+	// resolver in one process, transient clients churning) go stale after a
+	// while and silently stop receiving announcements; a fresh resolver per
+	// tick is cheap and always works.
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
 		for range t.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+			ch := make(chan *zeroconf.ServiceEntry, 64)
+			go browse(ctx, ch)
+			for e := range ch {
+				d.reg.mergeMdns(e)
+			}
+			cancel()
 			d.reg.loadStatic()
 			d.reg.prune()
 			d.reg.writeSnapshot()

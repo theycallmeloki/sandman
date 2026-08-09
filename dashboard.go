@@ -28,7 +28,9 @@ func cmdDashboard(args []string) {
 	}
 	defer term.Restore(fd, old)
 
-	fmt.Print("\x1b[?1049h\x1b[?25l") // alternate screen, hide cursor
+	// alternate screen, clear scrollback so the first frame starts fresh,
+	// hide the cursor
+	fmt.Print("\x1b[?1049h\x1b[3J\x1b[2J\x1b[?25l")
 	defer fmt.Print("\x1b[?25h\x1b[?1049l")
 
 	// Raw mode disables ISIG, so Ctrl-C arrives as byte 0x03; q quits.
@@ -74,42 +76,93 @@ func cmdDashboard(args []string) {
 }
 
 func drawDashboard(stats []nodeStats, now time.Time) {
+	width := 80
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		width = w
+	}
+
+	// Repaint in place: home + clear-below. Frames are rewritten over
+	// themselves instead of appended, so nothing stitches together and
+	// shrinking frames don't leave ghosts.
 	var b strings.Builder
-	fmt.Fprintf(&b, "\x1b[2J\x1b[H") // clear + home
-	total := 0
+	b.WriteString("\x1b[H\x1b[J")
+
+	total, unreach := 0, 0
 	for _, ns := range stats {
 		total += len(ns.Containers)
-	}
-	fmt.Fprintf(&b, "\x1b[1msandman — fabric overview\x1b[0m   nodes %d · containers %d · %s\n\n",
-		len(stats), total, now.Format("15:04:05"))
-
-	if len(stats) == 0 {
-		b.WriteString("no nodes in the fleet yet — start `sandman daemon` on any host\n")
-	} else {
-		for _, ns := range stats {
-			if ns.Error != "" {
-				fmt.Fprintf(&b, "\x1b[1m%-16s\x1b[0m \x1b[2m%s\x1b[0m \x1b[31munreachable: %s\x1b[0m\n",
-					ns.Node, ns.Addr, ns.Error)
-				continue
-			}
-			fmt.Fprintf(&b, "\x1b[1m%-16s\x1b[0m %s docker %s — %d container(s)\n",
-				ns.Node, ns.Addr, ns.Docker, len(ns.Containers))
-			for _, c := range ns.Containers {
-				cpu := ""
-				if c.CPU > 0 {
-					cpu = fmt.Sprintf("%6.2f%%", c.CPU)
-				}
-				mem := ""
-				if c.MemLimit > 0 {
-					ratio := float64(c.MemBytes) / float64(c.MemLimit)
-					mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 18), humanBytes(c.MemBytes), humanBytes(c.MemLimit))
-				}
-				fmt.Fprintf(&b, "  %-24s %-16s %s %s\n", clip(c.Name, 22), clip(c.Image, 16), cpu, mem)
-			}
+		if ns.Error != "" {
+			unreach++
 		}
 	}
-	b.WriteString("\nq quit · ctrl-c quit\n")
+	info := fmt.Sprintf("nodes %d · containers %d · %s", len(stats), total, now.Format("15:04:05"))
+	b.WriteString("\x1b[1;36msandman\x1b[0m · fabric overview")
+	if pad := width - len("sandman · fabric overview") - len(info) - 3; pad > 4 {
+		b.WriteString(strings.Repeat(" ", pad) + "\x1b[2m" + info + "\x1b[0m")
+	} else {
+		b.WriteString("  " + info)
+	}
+	b.WriteString("\n" + strings.Repeat("─", width) + "\n")
+
+	if len(stats) == 0 {
+		b.WriteString("\n  no nodes in the fleet yet — start `sandman daemon` on any host\n")
+	} else {
+		b.WriteString(fmt.Sprintf("\n  \x1b[2m%-24s %-16s %8s  %s\x1b[0m\n", "CONTAINER", "IMAGE", "CPU", "MEM"))
+		for i, ns := range stats {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			drawNode(&b, ns)
+		}
+	}
+	if unreach > 0 {
+		fmt.Fprintf(&b, "\n\x1b[31m%d node(s) unreachable\x1b[0m\n", unreach)
+	}
+	b.WriteString("\n\x1b[2mq quit · ctrl-c quit\x1b[0m\n")
 	os.Stdout.WriteString(b.String())
+}
+
+func drawNode(b *strings.Builder, ns nodeStats) {
+	if ns.Error != "" {
+		fmt.Fprintf(b, "\x1b[1m%s\x1b[0m \x1b[2m%s\x1b[0m \x1b[31m✗ unreachable: %s\x1b[0m\n", ns.Node, ns.Addr, ns.Error)
+		return
+	}
+	fmt.Fprintf(b, "\x1b[1m%s\x1b[0m ▸ %s · docker %s · %d running\n", ns.Node, ns.Addr, ns.Docker, len(ns.Containers))
+	for _, c := range ns.Containers {
+		drawContainer(b, c)
+	}
+}
+
+func drawContainer(b *strings.Builder, c containerInfo) {
+	// Our jobs are named sandman-<jobid>; trim the prefix for display and
+	// leave them full-brightness, while dimming containers the fabric does
+	// not own so the fleet's own work stands out.
+	ours := strings.HasPrefix(c.Name, "sandman-")
+	disp := c.Name
+	if ours {
+		disp = strings.TrimPrefix(disp, "sandman-")
+	}
+
+	cpu := ""
+	if c.CPU > 0 {
+		cpu = fmt.Sprintf("%7s", fmt.Sprintf("%.1f%%", c.CPU))
+		switch {
+		case c.CPU > 80:
+			cpu = "\x1b[31m" + cpu + "\x1b[0m"
+		case c.CPU > 40:
+			cpu = "\x1b[33m" + cpu + "\x1b[0m"
+		}
+	}
+	mem := ""
+	if c.MemLimit > 0 {
+		ratio := float64(c.MemBytes) / float64(c.MemLimit)
+		mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 16), humanBytes(c.MemBytes), humanBytes(c.MemLimit))
+	}
+
+	open, close := "", ""
+	if !ours {
+		open, close = "\x1b[2m", "\x1b[0m"
+	}
+	fmt.Fprintf(b, "  %s%-24s %-16s %s  %s%s\n", open, clip(disp, 22), clip(c.Image, 16), cpu, mem, close)
 }
 
 // memBar renders a ratio as a block-character bar.
