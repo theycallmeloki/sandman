@@ -287,6 +287,15 @@ func (c *Client) ListFiles(commitID string) ([]FileInfo, error) {
 	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(commitID)+"/files", nil, &out)
 }
 
+// ListFileHistory lists the revisions of a path across the commit's
+// ancestry: one FileInfo per ancestor revision where the path resolves,
+// newest first (SB-145). A negative limit returns every revision.
+func (c *Client) ListFileHistory(commitID, p string, limit int) ([]FileInfo, error) {
+	var out []FileInfo
+	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+
+		fmt.Sprintf("?history=1&limit=%d", limit), nil, &out)
+}
+
 // ---- Pipelines ----
 
 // Transform is the execution description of a pipeline. Image is the
@@ -326,6 +335,11 @@ type Input struct {
 	Glob   string  `json:"glob,omitempty"`
 	Branch string  `json:"branch,omitempty"`
 	Cross  []Input `json:"cross,omitempty"`
+	// Lazy marks the input as materialized on demand rather than eagerly
+	// (SB-014/015/017). The flag is part of the pipeline spec and is
+	// recorded on every job's input snapshot; sandman materializes the
+	// files for execution either way.
+	Lazy bool `json:"lazy,omitempty"`
 }
 
 // InputBranch is the effective branch of an input side.

@@ -996,6 +996,17 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 			triggerMu.Unlock()
 			continue
 		}
+		// provenance consistency: two sides that derive from the same
+		// source branch must pair at the same source revision. A trigger
+		// that pairs a fresh commit with the other side's still-stale head
+		// (the other side has not caught up yet) is deferred instead of
+		// spawning a mismatched job — the catch-up trigger will form the
+		// coherent pairing (SB-018/019 diamonds: one commit per source
+		// revision, never one per dependency path).
+		if !d.crossPairingConsistent(heads) {
+			triggerMu.Unlock()
+			continue
+		}
 		id := newJobID(d.name)
 		jr := newJobRec(*rec, heads, id)
 		os.MkdirAll(d.jobDir(id), 0o755) // saveJob does not create the dir
@@ -1039,6 +1050,50 @@ func (d *daemon) hasRunningJobWithInputs(pipeline string, heads []client.Commit)
 		}
 	}
 	return false
+}
+
+// crossPairingConsistent reports whether a cross pairing's sides reference
+// each source branch at exactly one revision. Two sides deriving from the
+// same source must pair at the same source revision — pairing a fresh
+// commit with the other side's stale head would process a mismatched
+// revision pair (SB-018/019). Disjoint sources are always consistent.
+func (d *daemon) crossPairingConsistent(heads []client.Commit) bool {
+	sources := map[string]string{} // repo+branch → source commit
+	for _, h := range heads {
+		if h.ID == "" {
+			continue // an empty side contributes no source
+		}
+		for _, leaf := range d.provenanceOf(h.ID, map[string]bool{}) {
+			rec, err := d.store.loadCommitByID(leaf)
+			if err != nil {
+				continue
+			}
+			key := rec.Repo + "/" + rec.Branch
+			if prev, ok := sources[key]; ok && prev != leaf {
+				return false
+			}
+			sources[key] = leaf
+		}
+	}
+	return true
+}
+
+// provenanceOf expands a commit to the leaf source commits it derives
+// from: the commit itself when no job produced it, otherwise its producing
+// job's inputs, recursively.
+func (d *daemon) provenanceOf(commitID string, seen map[string]bool) []string {
+	if seen[commitID] {
+		return nil
+	}
+	seen[commitID] = true
+	if j, ok := d.jobByOutput(commitID); ok {
+		var out []string
+		for _, ic := range j.InputCommits {
+			out = append(out, d.provenanceOf(ic, seen)...)
+		}
+		return out
+	}
+	return []string{commitID}
 }
 
 // runningJob is the handle on an in-flight job's execution; pipeline is the

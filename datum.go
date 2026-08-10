@@ -99,6 +99,12 @@ func (d *daemon) appendLogLine(id, line string) {
 // matches across directories, "*" within one.
 func globMatches(pattern, path string) bool {
 	pattern = strings.TrimPrefix(pattern, "/")
+	if path == "" {
+		// the root (whole-commit) datum: selected only by the whole-commit
+		// globs "/" (trimmed to "") and "**"; "/*" must not catch it
+		// (filepath.Match("*", "") would)
+		return pattern == "" || pattern == "**"
+	}
 	if pattern == "**" {
 		return true
 	}
@@ -112,8 +118,10 @@ func globMatches(pattern, path string) bool {
 // datums. Datums are ordered by id (D-14: execution order is not
 // contractual, but the output merge must be deterministic).
 func enumerateDatums(view map[string]fileEntry, glob string) []datumSide {
-	// candidate paths: every file path and every ancestor directory
-	candSet := map[string]bool{}
+	// candidate paths: every file path and every ancestor directory; the
+	// root "" is always a candidate, so glob "/" selects the whole commit
+	// as one datum (SB-015)
+	candSet := map[string]bool{"": true}
 	for p := range view {
 		dir := p
 		for {
@@ -140,7 +148,10 @@ func enumerateDatums(view map[string]fileEntry, glob string) []datumSide {
 		if _, isFile := view[c]; isFile {
 			files = []string{c}
 		} else {
-			prefix := c + "/"
+			prefix := c
+			if prefix != "" {
+				prefix += "/"
+			}
 			for p := range view {
 				if strings.HasPrefix(p, prefix) {
 					files = append(files, p)

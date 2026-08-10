@@ -259,6 +259,23 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
+	// history=1 turns the read into a revision-history listing (SB-145):
+	// one FileInfo per ancestor revision where the path resolves, newest
+	// first, capped by limit (negative = every revision)
+	if r.URL.Query().Get("history") == "1" {
+		limit := -1
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if n, err := strconv.Atoi(l); err == nil {
+				limit = n
+			}
+		}
+		hist, err := d.fileHistory(r.PathValue("id"), r.PathValue("path"), limit)
+		if err != nil {
+			return err
+		}
+		writeJSON(w, hist)
+		return nil
+	}
 	data, err := d.store.getFile(r.PathValue("id"), r.PathValue("path"))
 	if err != nil {
 		return err
@@ -270,6 +287,35 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.Write(data)
 	return nil
+}
+
+// fileHistory lists the revisions of a path across the commit's ancestry:
+// one FileInfo per ancestor revision where the path resolves, newest
+// first, capped at limit (negative = every revision). A cross input's
+// multi-commit provenance is just more ancestry to walk (SB-145).
+func (d *daemon) fileHistory(commitID, path string, limit int) ([]client.FileInfo, error) {
+	rec, err := d.store.loadCommitByID(commitID)
+	if err != nil {
+		return nil, err
+	}
+	var out []client.FileInfo
+	for cur := rec; cur != nil; {
+		if f, ok := d.store.resolveView(cur)[path]; ok {
+			out = append(out, client.FileInfo{Path: path, Size: f.Size, Hash: f.SHA})
+			if limit >= 0 && len(out) >= limit {
+				break
+			}
+		}
+		if cur.ParentID == "" {
+			break
+		}
+		parent, err := d.store.loadCommit(cur.Repo, cur.ParentID)
+		if err != nil {
+			break
+		}
+		cur = parent
+	}
+	return out, nil
 }
 
 func (d *daemon) copyFileH(w http.ResponseWriter, r *http.Request) error {

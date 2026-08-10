@@ -229,6 +229,23 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Provenance pairing** — a cross whose sides derive from the same source
+  branch pairs them at the same source revision: a trigger that would pair
+  a fresh commit with the other side's still-stale head is deferred until
+  the other side catches up, so diamond DAGs (A→B, A→C, D=cross(B,C))
+  produce exactly one commit per source revision per repository, never one
+  per dependency path (SB-018/019). A downstream pipeline can consume an
+  upstream pipeline's output as one arm of a cross (SB-055)
+- **Lazy inputs** — the lazy flag is part of the input spec and is
+  recorded on every job's input snapshot, through output-repo hops
+  (SB-014); lazy jobs complete even when some input files go unread
+  (SB-015). The glob `/` selects the whole commit as one datum. Output
+  upload rejects special files (pipes, sockets, devices) — a transform
+  that emits one fails the job promptly instead of hanging the scan
+  (SB-017)
+- **File revision history** — `ListFileHistory` returns the revisions of a
+  path across a commit's ancestry, newest first, with full-depth listings
+  supported on multi-commit cross outputs (SB-145)
 - **Job queueing** — a pipeline's jobs run strictly one at a time, in
   spawn order: successive input commits queue on the pipeline's gate and
   come up in commit order, so with parallelism 1 exactly one job runs

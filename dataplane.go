@@ -468,6 +468,12 @@ func walkFilesDepth(p, rel string, depth int, linkTarget func(string) string, vi
 			}
 			continue
 		}
+		if !info.Mode().IsRegular() {
+			// pipes, sockets, devices: reading a FIFO would block forever
+			// and the content is not storable — the job must fail rather
+			// than hang or upload garbage (SB-017)
+			return fmt.Errorf("output contains special file %q", crel)
+		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
 			return err
