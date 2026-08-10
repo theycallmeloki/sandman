@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -139,7 +140,6 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 // does not schedule any job; the caller decides when the pipeline runs.
 func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	p.Update = false
-	p.Reprocess = false
 	rec := pipelineRec{Pipeline: p, State: "running", Version: 1}
 	if len(p.Transform.Cmd) == 0 && len(p.Transform.Stdin) > 0 {
 		// No command to feed the stdin lines to: accepted, but the pipeline
@@ -265,7 +265,6 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelineRec, error) {
 	name := existing.Pipeline.Name
 	p.Update = false
-	p.Reprocess = false
 	v := existing.Version + 1
 	rec := pipelineRec{
 		Pipeline:  p,
@@ -273,6 +272,12 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 		Stopped:   existing.Stopped,
 		StoppedAt: existing.StoppedAt,
 		Version:   v,
+	}
+	// The dedup table is keyed by datum identity within the pipeline. An
+	// update that changes the input (repo, branch, glob) makes the old
+	// records meaningless: drop them so nothing is wrongly skipped.
+	if !reflect.DeepEqual(existing.Pipeline.Input, p.Input) {
+		os.Remove(d.dedupPath(name))
 	}
 	if len(p.Transform.Cmd) == 0 && len(p.Transform.Stdin) > 0 {
 		rec.State = "failure"
@@ -580,6 +585,7 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 		}
 	}
 	os.Remove(d.pipelinePath(name))
+	os.Remove(d.dedupPath(name))
 	os.RemoveAll(filepath.Join(d.state, "pipelines", "versions", name))
 	if !keepRepo {
 		if _, err := os.Stat(d.store.repoDir(name)); err == nil {
@@ -616,6 +622,10 @@ type jobRec struct {
 	Transform    *client.Transform `json:"transform,omitempty"`
 	Input        *client.Input     `json:"input,omitempty"`
 	Datums       []datumRef        `json:"datums,omitempty"`
+	Processed    int               `json:"processed,omitempty"`
+	Recovered    int               `json:"recovered,omitempty"`
+	Failed       int               `json:"failed,omitempty"`
+	Skipped      int               `json:"skipped,omitempty"`
 }
 
 func (d *daemon) jobDir(id string) string {
@@ -633,6 +643,10 @@ func (rec *jobRec) job() client.Job {
 		Started:      rec.Started,
 		Finished:     rec.Finished,
 		Version:      rec.Version,
+		Processed:    rec.Processed,
+		Recovered:    rec.Recovered,
+		Failed:       rec.Failed,
+		Skipped:      rec.Skipped,
 	}
 }
 
@@ -813,14 +827,43 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 	}
 }
 
-// runningJob is the handle on an in-flight job's container; pipeline is the
+// runningJob is the handle on an in-flight job's execution; pipeline is the
 // owning pipeline (for update/delete cancellation, SB-045/026), done signals
 // the job goroutine has settled, cancelled distinguishes a deliberate kill
-// from a plain failure (SB-122).
+// from a plain failure (SB-122). containers tracks the live datum
+// container names so a cancel can kill every one of them.
 type runningJob struct {
 	pipeline  string
 	cancelled atomic.Bool
 	done      chan struct{}
+
+	containersMu sync.Mutex
+	containers   map[string]struct{}
+}
+
+func (rj *runningJob) registerContainer(name string) {
+	rj.containersMu.Lock()
+	defer rj.containersMu.Unlock()
+	if rj.containers == nil {
+		rj.containers = map[string]struct{}{}
+	}
+	rj.containers[name] = struct{}{}
+}
+
+func (rj *runningJob) unregisterContainer(name string) {
+	rj.containersMu.Lock()
+	defer rj.containersMu.Unlock()
+	delete(rj.containers, name)
+}
+
+func (rj *runningJob) containerNames() []string {
+	rj.containersMu.Lock()
+	defer rj.containersMu.Unlock()
+	names := make([]string, 0, len(rj.containers))
+	for n := range rj.containers {
+		names = append(names, n)
+	}
+	return names
 }
 
 var (
@@ -919,6 +962,10 @@ func (d *daemon) finishOutput(pl pipelineRec, outCommit client.Commit, outDir st
 			d.store.finishCommit(outCommit.ID, "", true)
 			return client.Commit{}, err
 		}
+		// deletions propagate to the output revision: paths that were in
+		// the parent's view and are gone from this output are tombstoned
+		// (SB-007 — a deleted input file is absent, not stale)
+		d.store.tombstoneRemoved(outCommit.ID, outDir)
 	}
 	return d.store.finishCommit(outCommit.ID, "", empty)
 }
@@ -964,7 +1011,21 @@ func (d *daemon) cancelJob(id string) error {
 				return
 			default:
 			}
-			if exec.Command("docker", "kill", "sandman-"+id).Run() == nil {
+			// kill every container the job has registered (per-datum
+			// execution runs several concurrently); a single kill can be
+			// lost the instant the job appears, before its containers exist
+			names := rj.containerNames()
+			if len(names) == 0 {
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+			all := true
+			for _, n := range names {
+				if exec.Command("docker", "kill", n).Run() != nil {
+					all = false
+				}
+			}
+			if all {
 				return
 			}
 			time.Sleep(250 * time.Millisecond)
@@ -1042,6 +1103,7 @@ func (d *daemon) reset() error {
 	os.RemoveAll(filepath.Join(d.state, "jobs"))
 	os.RemoveAll(filepath.Join(d.state, "logs"))
 	os.RemoveAll(filepath.Join(d.state, "transactions"))
+	os.RemoveAll(filepath.Join(d.state, "dedup"))
 	if err := os.MkdirAll(filepath.Join(d.state, "repos"), 0o755); err != nil {
 		return err
 	}
@@ -1067,6 +1129,50 @@ func (d *daemon) loadPipeline(name string) (*pipelineRec, error) {
 // failed job's output commit is finished empty, so partial output is never
 // observable. The job id is supplied by the caller so schedulers can track
 // the job they spawned.
+// jobEnv builds the job-scoped execution environment: the input commit,
+// output directory, and job identity (SB-051, SB-101, SB-128). The input
+// directory variable is per datum (each datum's own staging mount) and is
+// appended by the datum executor.
+func (d *daemon) jobEnv(pl pipelineRec, id, outCommit, inName, inCommit string) []string {
+	env := []string{
+		inName + "_COMMIT=" + inCommit,
+		"OUT=/sandman/out",
+		"JOB_ID=" + id,
+		"OUTPUT_COMMIT=" + outCommit,
+	}
+	for k, v := range pl.Pipeline.Transform.Env {
+		if !reservedEnv[k] {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
+
+// failedDatumReason summarizes a job's failed datums for the job reason —
+// the failure is attributed to the datum that failed (SB-011).
+func failedDatumReason(dedup map[string]datumState, datums []datum) string {
+	var parts []string
+	for _, dt := range datums {
+		st := dedup[dt.ID]
+		if st.Outcome != "failed" {
+			continue
+		}
+		r := "datum " + dt.ID + " failed"
+		if st.Reason != "" {
+			r += ": " + st.Reason
+		}
+		parts = append(parts, r)
+	}
+	reason := strings.Join(parts, "; ")
+	if len(reason) > 4000 {
+		reason = reason[len(reason)-4000:]
+	}
+	return reason
+}
+
+// runJob coordinates one job: enumerate the input's datums, run them with
+// a bounded worker pool, merge their outputs into the single output
+// commit, and record the per-datum outcomes in the pipeline's dedup table.
 func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 	in := pl.Pipeline.Input
 	inName := in.Name
@@ -1074,12 +1180,9 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 		inName = in.Repo
 	}
 	dir := d.jobDir(id)
-	inDir := filepath.Join(dir, "in", inName)
 	outDir := filepath.Join(dir, "out")
-	for _, p := range []string{inDir, outDir} {
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			return
-		}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return
 	}
 	rj := registerRunning(id, pl.Pipeline.Name)
 	defer unregisterRunning(id, rj)
@@ -1098,26 +1201,27 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 		d.saveJob(rec)
 	}
 
-	// Materialize the input revision into the job's input directory. A
-	// failure here means the input vanished — nothing to run.
-	if err := d.store.materializeInput(cm.ID, inDir); err != nil {
-		fail("materialize input: " + err.Error())
-		return
-	}
-	// the job's datum set is the input revision's files (SB-060 filters)
+	// The job's datum set for log filters is the input revision's files
+	// (SB-060); the execution datum set is the glob-matched subset.
 	if datums, err := d.store.viewDatums(cm.ID); err == nil {
 		rec.Datums = datums
 		d.saveJob(rec)
 	}
 
+	// Resolve the input revision and enumerate the job's datums.
+	view, err := d.store.resolveViewByID(cm.ID)
+	if err != nil {
+		fail("materialize input: " + err.Error())
+		return
+	}
+	datums := enumerateDatums(view, in.Glob)
+	for i := range datums {
+		datums[i].Hash = datumHash(view, datums[i].Files)
+	}
+
 	// The job's container output is captured into the log store as it is
 	// produced. A capture failure degrades to no logs, never to a broken
 	// job: execution is the control plane's job, logs are the meta plane's.
-	capture, capErr := newLogCapture(d.logPath(id))
-	if capErr != nil {
-		capture = nil
-	}
-
 	outCommit, err := d.store.startCommit(pl.Pipeline.Name, "", "")
 	if err != nil {
 		fail("start output commit: " + err.Error())
@@ -1131,65 +1235,68 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 	rec.OutputCommit = outCommit.ID
 	d.saveJob(rec)
 
-	env := []string{
-		inName + "=" + "/sandman/in/" + inName,
-		inName + "_COMMIT=" + cm.ID,
-		"OUT=/sandman/out",
-		"JOB_ID=" + id,
-		"OUTPUT_COMMIT=" + outCommit.ID,
+	// Dedup (D-13): a datum whose content is unchanged from a previous
+	// successful run is skipped — the pipeline does not pay for data it
+	// already processed — unless the pipeline reprocesses every job
+	// (SB-166). Skipped datums carry their previous output forward.
+	dedup := d.loadDedup(pl.Pipeline.Name)
+	reprocess := pl.Pipeline.Reprocess
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var todo []datum
+	for _, dt := range datums {
+		if st, ok := dedup[dt.ID]; ok && !reprocess && st.Outcome == "success" && st.Hash == dt.Hash {
+			st.Outcome = "skipped"
+			st.Started = now
+			st.Finished = now
+			st.ProcessTime = 0
+			dedup[dt.ID] = st
+			continue
+		}
+		todo = append(todo, dt)
 	}
-	for k, v := range pl.Pipeline.Transform.Env {
-		if !reservedEnv[k] {
-			env = append(env, k+"="+v)
+
+	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, view: view, dedup: dedup, rj: rj}
+	jx.env = d.jobEnv(pl, id, outCommit.ID, inName, cm.ID)
+	failedAny := d.runDatums(jx, todo)
+
+	for _, dt := range datums {
+		switch dedup[dt.ID].Outcome {
+		case "success":
+			rec.Processed++
+		case "recovered":
+			rec.Recovered++
+		case "failed":
+			rec.Failed++
+		case "skipped":
+			rec.Skipped++
 		}
 	}
 
-	var exit int
-	var tail string
-	if len(pl.Pipeline.Transform.Cmd) == 0 && len(pl.Pipeline.Transform.Stdin) == 0 {
-		// Default entry point (SB-126): copy every input file to OUT.
-		exit = copyDir(inDir, outDir)
-	} else {
-		exit, tail = d.runPipelineContainer(pl, id, inName, env, inDir, outDir, capture)
-	}
-	if capture != nil {
-		capture.Close() // flush any unterminated line; the log is complete
-	}
-
-	if exit != 0 {
-		reason := fmt.Sprintf("job exited with status %d", exit)
-		if tail != "" {
-			reason += "\n" + tail
-		}
-		if len(reason) > 4000 {
-			reason = reason[len(reason)-4000:]
-		}
-		accepted := !rj.cancelled.Load() &&
-			pl.Pipeline.Transform.AcceptReturnCode != 0 &&
-			exit == pl.Pipeline.Transform.AcceptReturnCode
-		if accepted {
-			// Declared acceptable exit code (SB-033): a successful run that
-			// still produces its output commit — fall through to the upload.
+	if failedAny {
+		// All-or-nothing output: finish the commit explicitly empty. A
+		// failed datum still leaves the job inspectable and the pipeline
+		// schedulable (SB-082).
+		d.finishOutput(pl, outCommit, "", true)
+		if rj.cancelled.Load() {
+			rec.State = "killed"
+			rec.Reason = "job cancelled"
 		} else {
-			// All-or-nothing output: finish the commit explicitly empty.
-			d.finishOutput(pl, outCommit, "", true)
-			if rj.cancelled.Load() {
-				rec.State = "killed"
-				rec.Reason = "job cancelled"
-			} else {
-				rec.State = "failure"
-				rec.Reason = reason
-				if isProvisioningError(tail) {
-					// the execution environment could not be provisioned:
-					// the pipeline enters the crashed state with a recorded
-					// reason (SB-043, SB-091)
-					d.markPipelineCrashed(pl.Pipeline.Name, reason)
-				}
-			}
-			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
-			d.saveJob(rec)
-			return
+			rec.State = "failure"
+			rec.Reason = failedDatumReason(dedup, datums)
 		}
+		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		d.saveJob(rec)
+		d.saveDedup(pl.Pipeline.Name, dedup)
+		return
+	}
+
+	// Merge every datum's contribution into the output directory — a
+	// processed datum's fresh files, a skipped datum's carried files.
+	if err := d.mergeOutputs(jx, datums); err != nil {
+		d.finishOutput(pl, outCommit, "", true)
+		fail("merge output: " + err.Error())
+		d.saveDedup(pl.Pipeline.Name, dedup)
+		return
 	}
 
 	// Upload OUT into the output commit in one batch, then finish it (which
@@ -1210,6 +1317,7 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 	rec.State = "success"
 	rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
 	d.saveJob(rec)
+	d.saveDedup(pl.Pipeline.Name, dedup)
 
 	// The output commit is a real revision of the output repo: propagate.
 	d.triggerForCommit(fin)
@@ -1259,15 +1367,27 @@ func copyDir(src, dst string) int {
 // for the log store (timestamped, line-split). inName is the input's
 // environment variable name, which also names the in-container mount point.
 func (d *daemon) runPipelineContainer(pl pipelineRec, jobID, inName string, env []string, inDir, outDir string, capture io.Writer) (int, string) {
+	return d.runPipelineContainerNamed(pl, jobID, "sandman-"+jobID, inName, env, inDir, outDir, capture, "")
+}
+
+// runPipelineContainerNamed runs the transform's container under an
+// explicit container name (per-datum containers are named after the datum
+// so a cancel can kill exactly the running ones). viewDir, when non-empty,
+// is the job's full input view, mounted read-only alongside the datum's
+// own files (SB-166: a datum may read data outside its own datum set).
+func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname, inName string, env []string, inDir, outDir string, capture io.Writer, viewDir string) (int, string) {
 	tr := pl.Pipeline.Transform
 	image := tr.Image
 	if image == "" {
 		image = "alpine"
 	}
-	args := []string{"run", "--rm", "--name", "sandman-" + jobID,
+	args := []string{"run", "--rm", "--name", cname,
 		"--label", "sandman.node=" + d.name,
 		"-v", inDir + ":/sandman/in/" + inName + ":ro",
 		"-v", outDir + ":/sandman/out",
+	}
+	if viewDir != "" {
+		args = append(args, "-v", viewDir+":/sandman/view/"+inName+":ro")
 	}
 	for _, e := range env {
 		args = append(args, "-e", e)

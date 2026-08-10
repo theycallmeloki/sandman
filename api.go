@@ -89,6 +89,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/commits/{id}", hErr(d.inspectCommitH))
 	mux.HandleFunc("PUT /api/v1/commits/{id}/files/{path...}", hErr(d.putFileH))
 	mux.HandleFunc("POST /api/v1/commits/{id}/files/{path...}", hErr(d.copyFileH))
+	mux.HandleFunc("DELETE /api/v1/commits/{id}/files/{path...}", hErr(d.deleteFileH))
 	mux.HandleFunc("GET /api/v1/commits/{id}/files/{path...}", hErr(d.getFileH))
 	mux.HandleFunc("GET /api/v1/commits/{id}/files", hErr(d.listFilesH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
@@ -274,6 +275,14 @@ func (d *daemon) copyFileH(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("invalid request body")
 	}
 	if err := d.store.copyFile(r.PathValue("id"), r.PathValue("path"), body.SrcCommit, body.SrcPath); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+func (d *daemon) deleteFileH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.store.deleteFile(r.PathValue("id"), r.PathValue("path")); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})

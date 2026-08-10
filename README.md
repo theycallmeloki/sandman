@@ -147,6 +147,10 @@ revisions, and jobs that run them.
   can never be deleted
 - `POST /api/v1/repos/{repo}/commits` — start a revision on a branch
 - `PUT /api/v1/commits/{id}/files/{path}` — write a file into an open revision
+- `DELETE /api/v1/commits/{id}/files/{path}` — tombstone a path: the file
+  is removed from the branch's view at this revision (SB-007), and a
+  pipeline's output reflects the deletion (the deleted file is absent, not
+  stale)
 - `POST /api/v1/commits/{id}/files/{path}` — copy a file or directory
   subtree from another commit (destinations already in the view are
   rejected; so are paths already written in the open commit)
@@ -158,14 +162,16 @@ revisions, and jobs that run them.
 - `PUT/GET /api/v1/tags/{name}` `GET /api/v1/tags` — durable global names
   bound to file content, listed with their object reference
 - `POST/GET/DELETE /api/v1/pipelines[/{name}]` — pipelines. The create body
-  carries `update: true` to apply a new version (creating when absent) and
-  `reprocess: true` to request a full reprocessing; every update processes
-  the input head. `DELETE` honors `?force=1` (removes a mid-DAG pipeline
-  despite downstream consumers) and `?keepRepo=1` (preserves the output
-  repo for reuse). `GET` takes `?history=<n>` (`0` current version, `n`
-  current plus n older, `-1` every version), `?name=` and
-  `?allowIncomplete=1` (lists pipelines whose definition is lost, by name
-  only); inspection takes `?ancestry=<k>` for historical versions
+  carries `update: true` to apply a new version (creating when absent);
+  `reprocess: true` is a persisted spec field: every job re-executes all
+  of its datums instead of skipping datums unchanged from a previous
+  successful run (SB-166, D-13). Every update processes the input head.
+  `DELETE` honors `?force=1` (removes a mid-DAG pipeline despite
+  downstream consumers) and `?keepRepo=1` (preserves the output repo for
+  reuse). `GET` takes `?history=<n>` (`0` current version, `n` current
+  plus n older, `-1` every version), `?name=` and `?allowIncomplete=1`
+  (lists pipelines whose definition is lost, by name only); inspection
+  takes `?ancestry=<k>` for historical versions
 - `POST /api/v1/pipelines/{name}/stop` `/start` — pause/resume: a stopped
   pipeline ignores new commits and replays them on start (backlog — the
   commits finished while it was stopped are consumed together as one job
@@ -177,6 +183,22 @@ revisions, and jobs that run them.
   no warm-participant contract (tuning choices, not requirements); D-09:
   a standby pipeline that cannot be provisioned degrades to crashed
   (SB-043), never to a degraded standby state
+- **Datums** — a job processes its input as per-datum units of work: every
+  path matched by the input glob is a datum (a directory match is a datum
+  of its whole subtree), executed by a bounded worker pool sized by
+  `parallelism.constant` and capped at the datum count. Each datum runs
+  the transform against its own files (`$<input>` is the datum's input
+  dir; the full input view is mounted read-only at
+  `/sandman/view/<input>`); its output merges into the job's single output
+  commit, files at the same path from different datums concatenating in
+  datum order (SB-063; D-14: the order is not contractual). Datums whose
+  content is unchanged from a previous successful run are skipped
+  (SB-006/084/085) and their output carried forward, unless `reprocess`
+  is set. `transform.datumTries` retries a failing datum that many times,
+  one log entry per attempt (SB-134); the transform's `acceptReturnCode`
+  applies per datum. A failing datum fails the job — reason names the
+  datum (SB-011) — and the job's `processed`/`recovered`/`failed`/
+  `skipped` fields count the outcomes (SB-012)
 - `GET /api/v1/jobs[/{id}]` — jobs; `?pipeline=`, `?outputCommit=`,
   `?state=` (repeatable), `?history=` (version depth), `?full=1` (each
   job's own version's transform and input spec — history survives updates).
@@ -237,8 +259,9 @@ input head under the new transform. A pipeline with no command and no
 stdin copies inputs to output; with stdin but no command it is accepted and
 immediately fails. Job output is all-or-nothing: a failed or killed job's
 output commit is finished empty. A commit's view accumulates across its
-ancestors — the newest write to a path wins — and the job for the head
-revision always sees the full accumulated content. A pipeline whose
+ancestors — the newest write to a path wins, and a tombstoned path
+(DeleteFile) is gone — and the job for the head revision always sees the
+full accumulated content. A pipeline whose
 execution environment cannot be provisioned enters the crashed state, and
 one whose output repo is deleted mid-run fails with a reason; both recover
 by updating the pipeline. Pipeline states: running, standby, paused

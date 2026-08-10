@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -57,6 +58,10 @@ type commitRec struct {
 	Finished    bool        `json:"finished"`
 	Empty       bool        `json:"empty"`
 	Files       []fileEntry `json:"files,omitempty"`
+	// Deleted are tombstoned paths: files removed from the branch at this
+	// revision (SB-007). A deletion wins over every ancestor's file; a
+	// later re-add wins over the tombstone.
+	Deleted []string `json:"deleted,omitempty"`
 }
 
 const defaultBranch = "master"
@@ -352,6 +357,73 @@ func (s *apiStore) putFile(commitID, p string, data []byte) error {
 	return s.saveCommit(rec)
 }
 
+// deleteFile tombstones a path in an open commit: any file written at that
+// path in this commit is dropped (a delete-then-re-add in one commit is a
+// replacement, SB-007) and the path is recorded as deleted, which
+// resolveView applies against the whole branch history.
+func (s *apiStore) deleteFile(commitID, p string) error {
+	if !validPath(p) {
+		return fmt.Errorf("invalid file path %q", p)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.loadCommitByID(commitID)
+	if err != nil {
+		return fmt.Errorf("commit %q not found", commitID)
+	}
+	if !rec.Started || rec.Finished {
+		return fmt.Errorf("commit %q is not open for writes", commitID)
+	}
+	keep := rec.Files[:0]
+	for _, f := range rec.Files {
+		if f.Path != p {
+			keep = append(keep, f)
+		}
+	}
+	rec.Files = keep
+	if !slices.Contains(rec.Deleted, p) {
+		rec.Deleted = append(rec.Deleted, p)
+	}
+	return s.saveCommit(rec)
+}
+
+// tombstoneRemoved records in a commit the paths that vanished from its
+// parent's view: the output side of a deletion (SB-007 — a pipeline's
+// output revision reflects the deletion, so the deleted file is genuinely
+// absent, not stale).
+func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.loadCommitByID(commitID)
+	if err != nil {
+		return err
+	}
+	var parent map[string]fileEntry
+	if rec.ParentID != "" {
+		if p, err := s.loadCommit(rec.Repo, rec.ParentID); err == nil {
+			parent = s.resolveView(p)
+		}
+	}
+	newPaths := map[string]bool{}
+	filepath.Walk(outDir, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			if rel, err := filepath.Rel(outDir, p); err == nil {
+				newPaths[filepath.ToSlash(rel)] = true
+			}
+		}
+		return nil
+	})
+	var removed []string
+	for p := range parent {
+		if !newPaths[p] {
+			removed = append(removed, p)
+		}
+	}
+	sort.Strings(removed)
+	rec.Deleted = removed
+	return s.saveCommit(rec)
+}
+
 // addFilesFromDir stores every file under dir into an open commit in one
 // batch — the job output uploader (a single job can produce tens of
 // thousands of files, SB-047).
@@ -593,6 +665,9 @@ func (s *apiStore) resolveView(rec *commitRec) map[string]fileEntry {
 	}
 	view := map[string]fileEntry{}
 	for i := len(chain) - 1; i >= 0; i-- { // oldest first, so the newest wins
+		for _, d := range chain[i].Deleted {
+			delete(view, d)
+		}
 		for _, f := range chain[i].Files {
 			view[f.Path] = f
 		}
@@ -650,6 +725,11 @@ func (s *apiStore) materializeInput(commitID, dir string) error {
 	if err != nil {
 		return err
 	}
+	return s.materializeView(view, dir)
+}
+
+// materializeView writes an already-resolved view into dir.
+func (s *apiStore) materializeView(view map[string]fileEntry, dir string) error {
 	for p, f := range view {
 		data, err := s.readBlob(f.SHA)
 		if err != nil {

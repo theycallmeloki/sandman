@@ -272,6 +272,12 @@ func (c *Client) PutFile(commitID, p string, data []byte) error {
 	return err
 }
 
+// DeleteFile tombstones a path in an open commit: the path is removed from
+// the branch's view at this revision (SB-007).
+func (c *Client) DeleteFile(commitID, p string) error {
+	return c.do("DELETE", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p), nil, nil)
+}
+
 func (c *Client) GetFile(commitID, p string) ([]byte, error) {
 	return c.doRaw("GET", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p), nil)
 }
@@ -287,6 +293,8 @@ func (c *Client) ListFiles(commitID string) ([]FileInfo, error) {
 // container image (empty means "alpine"); when Cmd is empty the pipeline
 // runs the default entry point (see the package comment). AcceptReturnCode
 // declares one non-zero exit code that is treated as success (SB-033).
+// DatumTries retries a failing datum that many times before it is marked
+// failed (SB-134); a value of zero means one attempt.
 type Transform struct {
 	Image            string            `json:"image,omitempty"`
 	Cmd              []string          `json:"cmd,omitempty"`
@@ -295,6 +303,7 @@ type Transform struct {
 	User             string            `json:"user,omitempty"`
 	Workdir          string            `json:"workdir,omitempty"`
 	AcceptReturnCode int               `json:"acceptReturnCode,omitempty"`
+	DatumTries       int               `json:"datumTries,omitempty"`
 }
 
 // Input is a file-scoped (PFS) input: files of the repo matched by Glob.
@@ -320,9 +329,10 @@ type Pipeline struct {
 	// Standby pipelines idle in the standby state and activate only when
 	// work arrives, returning to standby once it settles (SB-049/050).
 	Standby bool `json:"standby,omitempty"`
-	// Update applies this spec to an existing pipeline (creating it when
-	// absent, SB-040); Reprocess marks the update as a full reprocessing
-	// request. Both are request flags, not persisted spec fields.
+	// Reprocess is a persisted spec field: every job re-executes all of
+	// its datums instead of skipping datums unchanged from a previous
+	// successful run (SB-166; D-13 — an update that sets it requests full
+	// reprocessing). Update is a request flag (create when absent, SB-040).
 	Update    bool `json:"update,omitempty"`
 	Reprocess bool `json:"reprocess,omitempty"`
 }
@@ -433,6 +443,13 @@ type Job struct {
 	Version   int        `json:"version,omitempty"`
 	Transform *Transform `json:"transform,omitempty"`
 	Input     *Input     `json:"input,omitempty"`
+	// Per-datum outcome counts (SB-012): processed (success), recovered
+	// (primary failed, error handler succeeded), failed, skipped (datum
+	// unchanged from a previous successful run).
+	Processed int `json:"processed,omitempty"`
+	Recovered int `json:"recovered,omitempty"`
+	Failed    int `json:"failed,omitempty"`
+	Skipped   int `json:"skipped,omitempty"`
 }
 
 func (c *Client) ListJobs() ([]Job, error) {

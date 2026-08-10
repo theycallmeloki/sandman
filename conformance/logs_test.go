@@ -324,15 +324,17 @@ func TestSB062_GlobalLogStore(t *testing.T) {
 		t.Fatalf("global logs missing lines: %d foo, %d bar (want >= 3 and >= 1)", globalFoo, globalBar)
 	}
 
-	// follow mode streams new lines as they are produced, across pipelines
+	// follow mode streams new lines as they are produced, across pipelines.
+	// cm2 changes one file: pa's job runs the one changed datum (1 foo),
+	// pb's job emits its bar — the stream sees both pipelines (D-21).
 	rc, err := c.FollowLogs(client.LogParams{})
 	if err != nil {
 		t.Fatalf("open global follow stream: %v", err)
 	}
-	follow := followCollector(rc, 4)
+	follow := followCollector(rc, 2)
 	cm2 := commitFiles(t, repo, "", map[string]string{"a": "4\n"})
 	flushOK(t, cm2.ID)
-	got := waitFollow(t, follow, 4, 60*time.Second)
+	got := waitFollow(t, follow, 2, 60*time.Second)
 	foos, bars := 0, 0
 	for _, l := range got {
 		switch l {
@@ -342,7 +344,7 @@ func TestSB062_GlobalLogStore(t *testing.T) {
 			bars++
 		}
 	}
-	if foos < 3 || bars < 1 {
-		t.Fatalf("follow stream: %d foo, %d bar (want >= 3 and >= 1, got %v)", foos, bars, got)
+	if foos < 1 || bars < 1 {
+		t.Fatalf("follow stream: %d foo, %d bar (want >= 1 and >= 1, got %v)", foos, bars, got)
 	}
 }

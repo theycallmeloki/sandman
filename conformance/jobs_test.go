@@ -199,17 +199,18 @@ func TestSB122_CancelRunningJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
-	// the sleep duration comes from the input file: 600s for the first
-	// commit (cancelled), 1s for the second (completes)
+	// the sleep duration comes from the input: 600s for the first commit
+	// (cancelled), 1s for the second (completes). The two files form one
+	// directory datum (glob /job) because the transform reads both.
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
 			Image: "alpine",
-			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep $(cat ${%s}/sleep); cp ${%s}/data ${OUT}/data", repo, repo)},
+			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep $(cat ${%s}/job/sleep); cp ${%s}/job/data ${OUT}/data", repo, repo)},
 		},
-		Input: &client.Input{Repo: repo, Glob: "/*"},
+		Input: &client.Input{Repo: repo, Glob: "/job"},
 	})
-	cm1 := commitFiles(t, repo, "master", map[string]string{"sleep": "600", "data": "first"})
+	cm1 := commitFiles(t, repo, "master", map[string]string{"job/sleep": "600", "job/data": "first"})
 	_ = cm1
 
 	job := waitJobFor(t, pipe, 30*time.Second)
@@ -227,7 +228,7 @@ func TestSB122_CancelRunningJob(t *testing.T) {
 	})
 
 	// the pipeline is still healthy: a quick commit processes normally
-	cm2 := commitFiles(t, repo, "master", map[string]string{"sleep": "1", "data": "second"})
+	cm2 := commitFiles(t, repo, "master", map[string]string{"job/sleep": "1", "job/data": "second"})
 	jobs := flushOK(t, cm2.ID)
 	if len(jobs) != 1 {
 		t.Fatalf("post-cancel flush: %d jobs, want 1", len(jobs))
