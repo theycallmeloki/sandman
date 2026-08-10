@@ -197,6 +197,9 @@ func (s *apiStore) branches(name string) []string {
 
 // inspectRepo reports the repo with its primary branch's head size.
 func (s *apiStore) inspectRepo(name string) (client.Repo, error) {
+	if !validName(name) {
+		return client.Repo{}, fmt.Errorf("invalid repo name %q", name)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	dir := s.repoDir(name)
@@ -306,7 +309,9 @@ func (s *apiStore) startCommit(repo, branch, description string) (client.Commit,
 	return rec.commit(), nil
 }
 
-// putFile writes one file into an open commit.
+// putFile writes one file into an open commit. A path already written in
+// this commit is rejected (SB-156); rewriting a path from a parent commit
+// is legal (new revisions supersede old content).
 func (s *apiStore) putFile(commitID, p string, data []byte) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
@@ -320,19 +325,123 @@ func (s *apiStore) putFile(commitID, p string, data []byte) error {
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
+	for _, f := range rec.Files {
+		if f.Path == p {
+			return fmt.Errorf("path %q already exists in commit %q", p, commitID)
+		}
+	}
 	sha, err := s.writeBlob(data)
 	if err != nil {
 		return err
 	}
-	// replace any earlier write to the same path in this commit
-	files := make([]fileEntry, 0, len(rec.Files)+1)
-	for _, f := range rec.Files {
-		if f.Path != p {
-			files = append(files, f)
+	rec.Files = append(rec.Files, fileEntry{Path: p, SHA: sha, Size: uint64(len(data))})
+	return s.saveCommit(rec)
+}
+
+// addFilesFromDir stores every file under dir into an open commit in one
+// batch — the job output uploader (a single job can produce tens of
+// thousands of files, SB-047).
+func (s *apiStore) addFilesFromDir(commitID, dir string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.loadCommitByID(commitID)
+	if err != nil {
+		return fmt.Errorf("commit %q not found", commitID)
+	}
+	if !rec.Started || rec.Finished {
+		return fmt.Errorf("commit %q is not open for writes", commitID)
+	}
+	var entries []fileEntry
+	walkErr := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		sha, err := s.writeBlob(data)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, fileEntry{Path: filepath.ToSlash(rel), SHA: sha, Size: uint64(len(data))})
+		return nil
+	})
+	if walkErr != nil {
+		return walkErr
+	}
+	rec.Files = append(rec.Files, entries...)
+	return s.saveCommit(rec)
+}
+
+// copyFile copies a file or directory subtree from srcCommit into an open
+// dstCommit at dstPath. The destination must not exist anywhere in the
+// destination commit's view (parents included) — overwrite protection
+// (SB-156). A directory copy lands each contained file at
+// dstPath/<relative path>.
+func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string) error {
+	if !validPath(dstPath) {
+		return fmt.Errorf("invalid file path %q", dstPath)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dstRec, err := s.loadCommitByID(dstCommitID)
+	if err != nil {
+		return fmt.Errorf("commit %q not found", dstCommitID)
+	}
+	if !dstRec.Started || dstRec.Finished {
+		return fmt.Errorf("commit %q is not open for writes", dstCommitID)
+	}
+	srcView, err := s.resolveViewByID(srcCommitID)
+	if err != nil {
+		return err
+	}
+	type move struct{ src, dst string }
+	var moves []move
+	if f, ok := srcView[srcPath]; ok && !strings.HasSuffix(srcPath, "/") {
+		moves = append(moves, move{src: srcPath, dst: dstPath})
+		_ = f
+	} else {
+		prefix := srcPath + "/"
+		found := false
+		for p := range srcView {
+			if strings.HasPrefix(p, prefix) {
+				moves = append(moves, move{src: p, dst: dstPath + "/" + p[len(prefix):]})
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("path %q not found", srcPath)
 		}
 	}
-	rec.Files = append(files, fileEntry{Path: p, SHA: sha, Size: uint64(len(data))})
-	return s.saveCommit(rec)
+	dstView := s.resolveView(dstRec)
+	for _, m := range moves {
+		if _, exists := dstView[m.dst]; exists {
+			return fmt.Errorf("path %q already exists in commit %q", m.dst, dstCommitID)
+		}
+	}
+	var entries []fileEntry
+	for _, m := range moves {
+		f := srcView[m.src]
+		data, err := s.readBlob(f.SHA)
+		if err != nil {
+			return err
+		}
+		sha, err := s.writeBlob(data) // dedupes: identical content, same object
+		if err != nil {
+			return err
+		}
+		entries = append(entries, fileEntry{Path: m.dst, SHA: sha, Size: f.Size})
+	}
+	dstRec.Files = append(dstRec.Files, entries...)
+	return s.saveCommit(dstRec)
 }
 
 // finishCommit closes the commit, advances the branch ref, and reports the
@@ -376,6 +485,9 @@ func (s *apiStore) inspectCommit(commitID string) (client.Commit, error) {
 }
 
 func (s *apiStore) headCommitRec(repo, branch string) (client.Commit, error) {
+	if !validName(repo) {
+		return client.Commit{}, fmt.Errorf("invalid repo name %q", repo)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if _, err := os.Stat(s.repoDir(repo)); err != nil {
@@ -427,14 +539,9 @@ func (rec *commitRec) commit() client.Commit {
 // nothing below it merges in — a child of an empty commit shows only its
 // own files (SB-118).
 func (s *apiStore) resolveView(rec *commitRec) map[string]fileEntry {
-	view := map[string]fileEntry{}
-	for cur := rec; cur != nil; {
-		if cur.Empty {
-			break
-		}
-		for _, f := range cur.Files {
-			view[f.Path] = f
-		}
+	var chain []*commitRec
+	for cur := rec; cur != nil && !cur.Empty; {
+		chain = append(chain, cur)
 		if cur.ParentID == "" {
 			break
 		}
@@ -443,6 +550,12 @@ func (s *apiStore) resolveView(rec *commitRec) map[string]fileEntry {
 			break
 		}
 		cur = parent
+	}
+	view := map[string]fileEntry{}
+	for i := len(chain) - 1; i >= 0; i-- { // oldest first, so the newest wins
+		for _, f := range chain[i].Files {
+			view[f.Path] = f
+		}
 	}
 	return view
 }
@@ -511,4 +624,89 @@ func (s *apiStore) materializeInput(commitID, dir string) error {
 		}
 	}
 	return nil
+}
+
+// chainFromHead lists the commit ids of a branch from the head down to
+// (excluding) stopAt, oldest first — the backlog a stopped pipeline must
+// process on restart (SB-048).
+func (s *apiStore) chainFromHead(repo, branch, stopAt string) []string {
+	var chain []string
+	id := s.headCommit(repo, branch)
+	for id != "" && id != stopAt {
+		chain = append(chain, id)
+		rec, err := s.loadCommit(repo, id)
+		if err != nil {
+			break
+		}
+		id = rec.ParentID
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain
+}
+
+// ---- tags (SB-150) ----
+//
+// Tags are durable global names bound to file content: <state>/tags/<name>
+// holds the sha of the tagged blob, which lives in the content-addressed
+// object store. Listing a tag yields its reference; retrieval resolves it
+// byte-for-byte.
+
+type tagInfo struct {
+	Name string `json:"name"`
+	Ref  string `json:"ref"`
+}
+
+func (s *apiStore) tagPath(name string) string {
+	return filepath.Join(filepath.Dir(s.dir), "tags", name)
+}
+
+func (s *apiStore) putTag(name string, data []byte) error {
+	if !validName(name) {
+		return fmt.Errorf("invalid tag name %q", name)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sha, err := s.writeBlob(data)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.tagPath(name)), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(s.tagPath(name), []byte(sha), 0o644)
+}
+
+func (s *apiStore) getTag(name string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sha, err := os.ReadFile(s.tagPath(name))
+	if err != nil {
+		return nil, fmt.Errorf("tag %q not found", name)
+	}
+	return s.readBlob(strings.TrimSpace(string(sha)))
+}
+
+func (s *apiStore) listTags() ([]tagInfo, error) {
+	entries, err := os.ReadDir(filepath.Dir(s.dir) + "/tags")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]tagInfo, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ref, err := os.ReadFile(filepath.Join(filepath.Dir(s.dir), "tags", e.Name()))
+		if err != nil {
+			continue
+		}
+		out = append(out, tagInfo{Name: e.Name(), Ref: strings.TrimSpace(string(ref))})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }

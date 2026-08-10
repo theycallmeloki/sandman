@@ -144,13 +144,27 @@ revisions, and jobs that run them.
 - `POST/GET/DELETE /api/v1/repos[/{name}]` — repositories
 - `POST /api/v1/repos/{repo}/commits` — start a revision on a branch
 - `PUT /api/v1/commits/{id}/files/{path}` — write a file into an open revision
+- `POST /api/v1/commits/{id}/files/{path}` — copy a file or directory
+  subtree from another commit (destinations already in the view are
+  rejected; so are paths already written in the open commit)
 - `POST /api/v1/commits/{id}/finish` — close it (`empty: true` makes it an
   explicit empty commit: nothing is readable through it, even at the head)
-- `GET /api/v1/commits/{id}` `GET …/files` `GET …/files/{path}` — read
+- `GET /api/v1/commits/{id}` `GET …/files` `GET …/files/{path}` — read;
+  `?download=true` adds an attachment disposition, and the content type is
+  sniffed from the bytes
+- `PUT/GET /api/v1/tags/{name}` `GET /api/v1/tags` — durable global names
+  bound to file content, listed with their object reference
 - `POST/GET/DELETE /api/v1/pipelines[/{name}]` — pipelines
-- `GET /api/v1/jobs[/{id}]` — jobs. Flushing is a client-side wait: poll
-  jobs until every job for a revision is terminal (the `client.Flush`
-  helper does exactly that)
+- `POST /api/v1/pipelines/{name}/stop` `/start` — pause/resume: a stopped
+  pipeline ignores new commits and replays them on start (backlog)
+- `GET /api/v1/jobs[/{id}]` — jobs; `?pipeline=`, `?outputCommit=`,
+  `?state=` (repeatable), `?full=1` (include the pipeline spec). Job
+  inspection accepts a job id or its output commit. `POST …/{id}/cancel`
+  kills the in-flight work and marks the job killed; `DELETE …/{id}`
+  removes the record after finalizing its output revision. Flushing is a
+  client-side wait: poll jobs until every job for a revision — including
+  downstream stages — is terminal (the `client.Flush` helper does exactly
+  that, confirming the graph has stopped growing)
 
 **State is plain files** under the state dir — cat it:
 
@@ -169,11 +183,14 @@ value is the input directory (so `$repo/*` addresses the data). Jobs also
 receive `OUT`, `JOB_ID`, `OUTPUT_COMMIT`, and `<input>_COMMIT`. Finishing a
 commit triggers one job per subscribed pipeline; the job's `OUT` directory
 becomes a new commit in the pipeline's output repo (named after the
-pipeline) — finish is recursive, so pipelines chain. A pipeline with no
-command and no stdin copies inputs to output; with stdin but no command it
-is accepted and immediately fails. Job output is all-or-nothing: a failed
-job's output commit is finished empty. Pipelines process commits finished
-*after* their creation — no backfill.
+pipeline) — finish is recursive, so pipelines chain. A pipeline created
+over existing history processes the branch head once; a stopped pipeline
+replays the commits finished while it was stopped when started. A pipeline
+with no command and no stdin copies inputs to output; with stdin but no
+command it is accepted and immediately fails. Job output is all-or-nothing:
+a failed or killed job's output commit is finished empty. A commit's view
+accumulates across its ancestors — the newest write to a path wins — and
+the job for the head revision always sees the full accumulated content.
 
 ```sh
 curl -X POST localhost:4242/api/v1/repos        -d '{"name":"in"}'

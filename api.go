@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -86,14 +87,22 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/commits/{id}/finish", hErr(d.finishCommitH))
 	mux.HandleFunc("GET /api/v1/commits/{id}", hErr(d.inspectCommitH))
 	mux.HandleFunc("PUT /api/v1/commits/{id}/files/{path...}", hErr(d.putFileH))
+	mux.HandleFunc("POST /api/v1/commits/{id}/files/{path...}", hErr(d.copyFileH))
 	mux.HandleFunc("GET /api/v1/commits/{id}/files/{path...}", hErr(d.getFileH))
 	mux.HandleFunc("GET /api/v1/commits/{id}/files", hErr(d.listFilesH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
 	mux.HandleFunc("GET /api/v1/pipelines", hErr(d.listPipelinesH))
 	mux.HandleFunc("GET /api/v1/pipelines/{name}", hErr(d.inspectPipelineH))
 	mux.HandleFunc("DELETE /api/v1/pipelines/{name}", hErr(d.deletePipelineH))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/stop", hErr(d.stopPipelineH))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", hErr(d.startPipelineH))
 	mux.HandleFunc("GET /api/v1/jobs", hErr(d.listJobsH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", hErr(d.cancelJobH))
+	mux.HandleFunc("DELETE /api/v1/jobs/{id}", hErr(d.deleteJobH))
+	mux.HandleFunc("PUT /api/v1/tags/{name}", hErr(d.putTagH))
+	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
+	mux.HandleFunc("GET /api/v1/tags", hErr(d.listTagsH))
 	return mux
 }
 
@@ -240,8 +249,27 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
+	// Content type is detected from the bytes, not a stored label (SB-099).
+	w.Header().Set("Content-Type", http.DetectContentType(data))
+	if r.URL.Query().Get("download") == "true" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(r.PathValue("path"))))
+	}
 	w.Write(data)
+	return nil
+}
+
+func (d *daemon) copyFileH(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		SrcCommit string `json:"srcCommit"`
+		SrcPath   string `json:"srcPath"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		return fmt.Errorf("invalid request body")
+	}
+	if err := d.store.copyFile(r.PathValue("id"), r.PathValue("path"), body.SrcCommit, body.SrcPath); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
 
@@ -290,10 +318,27 @@ func (d *daemon) deletePipelineH(w http.ResponseWriter, r *http.Request) error {
 	return d.deletePipeline(r.PathValue("name"))
 }
 
+func (d *daemon) stopPipelineH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.stopPipeline(r.PathValue("name")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+func (d *daemon) startPipelineH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.startPipeline(r.PathValue("name")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
 // ---- jobs ----
 
 func (d *daemon) listJobsH(w http.ResponseWriter, r *http.Request) error {
-	jobs, err := d.listJobs()
+	q := r.URL.Query()
+	jobs, err := d.listJobsFiltered(q.Get("pipeline"), q.Get("outputCommit"), q["state"], q.Get("full") == "1")
 	if err != nil {
 		return err
 	}
@@ -307,5 +352,55 @@ func (d *daemon) inspectJobH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, j)
+	return nil
+}
+
+func (d *daemon) cancelJobH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.cancelJob(r.PathValue("id")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+func (d *daemon) deleteJobH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.deleteJob(r.PathValue("id")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// ---- tags (SB-150) ----
+
+func (d *daemon) putTagH(w http.ResponseWriter, r *http.Request) error {
+	defer r.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<30))
+	if err != nil {
+		return fmt.Errorf("read body: %v", err)
+	}
+	if err := d.store.putTag(r.PathValue("name"), data); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+func (d *daemon) getTagH(w http.ResponseWriter, r *http.Request) error {
+	data, err := d.store.getTag(r.PathValue("name"))
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Write(data)
+	return nil
+}
+
+func (d *daemon) listTagsH(w http.ResponseWriter, r *http.Request) error {
+	tags, err := d.store.listTags()
+	if err != nil {
+		return err
+	}
+	writeJSON(w, tags)
 	return nil
 }

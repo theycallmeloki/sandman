@@ -19,18 +19,25 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"sandman/client"
 )
 
 // pipelineRec is the persisted form of a pipeline. State (P7) is durable so
-// a restarting daemon remembers what it decided.
+// a restarting daemon remembers what it decided. Stopped is a persistent
+// flag distinct from the transient state (SB-028); StoppedAt is the input
+// branch head when the pipeline was stopped, the watermark for the backlog
+// replayed on start (SB-048).
 type pipelineRec struct {
-	Pipeline client.Pipeline `json:"pipeline"`
-	State    string          `json:"state"` // running | stopped | standby | failure | degraded | crashed
-	Reason   string          `json:"reason,omitempty"`
-	Version  int             `json:"version"`
+	Pipeline  client.Pipeline `json:"pipeline"`
+	State     string          `json:"state"` // running | stopped | standby | failure | degraded | crashed
+	Reason    string          `json:"reason,omitempty"`
+	Stopped   bool            `json:"stopped,omitempty"`
+	StoppedAt string          `json:"stoppedAt,omitempty"`
+	Version   int             `json:"version"`
 }
 
 var shIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -106,7 +113,86 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, p.Name+".json"), b, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, p.Name+".json"), b, 0o644); err != nil {
+		return err
+	}
+
+	// A pipeline created over existing history processes the current branch
+	// head once, in one output commit (SB-023, SB-053). Failure and stopped
+	// pipelines do not run.
+	if rec.State != "failure" && !rec.Stopped {
+		if head, err := d.store.headCommitRec(in.Repo, defaultBranch); err == nil && head.Finished {
+			go d.runJob(rec, head)
+		}
+	}
+	return nil
+}
+
+// stopPipeline pauses the pipeline: the persistent Stopped flag is set, the
+// transient state reports "paused" (SB-028), and the input head at stop
+// time becomes the backlog watermark.
+func (d *daemon) stopPipeline(name string) error {
+	rec, err := d.loadPipeline(name)
+	if err != nil {
+		return fmt.Errorf("pipeline %q not found", name)
+	}
+	rec.Stopped = true
+	rec.State = "paused"
+	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil {
+		rec.StoppedAt = head.ID
+	}
+	return d.savePipeline(rec)
+}
+
+// startPipeline resumes the pipeline and replays the backlog: every commit
+// finished while it was stopped, oldest first, that has no job from this
+// pipeline (SB-048).
+func (d *daemon) startPipeline(name string) error {
+	rec, err := d.loadPipeline(name)
+	if err != nil {
+		return fmt.Errorf("pipeline %q not found", name)
+	}
+	if !rec.Stopped {
+		return nil // already running
+	}
+	stopAt := rec.StoppedAt
+	rec.Stopped = false
+	rec.State = "running"
+	rec.StoppedAt = ""
+	if err := d.savePipeline(rec); err != nil {
+		return err
+	}
+	for _, cid := range d.store.chainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt) {
+		if !d.hasJob(rec.Pipeline.Name, cid) {
+			if cm, err := d.store.inspectCommit(cid); err == nil {
+				go d.runJob(*rec, cm)
+			}
+		}
+	}
+	return nil
+}
+
+func (d *daemon) savePipeline(rec *pipelineRec) error {
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(d.pipelinePath(rec.Pipeline.Name), b, 0o644)
+}
+
+// hasJob reports whether the pipeline already ran a job for the commit.
+func (d *daemon) hasJob(pipeline, commitID string) bool {
+	for _, j := range d.mustListJobs() {
+		if j.Pipeline != pipeline {
+			continue
+		}
+		for _, ic := range j.InputCommits {
+			if ic == commitID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (d *daemon) pipelinePath(name string) string {
@@ -122,7 +208,14 @@ func (d *daemon) inspectPipeline(name string) (client.PipelineInfo, error) {
 	if err := json.Unmarshal(b, &rec); err != nil {
 		return client.PipelineInfo{}, err
 	}
-	return rec.info(), nil
+	info := rec.info()
+	info.JobCounts = map[string]int{}
+	for _, j := range d.mustListJobs() {
+		if j.Pipeline == name {
+			info.JobCounts[j.State]++
+		}
+	}
+	return info, nil
 }
 
 func (d *daemon) listPipelines() ([]client.PipelineInfo, error) {
@@ -152,10 +245,12 @@ func (d *daemon) listPipelines() ([]client.PipelineInfo, error) {
 
 func (rec *pipelineRec) info() client.PipelineInfo {
 	return client.PipelineInfo{
-		Name:    rec.Pipeline.Name,
-		State:   rec.State,
-		Reason:  rec.Reason,
-		Version: rec.Version,
+		Name:        rec.Pipeline.Name,
+		State:       rec.State,
+		Reason:      rec.Reason,
+		Description: rec.Pipeline.Description,
+		Stopped:     rec.Stopped,
+		Version:     rec.Version,
 	}
 }
 
@@ -206,6 +301,13 @@ func (d *daemon) saveJob(rec *jobRec) error {
 }
 
 func (d *daemon) listJobs() ([]client.Job, error) {
+	return d.listJobsFiltered("", "", nil, false)
+}
+
+// listJobsFiltered lists jobs, applying the pipeline, output-commit, and
+// inclusive state-set filters (SB-093, SB-095). With full set, each job
+// carries its pipeline's transform and input spec (SB-094).
+func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string, full bool) ([]client.Job, error) {
 	entries, err := os.ReadDir(filepath.Join(d.state, "jobs"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -215,29 +317,62 @@ func (d *daemon) listJobs() ([]client.Job, error) {
 	}
 	out := make([]client.Job, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
-			if b, err := os.ReadFile(filepath.Join(d.state, "jobs", e.Name(), "job.json")); err == nil {
-				var rec jobRec
-				if json.Unmarshal(b, &rec) == nil {
-					out = append(out, rec.job())
+		if !e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(d.state, "jobs", e.Name(), "job.json"))
+		if err != nil {
+			continue
+		}
+		var rec jobRec
+		if json.Unmarshal(b, &rec) != nil {
+			continue
+		}
+		if pipeline != "" && rec.Pipeline != pipeline {
+			continue
+		}
+		if outputCommit != "" && rec.OutputCommit != outputCommit {
+			continue
+		}
+		if len(states) > 0 {
+			match := false
+			for _, s := range states {
+				if s == rec.State {
+					match = true
+					break
 				}
 			}
+			if !match {
+				continue
+			}
 		}
+		j := rec.job()
+		if full {
+			if p, err := d.loadPipeline(rec.Pipeline); err == nil {
+				j.Transform = p.Pipeline.Transform
+				j.Input = p.Pipeline.Input
+			}
+		}
+		out = append(out, j)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Started > out[j].Started })
 	return out, nil
 }
 
 func (d *daemon) inspectJob(id string) (client.Job, error) {
-	b, err := os.ReadFile(filepath.Join(d.jobDir(id), "job.json"))
-	if err != nil {
-		return client.Job{}, fmt.Errorf("job %q not found", id)
+	if b, err := os.ReadFile(filepath.Join(d.jobDir(id), "job.json")); err == nil {
+		var rec jobRec
+		if json.Unmarshal(b, &rec) == nil {
+			return rec.job(), nil
+		}
 	}
-	var rec jobRec
-	if err := json.Unmarshal(b, &rec); err != nil {
-		return client.Job{}, err
+	// a job may also be keyed by the output commit it produced (SB-135)
+	for _, j := range d.mustListJobs() {
+		if j.OutputCommit == id {
+			return j, nil
+		}
 	}
-	return rec.job(), nil
+	return client.Job{}, fmt.Errorf("job %q not found: specify a Job or an OutputCommit", id)
 }
 
 // markStaleJobsFailed repairs the state after a daemon restart: jobs that
@@ -278,10 +413,89 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		if err != nil || rec.Pipeline.Input == nil {
 			continue
 		}
+		if rec.Stopped {
+			continue // stopped pipelines ignore new commits (SB-048)
+		}
 		if rec.Pipeline.Input.Repo == cm.Repo {
 			go d.runJob(*rec, cm)
 		}
 	}
+}
+
+// runningJob is the handle on an in-flight job's container; done signals
+// the job goroutine has settled, cancelled distinguishes a deliberate kill
+// from a plain failure (SB-122).
+type runningJob struct {
+	cancelled atomic.Bool
+	done      chan struct{}
+}
+
+var (
+	jobsMu  sync.Mutex
+	running = map[string]*runningJob{}
+)
+
+func registerRunning(id string) *runningJob {
+	rj := &runningJob{done: make(chan struct{})}
+	jobsMu.Lock()
+	running[id] = rj
+	jobsMu.Unlock()
+	return rj
+}
+
+func unregisterRunning(id string, rj *runningJob) {
+	jobsMu.Lock()
+	delete(running, id)
+	jobsMu.Unlock()
+	close(rj.done)
+}
+
+// cancelJob kills a running job and waits for it to settle as KILLED. A
+// terminal job cancels to a no-op. The kill retries: a job can be cancelled
+// the instant it appears, before its container exists (docker run still
+// starting), and a single kill would be silently lost.
+func (d *daemon) cancelJob(id string) error {
+	if _, err := d.inspectJob(id); err != nil {
+		return err
+	}
+	jobsMu.Lock()
+	rj, ok := running[id]
+	jobsMu.Unlock()
+	if !ok {
+		return nil // already terminal
+	}
+	rj.cancelled.Store(true)
+	go func() {
+		for i := 0; i < 120; i++ { // ~30s of retries, or until the job settles
+			select {
+			case <-rj.done:
+				return
+			default:
+			}
+			if exec.Command("docker", "kill", "sandman-"+id).Run() == nil {
+				return
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}()
+	select {
+	case <-rj.done:
+		return nil
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("job %q did not settle after cancel", id)
+	}
+}
+
+// deleteJob removes a job's record. A running job is first cancelled, which
+// finalizes its output revision (SB-057).
+func (d *daemon) deleteJob(id string) error {
+	if _, err := d.inspectJob(id); err != nil {
+		return err
+	}
+	if err := d.cancelJob(id); err != nil {
+		return err
+	}
+	return os.RemoveAll(d.jobDir(id))
 }
 
 func (d *daemon) loadPipeline(name string) (*pipelineRec, error) {
@@ -303,18 +517,21 @@ func (d *daemon) loadPipeline(name string) (*pipelineRec, error) {
 // observable.
 func (d *daemon) runJob(pl pipelineRec, cm client.Commit) {
 	in := pl.Pipeline.Input
-	if in.Name == "" {
-		in.Name = in.Repo
+	inName := in.Name
+	if inName == "" {
+		inName = in.Repo
 	}
 	id := newJobID(d.name)
 	dir := d.jobDir(id)
-	inDir := filepath.Join(dir, "in", in.Name)
+	inDir := filepath.Join(dir, "in", inName)
 	outDir := filepath.Join(dir, "out")
 	for _, p := range []string{inDir, outDir} {
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return
 		}
 	}
+	rj := registerRunning(id)
+	defer unregisterRunning(id, rj)
 
 	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: "running",
 		InputCommits: []string{cm.ID}, Started: time.Now().UTC().Format(time.RFC3339)}
@@ -342,8 +559,8 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit) {
 	d.saveJob(rec)
 
 	env := []string{
-		in.Name + "=" + "/sandman/in/" + in.Name,
-		in.Name + "_COMMIT=" + cm.ID,
+		inName + "=" + "/sandman/in/" + inName,
+		inName + "_COMMIT=" + cm.ID,
 		"OUT=/sandman/out",
 		"JOB_ID=" + id,
 		"OUTPUT_COMMIT=" + outCommit.ID,
@@ -360,7 +577,7 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit) {
 		// Default entry point (SB-126): copy every input file to OUT.
 		exit = copyDir(inDir, outDir)
 	} else {
-		exit, tail = d.runPipelineContainer(pl, id, env, inDir, outDir)
+		exit, tail = d.runPipelineContainer(pl, id, inName, env, inDir, outDir)
 	}
 
 	if exit != 0 {
@@ -373,26 +590,24 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit) {
 		}
 		// All-or-nothing output: finish the commit explicitly empty.
 		d.store.finishCommit(outCommit.ID, "", true)
-		fail(reason)
+		if rj.cancelled.Load() {
+			rec.State = "killed"
+			rec.Reason = "job cancelled"
+		} else {
+			rec.State = "failure"
+			rec.Reason = reason
+		}
+		rec.Finished = time.Now().UTC().Format(time.RFC3339)
+		d.saveJob(rec)
 		return
 	}
 
-	// Upload OUT into the output commit, then finish it (which may trigger
-	// downstream pipelines).
-	filepath.Walk(outDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(outDir, p)
-		if err != nil {
-			return nil
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		return d.store.putFile(outCommit.ID, filepath.ToSlash(rel), data)
-	})
+	// Upload OUT into the output commit in one batch, then finish it (which
+	// may trigger downstream pipelines).
+	if err := d.store.addFilesFromDir(outCommit.ID, outDir); err != nil {
+		fail("upload output: " + err.Error())
+		return
+	}
 	fin, err := d.store.finishCommit(outCommit.ID, "", false)
 	if err != nil {
 		fail("finish output commit: " + err.Error())
@@ -446,8 +661,9 @@ func copyDir(src, dst string) int {
 
 // runPipelineContainer runs the transform in a throwaway container and
 // returns its exit code plus a tail of combined stderr/stdout for failure
-// reporting.
-func (d *daemon) runPipelineContainer(pl pipelineRec, jobID string, env []string, inDir, outDir string) (int, string) {
+// reporting. inName is the input's environment variable name, which also
+// names the in-container mount point.
+func (d *daemon) runPipelineContainer(pl pipelineRec, jobID, inName string, env []string, inDir, outDir string) (int, string) {
 	tr := pl.Pipeline.Transform
 	image := tr.Image
 	if image == "" {
@@ -455,7 +671,7 @@ func (d *daemon) runPipelineContainer(pl pipelineRec, jobID string, env []string
 	}
 	args := []string{"run", "--rm", "--name", "sandman-" + jobID,
 		"--label", "sandman.node=" + d.name,
-		"-v", inDir + ":/sandman/in/" + pl.Pipeline.Input.Name + ":ro",
+		"-v", inDir + ":/sandman/in/" + inName + ":ro",
 		"-v", outDir + ":/sandman/out",
 	}
 	for _, e := range env {

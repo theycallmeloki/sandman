@@ -9,6 +9,7 @@
 package conformance
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -22,7 +23,13 @@ import (
 	"sandman/client"
 )
 
-var c *client.Client
+var (
+	c          *client.Client
+	daemonCmd  *exec.Cmd
+	daemonPort int
+	daemonName string
+	binPath    string
+)
 
 func TestMain(m *testing.M) {
 	bin := os.Getenv("SANMAN_BIN")
@@ -37,33 +44,55 @@ func TestMain(m *testing.M) {
 		}
 		defer os.Remove(bin)
 	}
+	binPath = bin
 
-	port := freePort()
+	daemonPort = freePort()
 	state := filepath.Join(os.TempDir(), fmt.Sprintf("sandman-state-%d", os.Getpid()))
 	defer os.RemoveAll(state)
+	daemonStateDir = state
+	daemonName = "conformance-" + strconv.Itoa(daemonPort)
 
-	cmd := exec.Command(bin, "daemon", "-port", strconv.Itoa(port), "-state", state)
+	startDaemon(state)
+	if !waitPort(daemonPort, 15*time.Second) {
+		fmt.Fprintln(os.Stderr, "harness: daemon did not come up")
+		os.Exit(1)
+	}
+
+	c = client.New(fmt.Sprintf("127.0.0.1:%d", daemonPort))
+	code := m.Run()
+	// os.Exit skips defers, so the daemon must die here or it keeps the
+	// inherited stderr pipe open and go test waits out its WaitDelay.
+	daemonCmd.Process.Kill()
+	os.RemoveAll(state)
+	os.Exit(code)
+}
+
+func startDaemon(state string) {
+	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(daemonPort), "-state", state)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "harness: daemon start failed:", err)
 		os.Exit(1)
 	}
-	defer cmd.Process.Kill()
-
-	if !waitPort(port, 15*time.Second) {
-		fmt.Fprintln(os.Stderr, "harness: daemon did not come up")
-		os.Exit(1)
-	}
-
-	c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
-	code := m.Run()
-	// os.Exit skips defers, so the daemon must die here or it keeps the
-	// inherited stderr pipe open and go test waits out its WaitDelay.
-	cmd.Process.Kill()
-	os.RemoveAll(state)
-	os.Exit(code)
+	daemonCmd = cmd
 }
+
+// restartDaemon kills the daemon and starts a fresh one on the same port
+// and state dir (SB-034, SB-035). The daemon must be fully dead before the
+// new one binds the port.
+func restartDaemon(t *testing.T) {
+	t.Helper()
+	daemonCmd.Process.Kill()
+	daemonCmd.Wait()
+	startDaemon(daemonStateDir)
+	if !waitPort(daemonPort, 15*time.Second) {
+		t.Fatal("daemon did not come back up after restart")
+	}
+}
+
+// daemonStateDir is the daemon's state dir, kept for restart tests.
+var daemonStateDir string
 
 func freePort() int {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -170,6 +199,49 @@ func wantErr(t *testing.T, err error, substr string) {
 	if !strings.Contains(err.Error(), substr) {
 		t.Fatalf("error %q does not contain %q", err.Error(), substr)
 	}
+}
+
+// noPanic asserts the call produced a well-formed HTTP response — a
+// *client.Error (any status) or nil. Anything else is a transport-level
+// failure, the signature of a panicking handler (SB-155).
+func noPanic(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	var ce *client.Error
+	if errors.As(err, &ce) {
+		return
+	}
+	t.Fatalf("transport error (possible panic in handler): %v", err)
+}
+
+// pollFor polls until cond returns true or the deadline passes.
+func pollFor(t *testing.T, what string, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// waitJobFor polls until a job for the pipeline exists and returns the
+// first terminal-or-running job found.
+func waitJobFor(t *testing.T, pipeline string, timeout time.Duration) client.Job {
+	t.Helper()
+	var found client.Job
+	pollFor(t, "job of pipeline "+pipeline, timeout, func() bool {
+		jobs, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipeline})
+		if err != nil || len(jobs) == 0 {
+			return false
+		}
+		found = jobs[0]
+		return true
+	})
+	return found
 }
 
 // copyTransform is the standard pipeline transform: copy every input file

@@ -24,6 +24,21 @@
 //     which files of the input revision the job sees.
 //   - A commit finished with the empty flag is explicitly empty: parent
 //     content is not readable through it, even at the branch head (SB-118).
+//   - A pipeline created after its input history exists processes the
+//     branch head once, in one output commit (SB-023, SB-053); it does not
+//     replay older history. A stopped pipeline ignores new commits; on
+//     start it processes the backlog of commits finished while stopped
+//     (SB-048).
+//   - Writing a file into an open commit at a path already written in that
+//     same commit is rejected (SB-156). Copying into a path that already
+//     exists in the commit's view (including ancestors) is rejected. Jobs
+//     are exempt: they upload into fresh output commits.
+//   - Job inspection accepts a job id or an output commit id (SB-135).
+//     Job listing filters by pipeline, by produced output commit, and by an
+//     inclusive set of states; a full listing additionally carries each
+//     job's transform and input spec (SB-093, SB-094, SB-095).
+//   - Tags are durable global names bound to file content: put, get, and
+//     list round-trip bytes exactly (SB-150).
 package client
 
 import (
@@ -55,6 +70,9 @@ type Client struct {
 func New(addr string) *Client {
 	return &Client{base: "http://" + addr, hc: &http.Client{Timeout: 60 * time.Second}}
 }
+
+// Base returns the server URL (http://host:port).
+func (c *Client) Base() string { return c.base }
 
 func (c *Client) do(method, p string, in, out any) error {
 	var body io.Reader
@@ -113,6 +131,36 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
 	}
 	return b, nil
+}
+
+// doRawHeaders is doRaw that also returns the response headers.
+func (c *Client) doRawHeaders(method, p string) (FileFetch, error) {
+	req, err := http.NewRequest(method, c.base+p, nil)
+	if err != nil {
+		return FileFetch{}, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return FileFetch{}, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return FileFetch{}, err
+	}
+	if resp.StatusCode >= 400 {
+		var e struct {
+			Error string `json:"error"`
+		}
+		json.Unmarshal(b, &e)
+		return FileFetch{}, &Error{Status: resp.StatusCode, Message: e.Error}
+	}
+	return FileFetch{
+		Data:            b,
+		ContentType:     resp.Header.Get("Content-Type"),
+		ContentDisp:     resp.Header.Get("Content-Disposition"),
+		ContentEncoding: resp.Header.Get("Content-Encoding"),
+	}, nil
 }
 
 // ---- Repositories ----
@@ -178,6 +226,30 @@ func (c *Client) HeadCommit(repo, branch string) (Commit, error) {
 	return out, c.do("GET", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch)+"/head", nil, &out)
 }
 
+// CommitHistory walks the branch's commit chain oldest-first.
+func (c *Client) CommitHistory(repo, branch string) ([]Commit, error) {
+	head, err := c.HeadCommit(repo, branch)
+	if err != nil {
+		return nil, err
+	}
+	var chain []Commit
+	for cur := &head; cur != nil && cur.ID != ""; {
+		chain = append(chain, *cur)
+		if cur.ParentID == "" {
+			break
+		}
+		next, err := c.InspectCommit(cur.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		cur = &next
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, nil
+}
+
 // ---- Files ----
 
 type FileInfo struct {
@@ -236,12 +308,16 @@ type Pipeline struct {
 }
 
 // Pipeline state machine (P7): running, stopped, standby, failure, degraded,
-// crashed. Terminal failure states carry a reason.
+// crashed. Stopped is a persistent flag distinct from the transient state:
+// stopping a pipeline sets Stopped and reports state "paused" (SB-028).
 type PipelineInfo struct {
-	Name    string `json:"name"`
-	State   string `json:"state"`
-	Reason  string `json:"reason,omitempty"`
-	Version int    `json:"version,omitempty"`
+	Name        string         `json:"name"`
+	State       string         `json:"state"`
+	Reason      string         `json:"reason,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Stopped     bool           `json:"stopped"`
+	Version     int            `json:"version,omitempty"`
+	JobCounts   map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
 }
 
 func (c *Client) CreatePipeline(p Pipeline) error {
@@ -262,6 +338,14 @@ func (c *Client) DeletePipeline(name string) error {
 	return c.do("DELETE", "/api/v1/pipelines/"+url.PathEscape(name), nil, nil)
 }
 
+func (c *Client) StopPipeline(name string) error {
+	return c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/stop", nil, nil)
+}
+
+func (c *Client) StartPipeline(name string) error {
+	return c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/start", nil, nil)
+}
+
 // ---- Jobs and flush ----
 
 // Job states (P7): running, success, failure, killed, skipped.
@@ -274,11 +358,45 @@ type Job struct {
 	OutputCommit string   `json:"outputCommit,omitempty"`
 	Started      string   `json:"started,omitempty"`
 	Finished     string   `json:"finished,omitempty"`
+	// Transform and Input are populated only in full listings (SB-094).
+	Transform *Transform `json:"transform,omitempty"`
+	Input     *Input     `json:"input,omitempty"`
 }
 
 func (c *Client) ListJobs() ([]Job, error) {
+	return c.ListJobsFiltered(JobFilter{})
+}
+
+// JobFilter selects the jobs a listing returns. OutputCommit matches the
+// commit a job produced (SB-093); States is an inclusive set (SB-095);
+// Full includes each job's transform and input spec (SB-094).
+type JobFilter struct {
+	Pipeline     string
+	OutputCommit string
+	States       []string
+	Full         bool
+}
+
+func (c *Client) ListJobsFiltered(f JobFilter) ([]Job, error) {
+	q := url.Values{}
+	if f.Pipeline != "" {
+		q.Set("pipeline", f.Pipeline)
+	}
+	if f.OutputCommit != "" {
+		q.Set("outputCommit", f.OutputCommit)
+	}
+	for _, s := range f.States {
+		q.Add("state", s)
+	}
+	if f.Full {
+		q.Set("full", "1")
+	}
 	var out []Job
-	return out, c.do("GET", "/api/v1/jobs", nil, &out)
+	qs := ""
+	if len(q) > 0 {
+		qs = "?" + q.Encode()
+	}
+	return out, c.do("GET", "/api/v1/jobs"+qs, nil, &out)
 }
 
 func (c *Client) InspectJob(id string) (Job, error) {
@@ -286,9 +404,21 @@ func (c *Client) InspectJob(id string) (Job, error) {
 	return out, c.do("GET", "/api/v1/jobs/"+url.PathEscape(id), nil, &out)
 }
 
-// Flush waits until every job triggered by the commit is terminal and
-// returns them. It polls the job list; a timeout returns the jobs seen so
-// far with their states as the error.
+func (c *Client) CancelJob(id string) error {
+	return c.do("POST", "/api/v1/jobs/"+url.PathEscape(id)+"/cancel", nil, nil)
+}
+
+func (c *Client) DeleteJob(id string) error {
+	return c.do("DELETE", "/api/v1/jobs/"+url.PathEscape(id), nil, nil)
+}
+
+// Flush waits until every job triggered by the commit — including jobs of
+// downstream pipeline stages that consume its output commits — is terminal,
+// and returns them, deduplicated per pipeline keeping the latest. A
+// terminal snapshot is only final once a second read a moment later agrees:
+// the job graph can still be growing (head backfill, downstream triggers),
+// and returning on the first terminal poll would race that growth. A
+// timeout returns the jobs seen so far with their states as the error.
 func (c *Client) Flush(commitID string, timeout time.Duration) ([]Job, error) {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -296,26 +426,194 @@ func (c *Client) Flush(commitID string, timeout time.Duration) ([]Job, error) {
 		if err != nil {
 			return jobs, err
 		}
-		relevant := make([]Job, 0, len(jobs))
-		allTerminal := true
-		for _, j := range jobs {
-			for _, ic := range j.InputCommits {
-				if ic == commitID {
-					relevant = append(relevant, j)
-				}
+		relevant := latestPerPipeline(downstreamJobs(jobs, commitID))
+		if allTerminal(relevant) {
+			time.Sleep(250 * time.Millisecond)
+			jobs2, err := c.ListJobs()
+			if err != nil {
+				return jobs, err
 			}
-		}
-		for _, j := range relevant {
-			if j.State == "running" {
-				allTerminal = false
+			relevant2 := latestPerPipeline(downstreamJobs(jobs2, commitID))
+			if sameJobSet(relevant, relevant2) && allTerminal(relevant2) {
+				return relevant2, nil
 			}
-		}
-		if len(relevant) > 0 && allTerminal {
-			return relevant, nil
+			continue
 		}
 		if time.Now().After(deadline) {
 			return relevant, fmt.Errorf("flush timeout: %d job(s) not terminal", len(relevant))
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+func allTerminal(jobs []Job) bool {
+	if len(jobs) == 0 {
+		return false
+	}
+	for _, j := range jobs {
+		if j.State == "running" {
+			return false
+		}
+	}
+	return true
+}
+
+func sameJobSet(a, b []Job) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ids := map[string]bool{}
+	for _, j := range a {
+		ids[j.ID] = true
+	}
+	for _, j := range b {
+		if !ids[j.ID] {
+			return false
+		}
+	}
+	return true
+}
+
+// downstreamJobs walks the job graph from an input commit: every job whose
+// input commits include it, then every job consuming those jobs' output
+// commits, transitively.
+func downstreamJobs(jobs []Job, commitID string) []Job {
+	seen := map[string]bool{}
+	var out []Job
+	queue := []string{commitID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, j := range jobs {
+			if seen[j.ID] || j.OutputCommit == "" {
+				continue
+			}
+			for _, ic := range j.InputCommits {
+				if ic == id {
+					seen[j.ID] = true
+					out = append(out, j)
+					queue = append(queue, j.OutputCommit)
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// latestPerPipeline keeps only the newest job of each pipeline (Started is
+// RFC3339, so byte order is time order) — e.g. after a pipeline was deleted
+// and recreated, flushing a shared input commit reports the fresh
+// incarnation's job (SB-024).
+func latestPerPipeline(jobs []Job) []Job {
+	best := map[string]Job{}
+	var order []string
+	for _, j := range jobs {
+		if prev, ok := best[j.Pipeline]; !ok || j.Started > prev.Started {
+			if !ok {
+				order = append(order, j.Pipeline)
+			}
+			best[j.Pipeline] = j
+		}
+	}
+	out := make([]Job, 0, len(order))
+	for _, p := range order {
+		out = append(out, best[p])
+	}
+	return out
+}
+
+// ---- Tags (SB-150) ----
+
+type TagInfo struct {
+	Name string `json:"name"`
+	Ref  string `json:"ref"` // non-empty reference to the tagged object
+}
+
+func (c *Client) PutTag(name string, data []byte) error {
+	_, err := c.doRaw("PUT", "/api/v1/tags/"+url.PathEscape(name), data)
+	return err
+}
+
+func (c *Client) GetTag(name string) ([]byte, error) {
+	return c.doRaw("GET", "/api/v1/tags/"+url.PathEscape(name), nil)
+}
+
+func (c *Client) ListTags() ([]TagInfo, error) {
+	var out []TagInfo
+	return out, c.do("GET", "/api/v1/tags", nil, &out)
+}
+
+// ---- File copy and fetch ----
+
+// CopyFile copies a file (or a directory subtree) from one commit into an
+// open commit at dstPath. The destination must not already exist in the
+// destination commit's view (SB-156).
+func (c *Client) CopyFile(dstCommit, dstPath, srcCommit, srcPath string) error {
+	return c.do("POST", "/api/v1/commits/"+url.PathEscape(dstCommit)+"/files/"+url.PathEscape(dstPath),
+		map[string]string{"srcCommit": srcCommit, "srcPath": srcPath}, nil)
+}
+
+// FileFetch is the response of a raw file GET (SB-099).
+type FileFetch struct {
+	Data            []byte
+	ContentType     string
+	ContentDisp     string // "" unless download=true
+	ContentEncoding string
+}
+
+// FetchFile GETs a file's raw bytes with response headers. With download
+// true the server attaches an attachment Content-Disposition.
+func (c *Client) FetchFile(commitID, p string, download bool) (FileFetch, error) {
+	u := "/api/v1/commits/" + url.PathEscape(commitID) + "/files/" + url.PathEscape(p)
+	if download {
+		u += "?download=true"
+	}
+	data, err := c.doRawHeaders("GET", u)
+	return data, err
+}
+
+// ---- Client-side detailed rendering (SB-036) ----
+
+func (c *Client) DescribeRepo(name string) (string, error) {
+	r, err := c.InspectRepo(name)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Repository: %s\nSizeBytes: %d\nBranches: %v\n", r.Name, r.SizeBytes, r.Branches), nil
+}
+
+func (c *Client) DescribeCommit(id string) (string, error) {
+	cm, err := c.InspectCommit(id)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Commit: %s\nRepo: %s\nBranch: %s\nDescription: %s\nStarted: %v Finished: %v Empty: %v Parent: %s\n",
+		cm.ID, cm.Repo, cm.Branch, cm.Description, cm.Started, cm.Finished, cm.Empty, cm.ParentID), nil
+}
+
+func (c *Client) DescribeFile(commitID, p string) (string, error) {
+	data, err := c.GetFile(commitID, p)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("File: %s\nSizeBytes: %d\n", p, len(data)), nil
+}
+
+func (c *Client) DescribePipeline(name string) (string, error) {
+	p, err := c.InspectPipeline(name)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Pipeline: %s\nState: %s\nStopped: %v\nDescription: %s\nVersion: %d\n",
+		p.Name, p.State, p.Stopped, p.Description, p.Version), nil
+}
+
+func (c *Client) DescribeJob(id string) (string, error) {
+	j, err := c.InspectJob(id)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Job: %s\nPipeline: %s\nState: %s\nOutputCommit: %s\nInputCommits: %v\n",
+		j.ID, j.Pipeline, j.State, j.OutputCommit, j.InputCommits), nil
 }
