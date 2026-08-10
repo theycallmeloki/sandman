@@ -167,8 +167,16 @@ revisions, and jobs that run them.
   `?allowIncomplete=1` (lists pipelines whose definition is lost, by name
   only); inspection takes `?ancestry=<k>` for historical versions
 - `POST /api/v1/pipelines/{name}/stop` `/start` — pause/resume: a stopped
-  pipeline ignores new commits and replays them on start (backlog); an
-  update does not restart it
+  pipeline ignores new commits and replays them on start (backlog — the
+  commits finished while it was stopped are consumed together as one job
+  over the branch head, SB-050); an update does not restart it
+- `standby: true` in the pipeline spec — the pipeline idles in the standby
+  state with no work, activates (state `running`) when input arrives, and
+  returns to standby once the work settles. Stopping it pauses it; commits
+  written while paused never wake it. D-11/12: no fixed activation cap and
+  no warm-participant contract (tuning choices, not requirements); D-09:
+  a standby pipeline that cannot be provisioned degrades to crashed
+  (SB-043), never to a degraded standby state
 - `GET /api/v1/jobs[/{id}]` — jobs; `?pipeline=`, `?outputCommit=`,
   `?state=` (repeatable), `?history=` (version depth), `?full=1` (each
   job's own version's transform and input spec — history survives updates).
@@ -233,7 +241,8 @@ ancestors — the newest write to a path wins — and the job for the head
 revision always sees the full accumulated content. A pipeline whose
 execution environment cannot be provisioned enters the crashed state, and
 one whose output repo is deleted mid-run fails with a reason; both recover
-by updating the pipeline.
+by updating the pipeline. Pipeline states: running, standby, paused
+(stopped), failure, crashed.
 
 ```sh
 curl -X POST localhost:4242/api/v1/repos        -d '{"name":"in"}'

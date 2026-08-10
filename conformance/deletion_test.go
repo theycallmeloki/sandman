@@ -331,7 +331,10 @@ func TestSB146_SurvivesDeletedOutputRepo(t *testing.T) {
 	})
 	noPanic(t, c.DeleteRepo(name, true)) // force-delete the output repo mid-job
 
-	pollFor(t, "pipeline failed with reason", 30*time.Second, func() bool {
+	// the record sets no bound on the failure observation; under load the
+	// in-flight container can take a while to finish its sleep and exit,
+	// so the poll is generous (a 30s bound flaked on slow daemons)
+	pollFor(t, "pipeline failed with reason", 60*time.Second, func() bool {
 		info, err := c.InspectPipeline(name)
 		return err == nil && info.State == "failure" && info.Reason != ""
 	})

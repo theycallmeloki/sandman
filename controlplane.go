@@ -130,6 +130,7 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		return err
 	}
 	d.scheduleHeadJob(rec)
+	d.standbyIdle(rec) // a standby pipeline with no input head parks in standby
 	return nil
 }
 
@@ -167,11 +168,78 @@ func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 		return ""
 	}
 	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil && head.Finished {
-		id := newJobID(d.name)
-		go d.runJob(*rec, head, id)
-		return id
+		return d.spawnJob(rec, head)
 	}
 	return ""
+}
+
+// A standby pipeline's activation is counted so its settle hook never
+// races an incoming job: spawnJob increments before the job can run, and
+// the job's settle decrements and returns the pipeline to standby when the
+// count reaches zero (SB-049/050: idle in standby, wake on input, rest
+// again once the work is done).
+var (
+	standbyMu     sync.Mutex
+	standbyActive = map[string]int{}
+)
+
+// spawnJob launches a job, activating a standby pipeline synchronously:
+// the activation count is incremented and the state moves to "running"
+// before the goroutine can start, so a settling predecessor can never
+// observe quiescence while a new job is on its way.
+func (d *daemon) spawnJob(rec *pipelineRec, cm client.Commit) string {
+	if rec.Pipeline.Standby {
+		standbyMu.Lock()
+		standbyActive[rec.Pipeline.Name]++
+		if rec.State != "running" {
+			rec.State = "running"
+			d.savePipeline(rec)
+		}
+		standbyMu.Unlock()
+	}
+	id := newJobID(d.name)
+	go d.runJob(*rec, cm, id)
+	return id
+}
+
+// standbySettle is runJob's defer: it decrements the pipeline's activation
+// count and returns a standby-enabled pipeline to the standby state when
+// the count reaches zero and no further work is pending (the pipeline is
+// not stopped, and it did not degrade into failure or crashed). The whole
+// decision runs under standbyMu, mutually exclusive with spawnJob's
+// activation: a trigger that increments between the decrement and the
+// state save would otherwise leave a running job under a "standby" label.
+func (d *daemon) standbySettle(name string) {
+	standbyMu.Lock()
+	defer standbyMu.Unlock()
+	standbyActive[name]--
+	if standbyActive[name] < 0 {
+		standbyActive[name] = 0 // non-standby job settling: nothing tracked
+	}
+	if standbyActive[name] > 0 {
+		return
+	}
+	rec, err := d.loadPipeline(name)
+	if err != nil || !rec.Pipeline.Standby || rec.Stopped {
+		return
+	}
+	if rec.State == "running" {
+		rec.State = "standby"
+		d.savePipeline(rec)
+	}
+}
+
+// standbyIdle parks a just-created or just-updated standby pipeline in the
+// standby state when it has no work to do: with no finished input head,
+// nothing will be scheduled until a commit arrives (SB-049).
+func (d *daemon) standbyIdle(rec *pipelineRec) {
+	if !rec.Pipeline.Standby || rec.Stopped || rec.State == "failure" || rec.State == "crashed" {
+		return
+	}
+	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err != nil || !head.Finished {
+		rec.State = "standby"
+		d.savePipeline(rec)
+	}
 }
 
 // updatePipeline applies a new version of an existing pipeline (SB-040).
@@ -186,6 +254,7 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 		return err
 	}
 	d.scheduleHeadJob(rec)
+	d.standbyIdle(rec)
 	return nil
 }
 
@@ -296,9 +365,12 @@ func (d *daemon) stopPipeline(name string) error {
 	return d.savePipeline(rec)
 }
 
-// startPipeline resumes the pipeline and replays the backlog: every commit
-// finished while it was stopped, oldest first, that has no job from this
-// pipeline (SB-048).
+// startPipeline resumes the pipeline and processes the backlog: the
+// commits finished while it was stopped are consumed together as one job
+// over the current branch head — the accumulated view — matching SB-023's
+// process-the-head-once semantics and SB-050's "commits created while
+// paused are consumed together" (a job already run for the head commit is
+// not re-run).
 func (d *daemon) startPipeline(name string) error {
 	rec, err := d.loadPipeline(name)
 	if err != nil {
@@ -314,12 +386,16 @@ func (d *daemon) startPipeline(name string) error {
 	if err := d.savePipeline(rec); err != nil {
 		return err
 	}
-	for _, cid := range d.store.chainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt) {
-		if !d.hasJob(rec.Pipeline.Name, cid) {
-			if cm, err := d.store.inspectCommit(cid); err == nil {
-				go d.runJob(*rec, cm, newJobID(d.name))
-			}
-		}
+	chain := d.store.chainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt)
+	if len(chain) == 0 {
+		return nil
+	}
+	headID := chain[len(chain)-1]
+	if d.hasJob(rec.Pipeline.Name, headID) {
+		return nil
+	}
+	if cm, err := d.store.inspectCommit(headID); err == nil {
+		d.spawnJob(rec, cm)
 	}
 	return nil
 }
@@ -680,7 +756,9 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 
 // markStaleJobsFailed repairs the state after a daemon restart: jobs that
 // were running when the daemon died can never finish here (their containers
-// were orphaned and will be pruned), so they are recorded as failed.
+// were orphaned and will be pruned), so they are recorded as failed. A
+// standby pipeline whose in-flight work was lost that way has no pending
+// work left and returns to standby.
 func (d *daemon) markStaleJobsFailed() {
 	for _, j := range d.mustListJobs() {
 		if j.State == "running" {
@@ -688,6 +766,10 @@ func (d *daemon) markStaleJobsFailed() {
 				Reason: "daemon restarted mid-job", InputCommits: j.InputCommits,
 				OutputCommit: j.OutputCommit, Started: j.Started, Finished: time.Now().UTC().Format(time.RFC3339Nano)}
 			d.saveJob(&rec)
+			if p, err := d.loadPipeline(j.Pipeline); err == nil && p.Pipeline.Standby && p.State == "running" {
+				p.State = "standby"
+				d.savePipeline(p)
+			}
 		}
 	}
 }
@@ -726,7 +808,7 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 			continue // stopped pipelines ignore new commits (SB-048)
 		}
 		if rec.Pipeline.Input.Repo == cm.Repo {
-			go d.runJob(*rec, cm, newJobID(d.name))
+			d.spawnJob(rec, cm)
 		}
 	}
 }
@@ -1001,6 +1083,9 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 	}
 	rj := registerRunning(id, pl.Pipeline.Name)
 	defer unregisterRunning(id, rj)
+	// a standby pipeline returns to standby once its work settles; the
+	// defer covers every terminal path (success, failure, killed)
+	defer d.standbySettle(pl.Pipeline.Name)
 
 	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: "running",
 		InputCommits: []string{cm.ID}, Started: time.Now().UTC().Format(time.RFC3339Nano),

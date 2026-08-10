@@ -317,6 +317,9 @@ type Pipeline struct {
 	Transform   *Transform   `json:"transform"`
 	Input       *Input       `json:"input"`
 	Parallelism *Parallelism `json:"parallelism,omitempty"`
+	// Standby pipelines idle in the standby state and activate only when
+	// work arrives, returning to standby once it settles (SB-049/050).
+	Standby bool `json:"standby,omitempty"`
 	// Update applies this spec to an existing pipeline (creating it when
 	// absent, SB-040); Reprocess marks the update as a full reprocessing
 	// request. Both are request flags, not persisted spec fields.

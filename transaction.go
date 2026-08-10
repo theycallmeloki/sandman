@@ -371,12 +371,13 @@ func (d *daemon) txCoordinate(final map[string]client.Pipeline, deps map[string]
 			d.txUnhold(name)
 			continue
 		}
+		last := ""
 		for {
 			txHoldMu.Lock()
 			txHold[name] = true
 			txPending[name] = false
 			txHoldMu.Unlock()
-			scheduled[name] = d.scheduleHeadJob(rec)
+			last = d.scheduleHeadJob(rec)
 			txHoldMu.Lock()
 			again := txPending[name]
 			txHold[name] = false
@@ -384,6 +385,10 @@ func (d *daemon) txCoordinate(final map[string]client.Pipeline, deps map[string]
 			if !again {
 				break
 			}
+		}
+		scheduled[name] = last
+		if last == "" {
+			d.standbyIdle(rec) // a standby pipeline with nothing to process parks in standby
 		}
 	}
 }
