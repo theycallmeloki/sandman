@@ -229,6 +229,23 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Secrets** — named typed metadata blobs with create/inspect/list/delete
+  (the type is reported as "Opaque", the creation timestamp is
+  system-assigned); every secret-management operation requires the
+  daemon's configured credential (`-authToken`, or `SANDBOX_TOKEN`), and
+  an unauthenticated request is rejected with "no authentication token"
+  (SB-153, SB-154)
+- **Runtime metrics** — `/api/v1/metrics` serves Prometheus-format
+  invocation counters and latency sum/count aggregates for file reads
+  (split by outcome — two series), file writes, and job listings (one
+  series each) (SB-132)
+- **Garbage collection** — `CollectGarbage` reclaims durable blobs no
+  longer referenced by any commit tree, tag, or spec record; it refuses
+  while a job is running, and it never touches reachable data (SB-079,
+  D-20: automatic collection defaults off). Stopping a pipeline now ends
+  its in-flight work, so collection can proceed. A system-wide reset
+  clears statistics state along with everything else, so names are
+  reusable (SB-130)
 - **Commit deletion** — `DeleteCommit` (by id or `repo@branch`) removes a
   commit and everything derived from it across the whole downstream DAG:
   every commit whose provenance includes it, and the jobs that consumed

@@ -29,6 +29,11 @@ var (
 	daemonPort int
 	daemonName string
 	binPath    string
+
+	// conformanceToken is the credential the harness daemon runs with; the
+	// shared client carries it so the authenticated endpoints are
+	// exercised (SB-154).
+	conformanceToken = "conformance-token"
 )
 
 func TestMain(m *testing.M) {
@@ -59,6 +64,9 @@ func TestMain(m *testing.M) {
 	}
 
 	c = client.New(fmt.Sprintf("127.0.0.1:%d", daemonPort))
+	// the daemon runs with a credential so the authenticated management
+	// endpoints are exercised (SB-154); the shared client carries it
+	c.SetToken(conformanceToken)
 	code := m.Run()
 	// os.Exit skips defers, so the daemon must die here or it keeps the
 	// inherited stderr pipe open and go test waits out its WaitDelay.
@@ -68,7 +76,7 @@ func TestMain(m *testing.M) {
 }
 
 func startDaemon(state string) {
-	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(daemonPort), "-state", state)
+	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(daemonPort), "-state", state, "-authToken", conformanceToken)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

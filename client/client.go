@@ -63,13 +63,17 @@ func (e *Error) Error() string {
 
 // Client speaks Sandman's HTTP API.
 type Client struct {
-	base string
-	hc   *http.Client
+	base  string
+	hc    *http.Client
+	token string
 }
 
 func New(addr string) *Client {
 	return &Client{base: "http://" + addr, hc: &http.Client{Timeout: 60 * time.Second}}
 }
+
+// SetToken configures the credential sent with every request (SB-154).
+func (c *Client) SetToken(token string) { c.token = token }
 
 // Base returns the server URL (http://host:port).
 func (c *Client) Base() string { return c.base }
@@ -88,6 +92,9 @@ func (c *Client) do(method, p string, in, out any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("X-Sandbox-Token", c.token)
+	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return err
@@ -726,6 +733,20 @@ func (c *Client) Reset() error {
 	return c.do("POST", "/api/v1/reset", nil, nil)
 }
 
+// FetchMetrics returns the runtime metrics in Prometheus exposition
+// format: invocation counters and latency aggregates for file reads
+// (split by outcome), file writes, and job listings (SB-132).
+func (c *Client) FetchMetrics() (string, error) {
+	b, err := c.doRaw("GET", "/api/v1/metrics", nil)
+	return string(b), err
+}
+
+// CollectGarbage reclaims durable artifacts no longer referenced by any
+// commit, tag, or spec record (SB-079). It fails while a job is running.
+func (c *Client) CollectGarbage() error {
+	return c.do("POST", "/api/v1/gc", nil, nil)
+}
+
 // Flush waits until every job triggered by the commit — including jobs of
 // downstream pipeline stages that consume its output commits — is terminal,
 // and returns them, deduplicated per pipeline keeping the latest. A
@@ -961,6 +982,38 @@ func latestPerPipeline(jobs []Job) []Job {
 		out = append(out, best[p])
 	}
 	return out
+}
+
+// ---- Secrets (SB-153/154) ----
+
+// SecretInfo is a secret's inspectable record: name, type label, and the
+// system-assigned creation timestamp (the data itself is write-only).
+type SecretInfo struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Created string `json:"created"`
+}
+
+// CreateSecret stores a named typed metadata blob (SB-153). The type is
+// reported as "Opaque" — sandman's only secret kind.
+func (c *Client) CreateSecret(name string, data map[string]string) error {
+	return c.do("POST", "/api/v1/secrets", map[string]any{"name": name, "data": data}, nil)
+}
+
+func (c *Client) InspectSecret(name string) (SecretInfo, error) {
+	var out SecretInfo
+	return out, c.do("GET", "/api/v1/secrets/"+url.PathEscape(name), nil, &out)
+}
+
+func (c *Client) ListSecrets() ([]SecretInfo, error) {
+	var out []SecretInfo
+	return out, c.do("GET", "/api/v1/secrets", nil, &out)
+}
+
+// DeleteSecret removes a secret; deleting an already-removed secret is a
+// no-op (SB-153: idempotent in effect).
+func (c *Client) DeleteSecret(name string) error {
+	return c.do("DELETE", "/api/v1/secrets/"+url.PathEscape(name), nil, nil)
 }
 
 // ---- Tags (SB-150) ----

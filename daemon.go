@@ -72,6 +72,15 @@ type daemon struct {
 	syncIdx uint64
 	cpuBusy atomic.Uint64 // host cpu busy percent * 1000, sampled each tick
 
+	// authToken is the daemon's configured credential; when non-empty the
+	// management endpoints that require authentication check the request
+	// header against it (SB-154).
+	authToken string
+
+	// metrics accumulates the instrumented operations' runtime
+	// observability (SB-132).
+	metrics metricsStore
+
 	// liveJobs maps running job ids to their execution contexts for the
 	// datum API (restart, SB-064).
 	liveJobs sync.Map
@@ -135,12 +144,13 @@ func cmdDaemon(args []string) {
 	port := fs.Int("port", DefaultPort, "TCP listen port")
 	name := fs.String("name", sanitizeName(hostname()), "advertised instance name")
 	state := fs.String("state", DefaultState, "state directory")
+	authToken := fs.String("authToken", os.Getenv("SANDBOX_TOKEN"), "credential for the authenticated management endpoints (empty = auth disabled)")
 	fs.Parse(args)
 
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
-	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state)}
+	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), authToken: *authToken}
 	if err := d.reg.loadStatic(); err != nil {
 		log.Printf("peers file: %v", err)
 	}

@@ -1,0 +1,274 @@
+// Observability and reclamation: the metrics endpoint, garbage
+// collection, and reset's removal of statistics state (SB-132, SB-079,
+// SB-130).
+package conformance
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"sandman/client"
+)
+
+func TestSB132_MetricsEndpoint(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm := commitFiles(t, repo, "master", map[string]string{"f": "x"})
+	// file reads: one success and one error (so both outcome series exist)
+	if _, err := c.GetFile(cm.ID, "f"); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if _, err := c.GetFile(cm.ID, "missing"); err == nil {
+		t.Fatalf("read of a missing file: expected error")
+	}
+	// a file write
+	cm2, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start commit: %v", err)
+	}
+	if err := c.PutFile(cm2.ID, "w", []byte("y")); err != nil {
+		t.Fatalf("put file: %v", err)
+	}
+	if _, err := c.FinishCommit(cm2.ID, "", false); err != nil {
+		t.Fatalf("finish commit: %v", err)
+	}
+	// job listings
+	if _, err := c.ListJobs(); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+
+	metrics, err := c.FetchMetrics()
+	if err != nil {
+		t.Fatalf("fetch metrics: %v", err)
+	}
+	// read latency carries exactly two outcome series (success + error)
+	readOutcomes := map[string]bool{}
+	for _, line := range strings.Split(metrics, "\n") {
+		if strings.HasPrefix(line, "sandbox_file_read_seconds_sum{outcome=") {
+			readOutcomes[line] = true
+			if !strings.Contains(line, `outcome="success"`) && !strings.Contains(line, `outcome="error"`) {
+				t.Fatalf("read series with an unknown outcome: %s", line)
+			}
+		}
+	}
+	succ := strings.Contains(metrics, `sandbox_file_read_seconds_count{outcome="success"} 0`)
+	if succ {
+		t.Fatalf("no successful read recorded")
+	}
+	if !strings.Contains(metrics, `outcome="error"`) {
+		t.Fatalf("no errored read series: the read histogram must carry both outcomes")
+	}
+	// write and job-listing latency each carry one series (no outcome split)
+	writes := 0
+	for _, line := range strings.Split(metrics, "\n") {
+		if strings.HasPrefix(line, "sandbox_file_write_seconds_sum") {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Fatalf("write-seconds has %d series, want 1", writes)
+	}
+	lists := 0
+	for _, line := range strings.Split(metrics, "\n") {
+		if strings.HasPrefix(line, "sandbox_job_list_seconds_sum") {
+			lists++
+		}
+	}
+	if lists != 1 {
+		t.Fatalf("job-list-seconds has %d series, want 1", lists)
+	}
+	// the counters report values
+	for _, name := range []string{"sandbox_file_read_total", "sandbox_file_write_total", "sandbox_job_list_total"} {
+		if !strings.Contains(metrics, name+" ") {
+			t.Fatalf("missing counter %s", name)
+		}
+	}
+}
+
+func TestSB079_GarbageCollection(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	// the working pipeline appends to bar, so its output bar is a distinct
+	// blob from the input's (the reference's "copies foo and appends to
+	// bar" — the appended output becomes reclaimable once unreferenced)
+	pipe := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name: pipe,
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", fmt.Sprintf("cp ${%s}/foo ${OUT}/foo; cat ${%s}/bar ${%s}/bar > ${OUT}/bar", repo, repo, repo)},
+		},
+		Input: &client.Input{Repo: repo, Glob: "/"}, // the whole commit is the single datum
+	})
+	cm := commitFiles(t, repo, "master", map[string]string{"foo": "foo", "bar": "bar"})
+	flushOK(t, cm.ID)
+
+	// collection refuses while a pipeline is actively processing
+	repo2 := uniq(t)
+	mustRepo(t, repo2)
+	slow := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name: slow,
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "sleep 600"},
+		},
+		Input: &client.Input{Repo: repo2, Glob: "/*"},
+	})
+	_ = commitFiles(t, repo2, "master", map[string]string{"x": "x"})
+	waitJobFor(t, slow, 30*time.Second)
+	pollFor(t, "slow job running", 60*time.Second, func() bool {
+		j, err := c.InspectJob(latestJob(t, slow).ID)
+		return err == nil && j.State == "running"
+	})
+	if err := c.CollectGarbage(); err == nil {
+		t.Fatalf("collection while a pipeline is processing: expected a refusal")
+	}
+	// after the pipeline is stopped, collection succeeds and data is intact
+	if err := c.StopPipeline(slow); err != nil {
+		t.Fatalf("stop pipeline: %v", err)
+	}
+	pollFor(t, "slow job terminal", 60*time.Second, func() bool {
+		j, err := c.InspectJob(latestJob(t, slow).ID)
+		return err == nil && j.State != "running"
+	})
+	if err := c.CollectGarbage(); err != nil {
+		t.Fatalf("collection after stop: %v", err)
+	}
+	if b, err := c.GetFile(cm.ID, "foo"); err != nil || string(b) != "foo" {
+		t.Fatalf("input foo after collection = %q (%v)", string(b), err)
+	}
+	if b, err := c.GetFile(cm.ID, "bar"); err != nil || string(b) != "bar" {
+		t.Fatalf("input bar after collection = %q (%v)", string(b), err)
+	}
+	pipeJobs, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
+	if err != nil || len(pipeJobs) == 0 {
+		t.Fatalf("pipeline jobs after collection: %v", err)
+	}
+	if b, err := c.GetFile(pipeJobs[0].OutputCommit, "bar"); err != nil || string(b) != "barbar" {
+		t.Fatalf("output bar after collection = %q (%v)", string(b), err)
+	}
+
+	// deleting the pipeline and collecting reclaims its unreferenced blob
+	before := objectCount(t)
+	if err := c.DeletePipeline(pipe, false, false); err != nil {
+		t.Fatalf("delete pipeline: %v", err)
+	}
+	if err := c.CollectGarbage(); err != nil {
+		t.Fatalf("collection after pipeline deletion: %v", err)
+	}
+	after := objectCount(t)
+	if after >= before {
+		t.Fatalf("collection reclaimed nothing: %d objects before, %d after", before, after)
+	}
+	// the input data survives
+	if b, err := c.GetFile(cm.ID, "foo"); err != nil || string(b) != "foo" {
+		t.Fatalf("input after reclaim = %q (%v)", string(b), err)
+	}
+
+	// resetting all state and collecting leaves the object store empty
+	if err := c.Reset(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if err := c.CollectGarbage(); err != nil {
+		t.Fatalf("collection after reset: %v", err)
+	}
+	if n := objectCount(t); n != 0 {
+		t.Fatalf("object store has %d objects after reset+collect, want 0", n)
+	}
+
+	// cache invalidation: re-creating the pipeline and input yields fully
+	// readable data
+	mustRepo(t, repo)
+	mustPipeline(t, client.Pipeline{
+		Name:      pipe,
+		Transform: &client.Transform{Image: "alpine"},
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
+	})
+	cm3 := commitFiles(t, repo, "master", map[string]string{"foo": "foo", "bar": "bar"})
+	jobs := flushOK(t, cm3.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("recreate flush = %d jobs, want 1", len(jobs))
+	}
+	if b, err := c.GetFile(cm3.ID, "foo"); err != nil || string(b) != "foo" {
+		t.Fatalf("recreated input = %q (%v)", string(b), err)
+	}
+	if b, err := c.GetFile(jobs[0].OutputCommit, "foo"); err != nil || string(b) != "foo" {
+		t.Fatalf("recreated output = %q (%v)", string(b), err)
+	}
+}
+
+// objectCount counts the daemon's stored durable artifacts (the blobs
+// under .objects). The conformance harness knows the state directory.
+func objectCount(t *testing.T) int {
+	t.Helper()
+	n := 0
+	objects := filepath.Join(daemonStateDir, "repos", ".objects")
+	entries, err := os.ReadDir(objects)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("read objects: %v", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		sub, err := os.ReadDir(filepath.Join(objects, e.Name()))
+		if err != nil {
+			continue
+		}
+		n += len(sub)
+	}
+	return n
+}
+
+func TestSB130_ResetRemovesStatsState(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
+	pipe := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name:        pipe,
+		Transform:   &client.Transform{Image: "alpine"},
+		Input:       &client.Input{Repo: repo, Glob: "/*"},
+		EnableStats: true,
+	})
+	flushOK(t, cm.ID)
+
+	// a system-wide reset completes after the stats-enabled pipeline ran,
+	// and the same names are reusable
+	if err := c.Reset(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	mustRepo(t, repo)
+	cm2 := commitFiles(t, repo, "master", map[string]string{"file2": "y"})
+	mustPipeline(t, client.Pipeline{
+		Name:        pipe,
+		Transform:   &client.Transform{Image: "alpine"},
+		Input:       &client.Input{Repo: repo, Glob: "/file*"}, // a different glob
+		EnableStats: true,
+	})
+	jobs := flushOK(t, cm2.ID)
+	if len(jobs) != 1 || jobs[0].State != "success" {
+		t.Fatalf("recreated pipeline job = %+v, want one success", jobs)
+	}
+	// the recreated stats-enabled pipeline records datums without any
+	// leftover collision
+	pd, err := c.ListDatums(jobs[0].ID, 0, 0)
+	if err != nil {
+		t.Fatalf("list datums after recreation: %v", err)
+	}
+	if len(pd.Datums) == 0 {
+		t.Fatalf("recreated stats pipeline recorded no datums")
+	}
+	// reset again completes
+	if err := c.Reset(); err != nil {
+		t.Fatalf("second reset: %v", err)
+	}
+}

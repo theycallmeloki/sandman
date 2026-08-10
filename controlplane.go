@@ -491,6 +491,10 @@ func (d *daemon) stopPipeline(name string) error {
 	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil {
 		rec.StoppedAt = head.ID
 	}
+	// a paused pipeline's in-flight work stops: stopping ends active
+	// processing, so garbage collection can proceed (SB-079) and the
+	// paused pipeline holds no containers
+	d.cancelPipelineJobs(name)
 	return d.savePipeline(rec)
 }
 
@@ -1657,25 +1661,36 @@ func (d *daemon) resolveCommitRef(ref string) (*commitRec, error) {
 	return d.store.loadCommitByID(ref)
 }
 
-// allCommitRecs enumerates every commit record in every repository.
+// allCommitRecs enumerates every commit record in every repository,
+// including the internal spec repository (its commits reference spec
+// blobs that garbage collection must keep — SB-079).
 func (d *daemon) allCommitRecs() []*commitRec {
 	var out []*commitRec
 	repos, _ := d.store.listRepos()
 	for _, r := range repos {
-		dir := filepath.Join(d.store.repoDir(r.Name), "commits")
-		entries, err := os.ReadDir(dir)
-		if err != nil {
+		out = append(out, d.repoCommitRecs(r.Name)...)
+	}
+	// the spec repository is internal and not listed as a user repo
+	// (SB-127), but its commits are still durable references
+	out = append(out, d.repoCommitRecs("spec")...)
+	return out
+}
+
+func (d *daemon) repoCommitRecs(repo string) []*commitRec {
+	var out []*commitRec
+	dir := filepath.Join(d.store.repoDir(repo), "commits")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			if b, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil {
-				var rec commitRec
-				if json.Unmarshal(b, &rec) == nil {
-					out = append(out, &rec)
-				}
+		if b, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil {
+			var rec commitRec
+			if json.Unmarshal(b, &rec) == nil {
+				out = append(out, &rec)
 			}
 		}
 	}

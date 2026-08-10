@@ -12,11 +12,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"sandman/client"
@@ -90,12 +94,18 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/repos/{name}/branches/{branch}", hErr(d.createBranchH))
 	mux.HandleFunc("POST /api/v1/commits/{id}/finish", hErr(d.finishCommitH))
 	mux.HandleFunc("GET /api/v1/commits/{id}", hErr(d.inspectCommitH))
-	mux.HandleFunc("PUT /api/v1/commits/{id}/files/{path...}", hErr(d.putFileH))
+	mux.HandleFunc("PUT /api/v1/commits/{id}/files/{path...}", d.instrument("write", hErr(d.putFileH)))
 	mux.HandleFunc("POST /api/v1/commits/{id}/files/{path...}", hErr(d.copyFileH))
 	mux.HandleFunc("DELETE /api/v1/commits/{id}/files/{path...}", hErr(d.deleteFileH))
-	mux.HandleFunc("GET /api/v1/commits/{id}/files/{path...}", hErr(d.getFileH))
+	mux.HandleFunc("GET /api/v1/commits/{id}/files/{path...}", d.instrument("read", hErr(d.getFileH)))
 	mux.HandleFunc("GET /api/v1/commits/{id}/files", hErr(d.listFilesH))
 	mux.HandleFunc("DELETE /api/v1/commits/{id}", hErr(d.deleteCommitH))
+	mux.HandleFunc("POST /api/v1/secrets", hErr(d.createSecretH))
+	mux.HandleFunc("GET /api/v1/secrets", hErr(d.listSecretsH))
+	mux.HandleFunc("GET /api/v1/secrets/{name}", hErr(d.inspectSecretH))
+	mux.HandleFunc("DELETE /api/v1/secrets/{name}", hErr(d.deleteSecretH))
+	mux.HandleFunc("GET /api/v1/metrics", hErr(d.metricsH))
+	mux.HandleFunc("POST /api/v1/gc", hErr(d.collectGarbageH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
 	mux.HandleFunc("GET /api/v1/pipelines", hErr(d.listPipelinesH))
 	mux.HandleFunc("GET /api/v1/pipelines/{name}", hErr(d.inspectPipelineH))
@@ -103,7 +113,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/stop", hErr(d.stopPipelineH))
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", hErr(d.startPipelineH))
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/run", hErr(d.runPipelineH))
-	mux.HandleFunc("GET /api/v1/jobs", hErr(d.listJobsH))
+	mux.HandleFunc("GET /api/v1/jobs", d.instrument("listJobs", hErr(d.listJobsH)))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/datums", hErr(d.listDatumsH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/datums/{datumID}", hErr(d.inspectDatumH))
@@ -292,6 +302,303 @@ func (d *daemon) deleteCommitH(w http.ResponseWriter, r *http.Request) error {
 	if err := d.deleteCommit(r.PathValue("id")); err != nil {
 		return err
 	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// ---- runtime metrics (SB-132) ----
+
+// hist is a latency histogram's aggregate: a sum and a count, so an
+// average is computable.
+type hist struct {
+	sum   float64
+	count int64
+}
+
+// metricsStore accumulates the instrumented operations' invocation counts
+// and latency aggregates. File-read latency is split by outcome (SB-132).
+type metricsStore struct {
+	mu         sync.Mutex
+	readTotal  int64
+	readOK     hist // successful file reads
+	readErr    hist // errored file reads
+	write      hist
+	writeTotal int64
+	list       hist
+	listTotal  int64
+}
+
+func (m *metricsStore) observeRead(dur float64, err bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.readTotal++
+	if err {
+		m.readErr.sum += dur
+		m.readErr.count++
+	} else {
+		m.readOK.sum += dur
+		m.readOK.count++
+	}
+}
+
+func (m *metricsStore) observeWrite(dur float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writeTotal++
+	m.write.sum += dur
+	m.write.count++
+}
+
+func (m *metricsStore) observeList(dur float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listTotal++
+	m.list.sum += dur
+	m.list.count++
+}
+
+// statusRecorder captures the response status so instrumentation can tell
+// a successful invocation from an errored one.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// instrument wraps an HTTP handler with its operation's invocation counter
+// and latency histogram (SB-132).
+func (d *daemon) instrument(op string, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusRecorder{ResponseWriter: w, status: 200}
+		h(sw, r)
+		dur := time.Since(start).Seconds()
+		switch op {
+		case "read":
+			d.metrics.observeRead(dur, sw.status >= 400)
+		case "write":
+			d.metrics.observeWrite(dur)
+		case "listJobs":
+			d.metrics.observeList(dur)
+		}
+	}
+}
+
+// metricsH renders the runtime metrics in Prometheus exposition format:
+// invocation counters and latency sum/count aggregates for file reads,
+// file writes, and job listings, with read latency split by outcome
+// (SB-132).
+func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
+	d.metrics.mu.Lock()
+	readTotal := d.metrics.readTotal
+	readOK, readErr := d.metrics.readOK, d.metrics.readErr
+	writeTotal, writeH := d.metrics.writeTotal, d.metrics.write
+	listTotal, listH := d.metrics.listTotal, d.metrics.list
+	d.metrics.mu.Unlock()
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintf(w, "# HELP sandbox_file_read_total File read invocations.\n# TYPE sandbox_file_read_total counter\nsandbox_file_read_total %d\n", readTotal)
+	fmt.Fprintf(w, "# TYPE sandbox_file_read_seconds histogram\n")
+	fmt.Fprintf(w, "sandbox_file_read_seconds_sum{outcome=\"success\"} %g\n", readOK.sum)
+	fmt.Fprintf(w, "sandbox_file_read_seconds_count{outcome=\"success\"} %d\n", readOK.count)
+	fmt.Fprintf(w, "sandbox_file_read_seconds_sum{outcome=\"error\"} %g\n", readErr.sum)
+	fmt.Fprintf(w, "sandbox_file_read_seconds_count{outcome=\"error\"} %d\n", readErr.count)
+	fmt.Fprintf(w, "# HELP sandbox_file_write_total File write invocations.\n# TYPE sandbox_file_write_total counter\nsandbox_file_write_total %d\n", writeTotal)
+	fmt.Fprintf(w, "# TYPE sandbox_file_write_seconds histogram\n")
+	fmt.Fprintf(w, "sandbox_file_write_seconds_sum %g\n", writeH.sum)
+	fmt.Fprintf(w, "sandbox_file_write_seconds_count %d\n", writeH.count)
+	fmt.Fprintf(w, "# HELP sandbox_job_list_total Job listing invocations.\n# TYPE sandbox_job_list_total counter\nsandbox_job_list_total %d\n", listTotal)
+	fmt.Fprintf(w, "# TYPE sandbox_job_list_seconds histogram\n")
+	fmt.Fprintf(w, "sandbox_job_list_seconds_sum %g\n", listH.sum)
+	fmt.Fprintf(w, "sandbox_job_list_seconds_count %d\n", listH.count)
+	return nil
+}
+
+// ---- garbage collection (SB-079, D-20) ----
+
+// collectGarbageH is the manual collection trigger (D-20: automatic
+// collection defaults off).
+func (d *daemon) collectGarbageH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.collectGarbage(); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// collectGarbage reclaims durable artifacts no longer referenced by any
+// commit tree, tag, or spec record (SB-079). It refuses while a job is
+// running: active processing may still be about to read the data. Only
+// unreferenced blobs are removed — reachable data is never touched.
+func (d *daemon) collectGarbage() error {
+	for _, j := range d.mustListJobs() {
+		if j.State == "running" {
+			return fmt.Errorf("cannot collect garbage while a job is running")
+		}
+	}
+	referenced := map[string]bool{}
+	for _, cm := range d.allCommitRecs() {
+		for _, f := range cm.Files {
+			referenced[f.SHA] = true
+		}
+	}
+	// tags hold a reference to their blob (SB-150)
+	if entries, err := os.ReadDir(filepath.Join(d.state, "tags")); err == nil {
+		for _, e := range entries {
+			if b, err := os.ReadFile(filepath.Join(d.state, "tags", e.Name())); err == nil {
+				referenced[strings.TrimSpace(string(b))] = true
+			}
+		}
+	}
+	objects := filepath.Join(d.state, "repos", ".objects")
+	entries, err := os.ReadDir(objects)
+	if err != nil {
+		return nil // nothing stored
+	}
+	removed := 0
+	for _, e := range entries {
+		if !e.IsDir() || len(e.Name()) != 2 {
+			continue
+		}
+		sub, err := os.ReadDir(filepath.Join(objects, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, b := range sub {
+			sha := e.Name() + b.Name()
+			if referenced[sha] {
+				continue
+			}
+			if os.Remove(filepath.Join(objects, e.Name(), b.Name())) == nil {
+				removed++
+			}
+		}
+	}
+	log.Printf("garbage collection removed %d unreferenced objects", removed)
+	return nil
+}
+
+// ---- secrets (SB-153/154) ----
+
+// requireAuth enforces the daemon's configured credential on the
+// management endpoints that require one: a request without the token is
+// rejected with "no authentication token"; a wrong token is rejected too
+// (SB-154). With no token configured, authentication is disabled.
+func (d *daemon) requireAuth(r *http.Request) error {
+	if d.authToken == "" {
+		return nil
+	}
+	got := r.Header.Get("X-Sandbox-Token")
+	if got == "" {
+		return fmt.Errorf("no authentication token")
+	}
+	if got != d.authToken {
+		return fmt.Errorf("invalid authentication token")
+	}
+	return nil
+}
+
+// secretRec is a secret's durable record: a named metadata blob with a
+// type label and key/value data (SB-153, D-05 — durable, like every other
+// meta-plane record).
+type secretRec struct {
+	Name    string            `json:"name"`
+	Type    string            `json:"type"`
+	Created string            `json:"created"`
+	Data    map[string]string `json:"data,omitempty"`
+}
+
+func (d *daemon) secretPath(name string) string {
+	return filepath.Join(d.state, "secrets", name+".json")
+}
+
+func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.requireAuth(r); err != nil {
+		return err
+	}
+	var body struct {
+		Name string            `json:"name"`
+		Data map[string]string `json:"data"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		return fmt.Errorf("invalid request body")
+	}
+	if body.Name == "" {
+		return fmt.Errorf("secret must specify a name")
+	}
+	rec := secretRec{
+		Name:    body.Name,
+		Type:    "Opaque",
+		Created: time.Now().UTC().Format(time.RFC3339Nano),
+		Data:    body.Data,
+	}
+	if err := os.MkdirAll(filepath.Join(d.state, "secrets"), 0o755); err != nil {
+		return err
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(d.secretPath(body.Name), b, 0o644); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+func (d *daemon) inspectSecretH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.requireAuth(r); err != nil {
+		return err
+	}
+	rec, err := d.loadSecret(r.PathValue("name"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, client.SecretInfo{Name: rec.Name, Type: rec.Type, Created: rec.Created})
+	return nil
+}
+
+func (d *daemon) loadSecret(name string) (*secretRec, error) {
+	b, err := os.ReadFile(d.secretPath(name))
+	if err != nil {
+		return nil, fmt.Errorf("secret %q not found", name)
+	}
+	var rec secretRec
+	if json.Unmarshal(b, &rec) != nil {
+		return nil, fmt.Errorf("secret %q is corrupt", name)
+	}
+	return &rec, nil
+}
+
+func (d *daemon) listSecretsH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.requireAuth(r); err != nil {
+		return err
+	}
+	var out []client.SecretInfo
+	entries, err := os.ReadDir(filepath.Join(d.state, "secrets"))
+	if err == nil {
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			if rec, err := d.loadSecret(strings.TrimSuffix(e.Name(), ".json")); err == nil {
+				out = append(out, client.SecretInfo{Name: rec.Name, Type: rec.Type, Created: rec.Created})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	writeJSON(w, out)
+	return nil
+}
+
+func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.requireAuth(r); err != nil {
+		return err
+	}
+	os.Remove(d.secretPath(r.PathValue("name"))) // idempotent in effect (SB-153)
 	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
