@@ -233,6 +233,13 @@ func (c *Client) HeadCommit(repo, branch string) (Commit, error) {
 	return out, c.do("GET", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch)+"/head", nil, &out)
 }
 
+// CreateBranch points a branch at an existing commit — creating the branch
+// or retargeting it (SB-142). Pipelines watching the branch process the
+// commit exactly once.
+func (c *Client) CreateBranch(repo, branch, head string) error {
+	return c.do("POST", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch), map[string]string{"head": head}, nil)
+}
+
 // CommitHistory walks the branch's commit chain oldest-first.
 func (c *Client) CommitHistory(repo, branch string) ([]Commit, error) {
 	head, err := c.HeadCommit(repo, branch)
@@ -403,6 +410,11 @@ type Pipeline struct {
 	// Standby pipelines idle in the standby state and activate only when
 	// work arrives, returning to standby once it settles (SB-049/050).
 	Standby bool `json:"standby,omitempty"`
+	// OutputBranch names the branch the pipeline writes its output to
+	// (default "master"); a downstream pipeline that watches a different
+	// branch of the output repo does not run until that branch is pointed
+	// at the output commit (SB-142).
+	OutputBranch string `json:"outputBranch,omitempty"`
 	// Reprocess is a persisted spec field: every job re-executes all of
 	// its datums instead of skipping datums unchanged from a previous
 	// successful run (SB-166; D-13 — an update that sets it requests full
@@ -729,6 +741,7 @@ func (c *Client) FlushSet(commitIDs []string, timeout time.Duration) ([]Job, err
 func (c *Client) flushSet(commitIDs []string, timeout time.Duration) ([]Job, error) {
 	deadline := time.Now().Add(timeout)
 	var repos []string
+	branches := map[string]string{}
 	for {
 		jobs, err := c.ListJobs()
 		if err != nil {
@@ -752,12 +765,13 @@ func (c *Client) flushSet(commitIDs []string, timeout time.Duration) ([]Job, err
 				for _, id := range commitIDs {
 					if cm, err := c.InspectCommit(id); err == nil {
 						repos = append(repos, cm.Repo)
+						branches[cm.Repo] = cm.Branch
 					}
 				}
 			}
 			settled := len(repos) > 0
 			for _, r := range repos {
-				if !c.consumersSettled(r) {
+				if !c.consumersSettled(r, branches[r]) {
 					settled = false
 					break
 				}
@@ -772,7 +786,7 @@ func (c *Client) flushSet(commitIDs []string, timeout time.Duration) ([]Job, err
 				if len(relevant2) == 0 {
 					still := true
 					for _, r := range repos {
-						if !c.consumersSettled(r) {
+						if !c.consumersSettled(r, branches[r]) {
 							still = false
 							break
 						}
@@ -794,7 +808,12 @@ func (c *Client) flushSet(commitIDs []string, timeout time.Duration) ([]Job, err
 // consumersSettled reports whether every pipeline consuming the repo is
 // terminal-for-scheduling: only a pipeline whose state is "running" can
 // still create a job for a finished commit (backfill, update reprocessing).
-func (c *Client) consumersSettled(repo string) bool {
+// consumersSettled reports whether every pipeline that could schedule work
+// for the commit on this branch is terminal. A consumer that watches a
+// different branch of the repo cannot schedule work for the commit, so it
+// is settled regardless of its state — a commit on a non-watched branch
+// flushes to zero immediately (SB-142).
+func (c *Client) consumersSettled(repo, branch string) bool {
 	pipes, err := c.ListPipelines()
 	if err != nil {
 		return false
@@ -802,13 +821,18 @@ func (c *Client) consumersSettled(repo string) bool {
 	consumers := 0
 	for _, p := range pipes {
 		if p.Input != nil && p.Input.Repo == repo {
+			if InputBranch(*p.Input) != branch {
+				continue
+			}
 			consumers++
 			if p.State == "running" {
 				return false
 			}
 		}
 	}
-	return consumers > 0
+	// no consumer watches this branch: nothing can schedule, so the flush
+	// is settled
+	return true
 }
 
 func allTerminal(jobs []Job) bool {

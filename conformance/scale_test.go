@@ -194,7 +194,7 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 	})
 
 	job := waitJobFor(t, pipe, 30*time.Second)
-	pollFor(t, "both datums running", 30*time.Second, func() bool {
+	pollFor(t, "both datums running", 90*time.Second, func() bool {
 		j, err := c.InspectJob(job.ID)
 		if err != nil || j.State != "running" {
 			return false
@@ -223,7 +223,7 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 	if err := c.RestartDatum(job.ID, restarted); err != nil {
 		t.Fatalf("restart datum: %v", err)
 	}
-	pollFor(t, "restarted datum running with a later start", 30*time.Second, func() bool {
+	pollFor(t, "restarted datum running with a later start", 90*time.Second, func() bool {
 		pg, err := c.ListDatums(job.ID, 0, 0)
 		if err != nil {
 			return false

@@ -229,6 +229,14 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Output branches + deferred processing** — a pipeline's `outputBranch`
+  names where its output lands (default `master`); output commits parent
+  against that branch's head. Pipelines trigger on watched branch heads:
+  a commit on a non-watched branch produces no jobs (and flushes to zero
+  immediately), retargeting the watched branch onto an existing commit
+  (`CreateBranch`) processes it exactly once, and a downstream stage that
+  watches a different branch of an upstream repo does not run until that
+  branch is promoted onto the output commit (SB-142)
 - **Manual pipeline runs** — `RunPipeline` triggers a job on demand: with
   no provenance it re-processes the current branch heads; with explicit
   provenance it processes exactly those input revisions (validated: a

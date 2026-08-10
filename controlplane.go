@@ -1412,7 +1412,8 @@ func (d *daemon) finishOutput(pl pipelineRec, outCommit client.Commit, outDir st
 	m := d.repoLock(pl.Pipeline.Name)
 	m.Lock()
 	defer m.Unlock()
-	if head := d.store.headCommit(pl.Pipeline.Name, defaultBranch); head != "" && head != outCommit.ParentID {
+	outBranch := outputBranch(pl)
+	if head := d.store.headCommit(pl.Pipeline.Name, outBranch); head != "" && head != outCommit.ParentID {
 		if err := d.store.reparent(outCommit.ID, head); err != nil {
 			return client.Commit{}, err
 		}
@@ -1649,6 +1650,15 @@ func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 // outcomes in the pipeline's dedup table. heads is the input pairing — one
 // commit per side, empty where a side has no head (SB-120's lone-input
 // job; its cross contributes no datums).
+// outputBranch returns the branch a pipeline's output commits land on
+// (default "master", SB-142).
+func outputBranch(pl pipelineRec) string {
+	if pl.Pipeline.OutputBranch == "" {
+		return defaultBranch
+	}
+	return pl.Pipeline.OutputBranch
+}
+
 func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated string, pre *jobRec) {
 	sides := inputSides(pl.Pipeline.Input)
 	for i := range sides {
@@ -1700,7 +1710,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		rec.Reason = propagated
 		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
 		d.saveJob(rec) // terminal state durable before the commit finishes
-		if oc, err := d.store.startCommit(pl.Pipeline.Name, "", ""); err == nil {
+		if oc, err := d.store.startCommit(pl.Pipeline.Name, outputBranch(pl), ""); err == nil {
 			rec.OutputCommit = oc.ID
 			d.saveJob(rec)
 			d.finishOutput(pl, oc, "", true)
@@ -1773,7 +1783,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// The job's container output is captured into the log store as it is
 	// produced. A capture failure degrades to no logs, never to a broken
 	// job: execution is the control plane's job, logs are the meta plane's.
-	outCommit, err := d.store.startCommit(pl.Pipeline.Name, "", "")
+	outCommit, err := d.store.startCommit(pl.Pipeline.Name, outputBranch(pl), "")
 	if err != nil {
 		fail("start output commit: " + err.Error())
 		if strings.Contains(err.Error(), "not found") {

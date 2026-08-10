@@ -87,6 +87,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/repos/{name}", hErr(d.deleteRepoH))
 	mux.HandleFunc("POST /api/v1/repos/{name}/commits", hErr(d.startCommitH))
 	mux.HandleFunc("GET /api/v1/repos/{name}/branches/{branch}/head", hErr(d.headCommitH))
+	mux.HandleFunc("POST /api/v1/repos/{name}/branches/{branch}", hErr(d.createBranchH))
 	mux.HandleFunc("POST /api/v1/commits/{id}/finish", hErr(d.finishCommitH))
 	mux.HandleFunc("GET /api/v1/commits/{id}", hErr(d.inspectCommitH))
 	mux.HandleFunc("PUT /api/v1/commits/{id}/files/{path...}", hErr(d.putFileH))
@@ -215,6 +216,46 @@ func (d *daemon) headCommitH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, cm)
+	return nil
+}
+
+// createBranchH points a branch at an existing commit, creating the branch
+// or retargeting it (SB-142).
+func (d *daemon) createBranchH(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		Head string `json:"head"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		return fmt.Errorf("invalid request body")
+	}
+	if err := d.createBranch(r.PathValue("name"), r.PathValue("branch"), body.Head); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// createBranch points a branch at an existing commit — creating the branch
+// or retargeting it. Pipelines watch branch heads, so the retarget is
+// itself a trigger: the commit is now on the watched branch and is
+// processed exactly once (SB-142).
+func (d *daemon) createBranch(repo, branch, head string) error {
+	if branch == "" {
+		return fmt.Errorf("branch must specify a name")
+	}
+	rec, err := d.store.loadCommitByID(head)
+	if err != nil {
+		return fmt.Errorf("commit %q not found", head)
+	}
+	if rec.Repo != repo {
+		return fmt.Errorf("commit %s is not in repo %q", head, repo)
+	}
+	if err := d.store.setHead(repo, branch, head); err != nil {
+		return err
+	}
+	cm := rec.commit()
+	cm.Branch = branch // the trigger keys off the watched branch, not the commit's origin
+	d.triggerForCommit(cm)
 	return nil
 }
 
