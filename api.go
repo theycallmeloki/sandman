@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -99,7 +100,9 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/jobs", hErr(d.listJobsH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", hErr(d.cancelJobH))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", hErr(d.cancelJobH))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", hErr(d.deleteJobH))
+	mux.HandleFunc("POST /api/v1/reset", hErr(d.resetH))
 	mux.HandleFunc("PUT /api/v1/tags/{name}", hErr(d.putTagH))
 	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
 	mux.HandleFunc("GET /api/v1/tags", hErr(d.listTagsH))
@@ -173,7 +176,7 @@ func (d *daemon) inspectRepoH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) deleteRepoH(w http.ResponseWriter, r *http.Request) error {
-	return d.store.deleteRepo(r.PathValue("name"))
+	return d.store.deleteRepo(r.PathValue("name"), r.URL.Query().Get("force") == "1")
 }
 
 // ---- commits ----
@@ -297,7 +300,14 @@ func (d *daemon) createPipelineH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) listPipelinesH(w http.ResponseWriter, r *http.Request) error {
-	pipes, err := d.listPipelines()
+	q := r.URL.Query()
+	var history *int
+	if v := q.Get("history"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			history = &n
+		}
+	}
+	pipes, err := d.listPipelinesFiltered(history, q.Get("name"), q.Get("allowIncomplete") == "1")
 	if err != nil {
 		return err
 	}
@@ -306,7 +316,8 @@ func (d *daemon) listPipelinesH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) inspectPipelineH(w http.ResponseWriter, r *http.Request) error {
-	info, err := d.inspectPipeline(r.PathValue("name"))
+	ancestry, _ := strconv.Atoi(r.URL.Query().Get("ancestry"))
+	info, err := d.inspectPipeline(r.PathValue("name"), ancestry)
 	if err != nil {
 		return err
 	}
@@ -315,7 +326,12 @@ func (d *daemon) inspectPipelineH(w http.ResponseWriter, r *http.Request) error 
 }
 
 func (d *daemon) deletePipelineH(w http.ResponseWriter, r *http.Request) error {
-	return d.deletePipeline(r.PathValue("name"))
+	q := r.URL.Query()
+	if err := d.deletePipeline(r.PathValue("name"), q.Get("force") == "1", q.Get("keepRepo") == "1"); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
 }
 
 func (d *daemon) stopPipelineH(w http.ResponseWriter, r *http.Request) error {
@@ -338,11 +354,25 @@ func (d *daemon) startPipelineH(w http.ResponseWriter, r *http.Request) error {
 
 func (d *daemon) listJobsH(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
-	jobs, err := d.listJobsFiltered(q.Get("pipeline"), q.Get("outputCommit"), q["state"], q.Get("full") == "1")
+	var history *int
+	if v := q.Get("history"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			history = &n
+		}
+	}
+	jobs, err := d.listJobsFiltered(q.Get("pipeline"), q.Get("outputCommit"), q["state"], q.Get("full") == "1", history)
 	if err != nil {
 		return err
 	}
 	writeJSON(w, jobs)
+	return nil
+}
+
+func (d *daemon) resetH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.reset(); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
 

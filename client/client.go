@@ -175,8 +175,15 @@ func (c *Client) CreateRepo(name string) error {
 	return c.do("POST", "/api/v1/repos", map[string]string{"name": name}, nil)
 }
 
-func (c *Client) DeleteRepo(name string) error {
-	return c.do("DELETE", "/api/v1/repos/"+url.PathEscape(name), nil, nil)
+// DeleteRepo removes a repository. force bypasses the guard that protects
+// a pipeline's output repository from accidental deletion (SB-146); the
+// internal spec repository is protected unconditionally (SB-127).
+func (c *Client) DeleteRepo(name string, force bool) error {
+	q := ""
+	if force {
+		q = "?force=1"
+	}
+	return c.do("DELETE", "/api/v1/repos/"+url.PathEscape(name)+q, nil, nil)
 }
 
 func (c *Client) ListRepos() ([]Repo, error) {
@@ -275,14 +282,16 @@ func (c *Client) ListFiles(commitID string) ([]FileInfo, error) {
 
 // Transform is the execution description of a pipeline. Image is the
 // container image (empty means "alpine"); when Cmd is empty the pipeline
-// runs the default entry point (see the package comment).
+// runs the default entry point (see the package comment). AcceptReturnCode
+// declares one non-zero exit code that is treated as success (SB-033).
 type Transform struct {
-	Image   string            `json:"image,omitempty"`
-	Cmd     []string          `json:"cmd,omitempty"`
-	Stdin   []string          `json:"stdin,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	User    string            `json:"user,omitempty"`
-	Workdir string            `json:"workdir,omitempty"`
+	Image            string            `json:"image,omitempty"`
+	Cmd              []string          `json:"cmd,omitempty"`
+	Stdin            []string          `json:"stdin,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	User             string            `json:"user,omitempty"`
+	Workdir          string            `json:"workdir,omitempty"`
+	AcceptReturnCode int               `json:"acceptReturnCode,omitempty"`
 }
 
 // Input is a file-scoped (PFS) input: files of the repo matched by Glob.
@@ -305,11 +314,18 @@ type Pipeline struct {
 	Transform   *Transform   `json:"transform"`
 	Input       *Input       `json:"input"`
 	Parallelism *Parallelism `json:"parallelism,omitempty"`
+	// Update applies this spec to an existing pipeline (creating it when
+	// absent, SB-040); Reprocess marks the update as a full reprocessing
+	// request. Both are request flags, not persisted spec fields.
+	Update    bool `json:"update,omitempty"`
+	Reprocess bool `json:"reprocess,omitempty"`
 }
 
 // Pipeline state machine (P7): running, stopped, standby, failure, degraded,
 // crashed. Stopped is a persistent flag distinct from the transient state:
 // stopping a pipeline sets Stopped and reports state "paused" (SB-028).
+// Transform and Input are populated in full inspections; the other fields
+// are the current version's state.
 type PipelineInfo struct {
 	Name        string         `json:"name"`
 	State       string         `json:"state"`
@@ -317,6 +333,8 @@ type PipelineInfo struct {
 	Description string         `json:"description,omitempty"`
 	Stopped     bool           `json:"stopped"`
 	Version     int            `json:"version,omitempty"`
+	Transform   *Transform     `json:"transform,omitempty"`
+	Input       *Input         `json:"input,omitempty"`
 	JobCounts   map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
 }
 
@@ -324,18 +342,62 @@ func (c *Client) CreatePipeline(p Pipeline) error {
 	return c.do("POST", "/api/v1/pipelines", p, nil)
 }
 
-func (c *Client) InspectPipeline(name string) (PipelineInfo, error) {
-	var out PipelineInfo
-	return out, c.do("GET", "/api/v1/pipelines/"+url.PathEscape(name), nil, &out)
-}
-
 func (c *Client) ListPipelines() ([]PipelineInfo, error) {
-	var out []PipelineInfo
-	return out, c.do("GET", "/api/v1/pipelines", nil, &out)
+	return c.ListPipelinesFiltered(nil, "", false)
 }
 
-func (c *Client) DeletePipeline(name string) error {
-	return c.do("DELETE", "/api/v1/pipelines/"+url.PathEscape(name), nil, nil)
+// ListPipelinesFiltered lists pipelines. history < 0 lists every historical
+// version of every pipeline; history >= 1 (or nil) lists only the most
+// recent version of each pipeline; name restricts the listing to one
+// pipeline (all its versions when history < 0). allowIncomplete includes
+// pipelines whose definition is lost, as name-only entries (SB-143, SB-144).
+func (c *Client) ListPipelinesFiltered(history *int, name string, allowIncomplete bool) ([]PipelineInfo, error) {
+	q := url.Values{}
+	if history != nil {
+		q.Set("history", fmt.Sprintf("%d", *history))
+	}
+	if name != "" {
+		q.Set("name", name)
+	}
+	if allowIncomplete {
+		q.Set("allowIncomplete", "1")
+	}
+	qs := ""
+	if len(q) > 0 {
+		qs = "?" + q.Encode()
+	}
+	var out []PipelineInfo
+	return out, c.do("GET", "/api/v1/pipelines"+qs, nil, &out)
+}
+
+func (c *Client) InspectPipeline(name string) (PipelineInfo, error) {
+	return c.InspectPipelineVersion(name, 0)
+}
+
+// InspectPipelineVersion inspects the pipeline at ancestry depth k: 0 is
+// the current version, 1 the previous, up to the oldest (SB-136).
+func (c *Client) InspectPipelineVersion(name string, ancestry int) (PipelineInfo, error) {
+	var out PipelineInfo
+	q := ""
+	if ancestry > 0 {
+		q = fmt.Sprintf("?ancestry=%d", ancestry)
+	}
+	return out, c.do("GET", "/api/v1/pipelines/"+url.PathEscape(name)+q, nil, &out)
+}
+
+func (c *Client) DeletePipeline(name string, force, keepRepo bool) error {
+	q := url.Values{}
+	if force {
+		q.Set("force", "1")
+	}
+	if keepRepo {
+		q.Set("keepRepo", "1")
+	}
+	qs := ""
+	if len(q) > 0 {
+		qs = "?" + q.Encode()
+	}
+	return c.do("DELETE", "/api/v1/pipelines/"+url.PathEscape(name)+qs, nil, nil)
 }
 
 func (c *Client) StopPipeline(name string) error {
@@ -358,7 +420,11 @@ type Job struct {
 	OutputCommit string   `json:"outputCommit,omitempty"`
 	Started      string   `json:"started,omitempty"`
 	Finished     string   `json:"finished,omitempty"`
-	// Transform and Input are populated only in full listings (SB-094).
+	// Version is the pipeline version the job ran under; Transform and
+	// Input are snapshots of that version's spec, populated only in full
+	// listings (SB-094). Historical jobs keep their own version's spec
+	// even after a pipeline update (SB-040).
+	Version   int        `json:"version,omitempty"`
 	Transform *Transform `json:"transform,omitempty"`
 	Input     *Input     `json:"input,omitempty"`
 }
@@ -369,12 +435,15 @@ func (c *Client) ListJobs() ([]Job, error) {
 
 // JobFilter selects the jobs a listing returns. OutputCommit matches the
 // commit a job produced (SB-093); States is an inclusive set (SB-095);
-// Full includes each job's transform and input spec (SB-094).
+// Full includes each job's transform and input spec (SB-094); History is
+// the version depth: 0 = current version only, N = current version plus N
+// older versions, -1 = every version (SB-143).
 type JobFilter struct {
 	Pipeline     string
 	OutputCommit string
 	States       []string
 	Full         bool
+	History      *int
 }
 
 func (c *Client) ListJobsFiltered(f JobFilter) ([]Job, error) {
@@ -390,6 +459,9 @@ func (c *Client) ListJobsFiltered(f JobFilter) ([]Job, error) {
 	}
 	if f.Full {
 		q.Set("full", "1")
+	}
+	if f.History != nil {
+		q.Set("history", fmt.Sprintf("%d", *f.History))
 	}
 	var out []Job
 	qs := ""
@@ -408,8 +480,20 @@ func (c *Client) CancelJob(id string) error {
 	return c.do("POST", "/api/v1/jobs/"+url.PathEscape(id)+"/cancel", nil, nil)
 }
 
+// StopJob stops a running job: the in-flight work is interrupted and the
+// job is recorded killed; later jobs are unaffected (SB-058).
+func (c *Client) StopJob(id string) error {
+	return c.do("POST", "/api/v1/jobs/"+url.PathEscape(id)+"/stop", nil, nil)
+}
+
 func (c *Client) DeleteJob(id string) error {
 	return c.do("DELETE", "/api/v1/jobs/"+url.PathEscape(id), nil, nil)
+}
+
+// Reset removes every repository, pipeline, and job (SB-037). It is
+// idempotent and requires healthy metadata (D-08).
+func (c *Client) Reset() error {
+	return c.do("POST", "/api/v1/reset", nil, nil)
 }
 
 // Flush waits until every job triggered by the commit — including jobs of
@@ -417,10 +501,15 @@ func (c *Client) DeleteJob(id string) error {
 // and returns them, deduplicated per pipeline keeping the latest. A
 // terminal snapshot is only final once a second read a moment later agrees:
 // the job graph can still be growing (head backfill, downstream triggers),
-// and returning on the first terminal poll would race that growth. A
-// timeout returns the jobs seen so far with their states as the error.
+// and returning on the first terminal poll would race that growth. When no
+// job exists at all, the flush terminates empty once every pipeline that
+// could schedule work for the commit's repository is terminal-for-
+// scheduling (stopped, failed, or crashed) — otherwise it keeps waiting
+// for the growth to appear. A timeout returns the jobs seen so far with
+// their states as the error.
 func (c *Client) Flush(commitID string, timeout time.Duration) ([]Job, error) {
 	deadline := time.Now().Add(timeout)
+	var commitRepo string
 	for {
 		jobs, err := c.ListJobs()
 		if err != nil {
@@ -439,11 +528,50 @@ func (c *Client) Flush(commitID string, timeout time.Duration) ([]Job, error) {
 			}
 			continue
 		}
+		if len(relevant) == 0 {
+			if commitRepo == "" {
+				if cm, err := c.InspectCommit(commitID); err == nil {
+					commitRepo = cm.Repo
+				}
+			}
+			if commitRepo != "" && c.consumersSettled(commitRepo) {
+				time.Sleep(250 * time.Millisecond)
+				jobs2, err := c.ListJobs()
+				if err != nil {
+					return jobs, err
+				}
+				relevant2 := latestPerPipeline(downstreamJobs(jobs2, commitID))
+				if len(relevant2) == 0 && c.consumersSettled(commitRepo) {
+					return nil, nil
+				}
+				continue
+			}
+		}
 		if time.Now().After(deadline) {
 			return relevant, fmt.Errorf("flush timeout: %d job(s) not terminal", len(relevant))
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+// consumersSettled reports whether every pipeline consuming the repo is
+// terminal-for-scheduling: only a pipeline whose state is "running" can
+// still create a job for a finished commit (backfill, update reprocessing).
+func (c *Client) consumersSettled(repo string) bool {
+	pipes, err := c.ListPipelines()
+	if err != nil {
+		return false
+	}
+	consumers := 0
+	for _, p := range pipes {
+		if p.Input != nil && p.Input.Repo == repo {
+			consumers++
+			if p.State == "running" {
+				return false
+			}
+		}
+	}
+	return consumers > 0
 }
 
 func allTerminal(jobs []Job) bool {

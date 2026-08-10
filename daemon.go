@@ -140,6 +140,9 @@ func cmdDaemon(args []string) {
 	if err := d.reg.loadStatic(); err != nil {
 		log.Printf("peers file: %v", err)
 	}
+	// the internal pipeline-specification repository (SB-127) exists for
+	// the life of the daemon; a restart finds it already there
+	d.store.createRepo("spec")
 	pruneOrphans(*name)
 	d.markStaleJobsFailed() // jobs running in a previous daemon died with it
 

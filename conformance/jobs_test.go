@@ -168,6 +168,16 @@ func TestSB057_DeleteJobFinalizesOutput(t *testing.T) {
 	if job.State != "running" {
 		t.Fatalf("job state = %s, want running", job.State)
 	}
+	// the output revision is recorded a moment after the job appears (the
+	// first record is written before the output commit opens)
+	pollFor(t, "job output commit recorded", 30*time.Second, func() bool {
+		j, err := c.InspectJob(job.ID)
+		return err == nil && j.OutputCommit != ""
+	})
+	job, err := c.InspectJob(job.ID)
+	if err != nil {
+		t.Fatalf("inspect job: %v", err)
+	}
 
 	if err := c.DeleteJob(job.ID); err != nil {
 		t.Fatalf("delete job: %v", err)
@@ -228,5 +238,72 @@ func TestSB122_CancelRunningJob(t *testing.T) {
 	}
 	if string(got) != "second" {
 		t.Fatalf("output = %q, want %q", got, "second")
+	}
+}
+
+// TestSB058_StopJob — stopping a running job kills it without blocking the
+// job for a later commit (SB-058). Sandman has no job queueing yet (SB-123
+// is deferred), so both jobs run concurrently; the contract asserted — the
+// stopped job is killed, the later job succeeds, listing is newest-first —
+// holds in that model.
+func TestSB058_StopJob(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	name := uniq(t)
+	mustPipeline(t, client.Pipeline{Name: name, Transform: sleepTransform(6), Input: &client.Input{Repo: repo, Glob: "/*"}})
+	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "first"})
+	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "second"})
+
+	// the first job is observed running, then stopped
+	pollFor(t, "first job running", 30*time.Second, func() bool {
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+		if err != nil || len(js) == 0 {
+			return false
+		}
+		for _, j := range js {
+			if len(j.InputCommits) == 1 && j.InputCommits[0] == cm1.ID && j.State == "running" {
+				return true
+			}
+		}
+		return false
+	})
+	var first client.Job
+	js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	for _, j := range js {
+		if len(j.InputCommits) == 1 && j.InputCommits[0] == cm1.ID {
+			first = j
+		}
+	}
+	noPanic(t, c.StopJob(first.ID))
+	j, err := c.InspectJob(first.ID)
+	if err != nil {
+		t.Fatalf("inspect stopped job: %v", err)
+	}
+	if j.State != "killed" {
+		t.Fatalf("stopped job state = %s, want killed", j.State)
+	}
+
+	// the later job still completes successfully (newest first in listing)
+	pollFor(t, "second job success", 30*time.Second, func() bool {
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+		if err != nil || len(js) == 0 {
+			return false
+		}
+		for _, j := range js {
+			if len(j.InputCommits) == 1 && j.InputCommits[0] == cm2.ID && j.State == "success" {
+				return true
+			}
+		}
+		return false
+	})
+	js, err = c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if js[0].State != "success" {
+		t.Fatalf("newest job state = %s, want success", js[0].State)
 	}
 }

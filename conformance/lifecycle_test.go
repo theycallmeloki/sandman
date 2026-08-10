@@ -92,7 +92,7 @@ func TestSB024_DeleteAndRecreateReprocesses(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("first incarnation: %d jobs, want 1", len(jobs))
 	}
-	if err := c.DeletePipeline(name); err != nil {
+	if err := c.DeletePipeline(name, false, false); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 

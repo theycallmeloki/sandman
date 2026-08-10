@@ -167,14 +167,26 @@ func (s *apiStore) createRepo(name string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-func (s *apiStore) deleteRepo(name string) error {
+func (s *apiStore) deleteRepo(name string, force bool) error {
 	if !validName(name) {
 		return fmt.Errorf("invalid repo name %q", name)
+	}
+	if name == "spec" {
+		// the internal pipeline-specification repository is protected
+		// unconditionally (SB-127)
+		return fmt.Errorf("the spec repo cannot be deleted")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := os.Stat(s.repoDir(name)); err != nil {
 		return fmt.Errorf("repo %q not found", name)
+	}
+	if !force {
+		// a pipeline's output repository is protected from accidental
+		// deletion; force is the explicit override (SB-146)
+		if _, err := os.Stat(filepath.Join(filepath.Dir(s.dir), "pipelines", name+".json")); err == nil {
+			return fmt.Errorf("repo %q is the output of pipeline %q; force required", name, name)
+		}
 	}
 	return os.RemoveAll(s.repoDir(name))
 }
@@ -227,7 +239,9 @@ func (s *apiStore) listRepos() ([]client.Repo, error) {
 	}
 	var out []client.Repo
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != "spec" {
+			// "spec" is the internal pipeline-definition repository and is
+			// not a user repository (SB-127)
 			if r, err := s.inspectRepo(e.Name()); err == nil {
 				out = append(out, r)
 			}
@@ -447,6 +461,32 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string) e
 // finishCommit closes the commit, advances the branch ref, and reports the
 // final record. An explicitly empty commit (empty=true) is a real commit
 // whose view is nothing — parent files are not readable through it (SB-118).
+// reparent retargets an open commit's parent to the current branch head.
+// Output commits are opened at job start, before the head is final; the
+// last writer must re-parent so the branch stays linear and no finished
+// commit is orphaned off the chain (concurrent jobs of one pipeline).
+func (s *apiStore) reparent(commitID, parentID string) error {
+	if parentID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.loadCommitByID(commitID)
+	if err != nil {
+		return err
+	}
+	if rec.Finished {
+		return fmt.Errorf("commit %q already finished", commitID)
+	}
+	if rec.ParentID == parentID {
+		return nil
+	}
+	rec.ParentID = parentID
+	return s.saveCommit(rec)
+}
+
+// finishCommit closes a commit as a real revision or as an explicit empty
+// barrier (SB-118), advancing the branch head.
 func (s *apiStore) finishCommit(commitID, description string, empty bool) (client.Commit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

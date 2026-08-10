@@ -141,7 +141,10 @@ the text protocol). This is the data and control plane: immutable revisions
 in content-addressed repositories, pipelines that turn revisions into
 revisions, and jobs that run them.
 
-- `POST/GET/DELETE /api/v1/repos[/{name}]` — repositories
+- `POST/GET/DELETE /api/v1/repos[/{name}]` — repositories. `DELETE` honors
+  `?force=1` (a pipeline's output repo is protected from accidental
+  deletion); the internal `spec` repository holding pipeline definitions
+  can never be deleted
 - `POST /api/v1/repos/{repo}/commits` — start a revision on a branch
 - `PUT /api/v1/commits/{id}/files/{path}` — write a file into an open revision
 - `POST /api/v1/commits/{id}/files/{path}` — copy a file or directory
@@ -154,17 +157,31 @@ revisions, and jobs that run them.
   sniffed from the bytes
 - `PUT/GET /api/v1/tags/{name}` `GET /api/v1/tags` — durable global names
   bound to file content, listed with their object reference
-- `POST/GET/DELETE /api/v1/pipelines[/{name}]` — pipelines
+- `POST/GET/DELETE /api/v1/pipelines[/{name}]` — pipelines. The create body
+  carries `update: true` to apply a new version (creating when absent) and
+  `reprocess: true` to request a full reprocessing; every update processes
+  the input head. `DELETE` honors `?force=1` (removes a mid-DAG pipeline
+  despite downstream consumers) and `?keepRepo=1` (preserves the output
+  repo for reuse). `GET` takes `?history=<n>` (`0` current version, `n`
+  current plus n older, `-1` every version), `?name=` and
+  `?allowIncomplete=1` (lists pipelines whose definition is lost, by name
+  only); inspection takes `?ancestry=<k>` for historical versions
 - `POST /api/v1/pipelines/{name}/stop` `/start` — pause/resume: a stopped
-  pipeline ignores new commits and replays them on start (backlog)
+  pipeline ignores new commits and replays them on start (backlog); an
+  update does not restart it
 - `GET /api/v1/jobs[/{id}]` — jobs; `?pipeline=`, `?outputCommit=`,
-  `?state=` (repeatable), `?full=1` (include the pipeline spec). Job
+  `?state=` (repeatable), `?history=` (version depth), `?full=1` (each
+  job's own version's transform and input spec — history survives updates).
+  Listing jobs of a pipeline that does not exist is an error. Job
   inspection accepts a job id or its output commit. `POST …/{id}/cancel`
-  kills the in-flight work and marks the job killed; `DELETE …/{id}`
-  removes the record after finalizing its output revision. Flushing is a
-  client-side wait: poll jobs until every job for a revision — including
-  downstream stages — is terminal (the `client.Flush` helper does exactly
-  that, confirming the graph has stopped growing)
+  and `…/stop` kill the in-flight work and mark the job killed; `DELETE
+  …/{id}` removes the record after finalizing its output revision.
+  Flushing is a client-side wait: poll jobs until every job for a
+  revision — including downstream stages — is terminal (the `client.Flush`
+  helper does exactly that, confirming the graph has stopped growing, and
+  terminating empty when every consumer is stopped or failed)
+- `POST /api/v1/reset` — remove every repository, pipeline, and job;
+  idempotent, and it refuses to run on corrupted metadata (D-08)
 
 **State is plain files** under the state dir — cat it:
 
@@ -172,7 +189,9 @@ revisions, and jobs that run them.
 repos/<repo>/refs/<branch>       one-line commit ids
 repos/<repo>/commits/<id>.json   revision records
 repos/<repo>/.objects/<sha>/…    file content, content-addressed (dedup)
-pipelines/<name>.json            pipeline records
+repos/spec/…                     internal repo: one spec commit per pipeline definition
+pipelines/<name>.json            pipeline records (current version)
+pipelines/versions/<name>/<v>.json  immutable version history (ancestry)
 jobs/<id>/job.json               job records (+ in/ and out/ scratch dirs)
 ```
 
@@ -185,12 +204,17 @@ commit triggers one job per subscribed pipeline; the job's `OUT` directory
 becomes a new commit in the pipeline's output repo (named after the
 pipeline) — finish is recursive, so pipelines chain. A pipeline created
 over existing history processes the branch head once; a stopped pipeline
-replays the commits finished while it was stopped when started. A pipeline
-with no command and no stdin copies inputs to output; with stdin but no
-command it is accepted and immediately fails. Job output is all-or-nothing:
-a failed or killed job's output commit is finished empty. A commit's view
-accumulates across its ancestors — the newest write to a path wins — and
-the job for the head revision always sees the full accumulated content.
+replays the commits finished while it was stopped when started; updating a
+pipeline applies a new version, kills its in-flight jobs, and processes the
+input head under the new transform. A pipeline with no command and no
+stdin copies inputs to output; with stdin but no command it is accepted and
+immediately fails. Job output is all-or-nothing: a failed or killed job's
+output commit is finished empty. A commit's view accumulates across its
+ancestors — the newest write to a path wins — and the job for the head
+revision always sees the full accumulated content. A pipeline whose
+execution environment cannot be provisioned enters the crashed state, and
+one whose output repo is deleted mid-run fails with a reason; both recover
+by updating the pipeline.
 
 ```sh
 curl -X POST localhost:4242/api/v1/repos        -d '{"name":"in"}'
