@@ -309,10 +309,37 @@ type Transform struct {
 // Input is a file-scoped (PFS) input: files of the repo matched by Glob.
 // Name aliases the input's environment variable and defaults to the repo
 // name; it must be a valid shell identifier and not "out" (SB-170).
+// Branch defaults to "master". Cross, when non-empty, makes the input the
+// cartesian product of the listed inputs (each member is itself a
+// file-scoped input with its own repo, glob, branch, and name); a
+// file-scoped Input with Cross set is invalid.
 type Input struct {
-	Name string `json:"name,omitempty"`
-	Repo string `json:"repo"`
-	Glob string `json:"glob,omitempty"`
+	Name   string  `json:"name,omitempty"`
+	Repo   string  `json:"repo,omitempty"`
+	Glob   string  `json:"glob,omitempty"`
+	Branch string  `json:"branch,omitempty"`
+	Cross  []Input `json:"cross,omitempty"`
+}
+
+// InputBranch is the effective branch of an input side.
+func InputBranch(s Input) string {
+	if s.Branch == "" {
+		return "master"
+	}
+	return s.Branch
+}
+
+// InputSides normalizes an input into its constituent sides: a file-scoped
+// input is its own single side; a cross input is its members in
+// declaration order.
+func InputSides(in *Input) []Input {
+	if in == nil {
+		return nil
+	}
+	if len(in.Cross) > 0 {
+		return in.Cross
+	}
+	return []Input{*in}
 }
 
 type Parallelism struct {
@@ -424,6 +451,29 @@ func (c *Client) StartPipeline(name string) error {
 	return c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/start", nil, nil)
 }
 
+// ---- Datums ----
+
+// Datum is one unit of a job's work: its identity and the input files it
+// reads, one per input side (SB-080: a datum carries one input file per
+// side). DatumFile names the input side and the file within it.
+type Datum struct {
+	ID    string      `json:"id"`
+	Files []DatumFile `json:"files,omitempty"`
+}
+
+type DatumFile struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Hash string `json:"hash,omitempty"`
+}
+
+// EnumerateDatums lists the datum set an input would process at its
+// current input revisions, without creating or running a pipeline (SB-161).
+func (c *Client) EnumerateDatums(input Input) ([]Datum, error) {
+	var out []Datum
+	return out, c.do("POST", "/api/v1/datums", map[string]any{"input": input}, &out)
+}
+
 // ---- Jobs and flush ----
 
 // Job states (P7): running, success, failure, killed, skipped.
@@ -460,13 +510,15 @@ func (c *Client) ListJobs() ([]Job, error) {
 // commit a job produced (SB-093); States is an inclusive set (SB-095);
 // Full includes each job's transform and input spec (SB-094); History is
 // the version depth: 0 = current version only, N = current version plus N
-// older versions, -1 = every version (SB-143).
+// older versions, -1 = every version (SB-143). InputCommits returns only
+// jobs whose input set includes every listed commit (SB-120).
 type JobFilter struct {
 	Pipeline     string
 	OutputCommit string
 	States       []string
 	Full         bool
 	History      *int
+	InputCommits []string
 }
 
 func (c *Client) ListJobsFiltered(f JobFilter) ([]Job, error) {
@@ -479,6 +531,9 @@ func (c *Client) ListJobsFiltered(f JobFilter) ([]Job, error) {
 	}
 	for _, s := range f.States {
 		q.Add("state", s)
+	}
+	for _, ic := range f.InputCommits {
+		q.Add("inputCommit", ic)
 	}
 	if f.Full {
 		q.Set("full", "1")
@@ -531,41 +586,71 @@ func (c *Client) Reset() error {
 // for the growth to appear. A timeout returns the jobs seen so far with
 // their states as the error.
 func (c *Client) Flush(commitID string, timeout time.Duration) ([]Job, error) {
+	return c.flushSet([]string{commitID}, timeout)
+}
+
+// FlushSet flushes a set of input commits together: it returns only the
+// jobs whose input set includes every commit in the set — a cross
+// pipeline's pairing job — plus their downstream consumers, never the
+// single-side jobs (SB-009, SB-120).
+func (c *Client) FlushSet(commitIDs []string, timeout time.Duration) ([]Job, error) {
+	return c.flushSet(commitIDs, timeout)
+}
+
+func (c *Client) flushSet(commitIDs []string, timeout time.Duration) ([]Job, error) {
 	deadline := time.Now().Add(timeout)
-	var commitRepo string
+	var repos []string
 	for {
 		jobs, err := c.ListJobs()
 		if err != nil {
 			return jobs, err
 		}
-		relevant := latestPerPipeline(downstreamJobs(jobs, commitID))
+		relevant := latestPerPipeline(downstreamJobsSet(jobs, commitIDs))
 		if allTerminal(relevant) {
 			time.Sleep(250 * time.Millisecond)
 			jobs2, err := c.ListJobs()
 			if err != nil {
 				return jobs, err
 			}
-			relevant2 := latestPerPipeline(downstreamJobs(jobs2, commitID))
+			relevant2 := latestPerPipeline(downstreamJobsSet(jobs2, commitIDs))
 			if sameJobSet(relevant, relevant2) && allTerminal(relevant2) {
 				return relevant2, nil
 			}
 			continue
 		}
 		if len(relevant) == 0 {
-			if commitRepo == "" {
-				if cm, err := c.InspectCommit(commitID); err == nil {
-					commitRepo = cm.Repo
+			if len(repos) == 0 {
+				for _, id := range commitIDs {
+					if cm, err := c.InspectCommit(id); err == nil {
+						repos = append(repos, cm.Repo)
+					}
 				}
 			}
-			if commitRepo != "" && c.consumersSettled(commitRepo) {
+			settled := len(repos) > 0
+			for _, r := range repos {
+				if !c.consumersSettled(r) {
+					settled = false
+					break
+				}
+			}
+			if settled {
 				time.Sleep(250 * time.Millisecond)
 				jobs2, err := c.ListJobs()
 				if err != nil {
 					return jobs, err
 				}
-				relevant2 := latestPerPipeline(downstreamJobs(jobs2, commitID))
-				if len(relevant2) == 0 && c.consumersSettled(commitRepo) {
-					return nil, nil
+				relevant2 := latestPerPipeline(downstreamJobsSet(jobs2, commitIDs))
+				if len(relevant2) == 0 {
+					still := true
+					for _, r := range repos {
+						if !c.consumersSettled(r) {
+							still = false
+							break
+						}
+					}
+					if still {
+						return nil, nil
+					}
 				}
 				continue
 			}
@@ -629,9 +714,41 @@ func sameJobSet(a, b []Job) bool {
 // input commits include it, then every job consuming those jobs' output
 // commits, transitively.
 func downstreamJobs(jobs []Job, commitID string) []Job {
+	return downstreamJobsSet(jobs, []string{commitID})
+}
+
+// downstreamJobsSet is downstreamJobs for a set of input commits: a job is
+// relevant when its input set includes every commit in the set (a cross
+// pipeline's pairing), then every consumer of those jobs' outputs,
+// transitively.
+func downstreamJobsSet(jobs []Job, commitIDs []string) []Job {
+	set := map[string]bool{}
+	for _, id := range commitIDs {
+		set[id] = true
+	}
+	if len(set) == 0 {
+		return nil
+	}
 	seen := map[string]bool{}
 	var out []Job
-	queue := []string{commitID}
+	queue := []string{}
+	// direct matches: input set includes every commit in the set
+	for _, j := range jobs {
+		if j.OutputCommit == "" {
+			continue
+		}
+		got := map[string]bool{}
+		for _, ic := range j.InputCommits {
+			if set[ic] {
+				got[ic] = true
+			}
+		}
+		if len(got) == len(set) {
+			seen[j.ID] = true
+			out = append(out, j)
+			queue = append(queue, j.OutputCommit)
+		}
+	}
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]

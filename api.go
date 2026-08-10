@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"sandman/client"
 )
 
 // isHTTPMethod reports whether the peeked head of a connection is an HTTP
@@ -107,6 +109,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/transactions", hErr(d.startTransactionH))
 	mux.HandleFunc("POST /api/v1/transactions/{id}/finish", hErr(d.finishTransactionH))
 	mux.HandleFunc("DELETE /api/v1/transactions/{id}", hErr(d.deleteTransactionH))
+	mux.HandleFunc("POST /api/v1/datums", hErr(d.enumerateDatumsH))
 	mux.HandleFunc("POST /api/v1/reset", hErr(d.resetH))
 	mux.HandleFunc("PUT /api/v1/tags/{name}", hErr(d.putTagH))
 	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
@@ -289,6 +292,70 @@ func (d *daemon) deleteFileH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// enumerateDatumsH serves POST /api/v1/datums: the datum set an input
+// would process at its sides' current heads, without creating or running a
+// pipeline (SB-161).
+func (d *daemon) enumerateDatumsH(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		Input client.Input `json:"input"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		return fmt.Errorf("invalid request body")
+	}
+	if err := validateInputSides(&body.Input, ""); err != nil {
+		return err
+	}
+	out, err := d.enumerateInputDatums(&body.Input)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, out)
+	return nil
+}
+
+// enumerateInputDatums lists an input's datum set: the cartesian product
+// of its sides' glob matches at their current finished heads. A side with
+// no finished head contributes nothing, so the set is empty.
+func (d *daemon) enumerateInputDatums(in *client.Input) ([]client.Datum, error) {
+	sides := inputSides(in)
+	sideLists := make([][]datumSide, len(sides))
+	for i, s := range sides {
+		head, err := d.store.headCommitRec(s.Repo, inputBranch(s))
+		if err != nil || !head.Finished {
+			continue
+		}
+		view, err := d.store.resolveViewByID(head.ID)
+		if err != nil {
+			return nil, err
+		}
+		name := s.Name
+		if name == "" {
+			name = s.Repo
+		}
+		sd := enumerateDatums(view, s.Glob)
+		for j := range sd {
+			sd[j].Name = name
+		}
+		sideLists[i] = sd
+	}
+	datums := crossDatums(sideLists)
+	out := make([]client.Datum, 0, len(datums))
+	for _, dt := range datums {
+		dd := client.Datum{ID: dt.ID}
+		for _, sd := range dt.Sides {
+			for _, f := range sd.Files {
+				dd.Files = append(dd.Files, client.DatumFile{
+					Name: sd.Name,
+					Path: f,
+					Hash: "",
+				})
+			}
+		}
+		out = append(out, dd)
+	}
+	return out, nil
+}
+
 func (d *daemon) listFilesH(w http.ResponseWriter, r *http.Request) error {
 	files, err := d.store.listFiles(r.PathValue("id"))
 	if err != nil {
@@ -381,7 +448,7 @@ func (d *daemon) listJobsH(w http.ResponseWriter, r *http.Request) error {
 			history = &n
 		}
 	}
-	jobs, err := d.listJobsFiltered(q.Get("pipeline"), q.Get("outputCommit"), q["state"], q.Get("full") == "1", history)
+	jobs, err := d.listJobsFiltered(q.Get("pipeline"), q.Get("outputCommit"), q["state"], q.Get("full") == "1", history, q["inputCommit"])
 	if err != nil {
 		return err
 	}

@@ -60,6 +60,48 @@ var reservedEnv = map[string]bool{
 // (valid shell identifier, not "out"), repo, glob, self-reference, and
 // parallelism. Repo existence and name uniqueness are checked by the
 // caller (they resolve differently inside a transaction, SB-162).
+// validateInputSides checks an input's structure and every side in the
+// SB-159 order: name → reserved "out" → repo → glob → identifier → unique
+// names → self-reference. Cross members must have distinct names (same-repo
+// sides are addressable separately).
+func validateInputSides(in *client.Input, pipelineName string) error {
+	if in == nil {
+		return fmt.Errorf("no input set")
+	}
+	if in.Repo != "" && len(in.Cross) > 0 {
+		return fmt.Errorf("input cannot specify both a repo and a cross")
+	}
+	names := map[string]bool{}
+	for _, s := range inputSides(in) {
+		if s.Name == "" {
+			s.Name = s.Repo // an input's environment variable is named after its repo
+		}
+		if s.Name == "" {
+			return fmt.Errorf("input must specify a name")
+		}
+		if s.Name == "out" {
+			return fmt.Errorf(`input cannot be named "out"`)
+		}
+		if s.Repo == "" {
+			return fmt.Errorf("input must specify a repo")
+		}
+		if s.Glob == "" {
+			return fmt.Errorf("input must specify a glob")
+		}
+		if !shIdent.MatchString(s.Name) {
+			return fmt.Errorf("input name %q is not a valid environment variable name", s.Name)
+		}
+		if names[s.Name] {
+			return fmt.Errorf("input name %q is used by more than one input", s.Name)
+		}
+		names[s.Name] = true
+		if s.Repo == pipelineName {
+			return fmt.Errorf("pipeline cannot have its output as an input")
+		}
+	}
+	return nil
+}
+
 func validatePipelineSpec(p client.Pipeline) error {
 	if p.Name == "" && p.Transform == nil {
 		return fmt.Errorf("invalid pipeline spec")
@@ -70,30 +112,8 @@ func validatePipelineSpec(p client.Pipeline) error {
 	if p.Transform == nil {
 		return fmt.Errorf("pipeline must specify a transform")
 	}
-	if p.Input == nil {
-		return fmt.Errorf("no input set")
-	}
-	in := *p.Input
-	if in.Name == "" {
-		in.Name = in.Repo // an input's environment variable is named after its repo
-	}
-	if in.Name == "" {
-		return fmt.Errorf("input must specify a name")
-	}
-	if in.Name == "out" {
-		return fmt.Errorf(`input cannot be named "out"`)
-	}
-	if in.Repo == "" {
-		return fmt.Errorf("input must specify a repo")
-	}
-	if in.Glob == "" {
-		return fmt.Errorf("input must specify a glob")
-	}
-	if !shIdent.MatchString(in.Name) {
-		return fmt.Errorf("input name %q is not a valid environment variable name", in.Name)
-	}
-	if in.Repo == p.Name {
-		return fmt.Errorf("pipeline cannot have its output as an input")
+	if err := validateInputSides(p.Input, p.Name); err != nil {
+		return err
 	}
 	if p.Parallelism != nil && p.Parallelism.Constant != 0 && p.Parallelism.Coefficient != 0 {
 		return fmt.Errorf("cannot specify both a constant and a coefficient of parallelism")
@@ -103,6 +123,11 @@ func validatePipelineSpec(p client.Pipeline) error {
 
 // (self-reference before repo existence, so a pipeline never mistakes its
 // own future output repo for a missing input).
+// inputSides / inputBranch are the server's aliases for the client's
+// input normalization helpers.
+func inputSides(in *client.Input) []client.Input { return client.InputSides(in) }
+func inputBranch(s client.Input) string          { return client.InputBranch(s) }
+
 func (d *daemon) createPipeline(p client.Pipeline) error {
 	if err := validatePipelineSpec(p); err != nil {
 		return err
@@ -158,17 +183,21 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	return &rec, nil
 }
 
-// scheduleHeadJob processes the input branch head once under the pipeline's
-// current version, when there is a finished head and the pipeline is able
-// to run (SB-023, SB-053, SB-042/092/143 for updates). Failure and stopped
-// pipelines never run. It returns the spawned job's id, or "" when nothing
-// was scheduled — the caller can wait for exactly that job to settle.
+// scheduleHeadJob processes the input heads once under the pipeline's
+// current version — each side at its current head — when any side has a
+// finished head and the pipeline is able to run (SB-023, SB-053,
+// SB-042/092/143 for updates). Failure and stopped pipelines never run. It
+// returns the spawned job's id, or "" when nothing was scheduled — the
+// caller can wait for exactly that job to settle.
 func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 	if rec.State == "failure" || rec.Stopped {
 		return ""
 	}
-	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil && head.Finished {
-		return d.spawnJob(rec, head)
+	heads := d.pairHeads(rec.Pipeline.Input)
+	for _, h := range heads {
+		if h.ID != "" {
+			return d.spawnJob(rec, heads)
+		}
 	}
 	return ""
 }
@@ -186,8 +215,10 @@ var (
 // spawnJob launches a job, activating a standby pipeline synchronously:
 // the activation count is incremented and the state moves to "running"
 // before the goroutine can start, so a settling predecessor can never
-// observe quiescence while a new job is on its way.
-func (d *daemon) spawnJob(rec *pipelineRec, cm client.Commit) string {
+// observe quiescence while a new job is on its way. heads is the job's
+// input pairing — one commit per input side, empty when a side has no
+// head (its cross contributes no datums).
+func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit) string {
 	if rec.Pipeline.Standby {
 		standbyMu.Lock()
 		standbyActive[rec.Pipeline.Name]++
@@ -198,7 +229,7 @@ func (d *daemon) spawnJob(rec *pipelineRec, cm client.Commit) string {
 		standbyMu.Unlock()
 	}
 	id := newJobID(d.name)
-	go d.runJob(*rec, cm, id)
+	go d.runJob(*rec, heads, id)
 	return id
 }
 
@@ -230,13 +261,20 @@ func (d *daemon) standbySettle(name string) {
 }
 
 // standbyIdle parks a just-created or just-updated standby pipeline in the
-// standby state when it has no work to do: with no finished input head,
-// nothing will be scheduled until a commit arrives (SB-049).
+// standby state when it has no work to do: with no finished input head on
+// any side, nothing will be scheduled until a commit arrives (SB-049).
 func (d *daemon) standbyIdle(rec *pipelineRec) {
 	if !rec.Pipeline.Standby || rec.Stopped || rec.State == "failure" || rec.State == "crashed" {
 		return
 	}
-	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err != nil || !head.Finished {
+	any := false
+	for _, h := range d.pairHeads(rec.Pipeline.Input) {
+		if h.ID != "" {
+			any = true
+			break
+		}
+	}
+	if !any {
 		rec.State = "standby"
 		d.savePipeline(rec)
 	}
@@ -399,9 +437,7 @@ func (d *daemon) startPipeline(name string) error {
 	if d.hasJob(rec.Pipeline.Name, headID) {
 		return nil
 	}
-	if cm, err := d.store.inspectCommit(headID); err == nil {
-		d.spawnJob(rec, cm)
-	}
+	d.spawnJob(rec, d.pairHeads(rec.Pipeline.Input))
 	return nil
 }
 
@@ -570,7 +606,7 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 			if other.Pipeline.Name == name || other.Pipeline.Input == nil {
 				continue
 			}
-			if other.Pipeline.Input.Repo == name {
+			if inputConsumesRepo(other.Pipeline.Input, name) {
 				return fmt.Errorf("pipeline %q has downstream consumers; force required", name)
 			}
 		}
@@ -659,7 +695,7 @@ func (d *daemon) saveJob(rec *jobRec) error {
 }
 
 func (d *daemon) listJobs() ([]client.Job, error) {
-	return d.listJobsFiltered("", "", nil, false, nil)
+	return d.listJobsFiltered("", "", nil, false, nil, nil)
 }
 
 // requirePipeline fails when the named pipeline does not exist or its
@@ -681,7 +717,7 @@ func (d *daemon) requirePipeline(pipeline string) error {
 // version, SB-143). Full listings carry each job's own version's transform
 // and input snapshots (SB-094, SB-040). Listing jobs for a pipeline that
 // does not exist is an error, not an empty list (SB-026/027).
-func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string, full bool, history *int) ([]client.Job, error) {
+func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string, full bool, history *int, inputCommits []string) ([]client.Job, error) {
 	if pipeline != "" {
 		if err := d.requirePipeline(pipeline); err != nil {
 			return nil, err
@@ -712,6 +748,21 @@ func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string
 		}
 		if outputCommit != "" && rec.OutputCommit != outputCommit {
 			continue
+		}
+		if len(inputCommits) > 0 {
+			want := map[string]bool{}
+			for _, ic := range inputCommits {
+				want[ic] = true
+			}
+			got := map[string]bool{}
+			for _, jic := range rec.InputCommits {
+				if want[jic] {
+					got[jic] = true
+				}
+			}
+			if len(got) != len(want) {
+				continue
+			}
 		}
 		if len(states) > 0 {
 			match := false
@@ -801,6 +852,41 @@ func newJobID(node string) string {
 
 // triggerForCommit launches one job per running pipeline subscribed to the
 // commit's repo. Jobs run in their own goroutines; the trigger never blocks
+// pairHeads resolves the current finished head of every input side, in
+// declaration order; a side with no finished head yields an empty commit —
+// its contribution to the cross is no datums.
+func (d *daemon) pairHeads(in *client.Input) []client.Commit {
+	sides := inputSides(in)
+	heads := make([]client.Commit, len(sides))
+	for i, s := range sides {
+		if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished {
+			heads[i] = h
+		}
+	}
+	return heads
+}
+
+// pipelineConsumes reports whether any input side subscribes to the
+// (repo, branch) pair — the trigger condition for a commit.
+func pipelineConsumes(in *client.Input, repo, branch string) bool {
+	for _, s := range inputSides(in) {
+		if s.Repo == repo && inputBranch(s) == branch {
+			return true
+		}
+	}
+	return false
+}
+
+// inputConsumesRepo reports whether any input side reads from repo.
+func inputConsumesRepo(in *client.Input, repo string) bool {
+	for _, s := range inputSides(in) {
+		if s.Repo == repo {
+			return true
+		}
+	}
+	return false
+}
+
 // the caller (the HTTP handler that finished the commit).
 func (d *daemon) triggerForCommit(cm client.Commit) {
 	pipes, _ := d.listPipelinesFiltered(nil, "", false)
@@ -821,9 +907,13 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		if rec.Stopped {
 			continue // stopped pipelines ignore new commits (SB-048)
 		}
-		if rec.Pipeline.Input.Repo == cm.Repo {
-			d.spawnJob(rec, cm)
+		if !pipelineConsumes(rec.Pipeline.Input, cm.Repo, cm.Branch) {
+			continue
 		}
+		// the pairing at trigger time: the new commit on its side, each
+		// other side at its current head (SB-120)
+		heads := d.pairHeads(rec.Pipeline.Input)
+		d.spawnJob(rec, heads)
 	}
 }
 
@@ -1129,16 +1219,20 @@ func (d *daemon) loadPipeline(name string) (*pipelineRec, error) {
 // failed job's output commit is finished empty, so partial output is never
 // observable. The job id is supplied by the caller so schedulers can track
 // the job they spawned.
-// jobEnv builds the job-scoped execution environment: the input commit,
-// output directory, and job identity (SB-051, SB-101, SB-128). The input
-// directory variable is per datum (each datum's own staging mount) and is
-// appended by the datum executor.
-func (d *daemon) jobEnv(pl pipelineRec, id, outCommit, inName, inCommit string) []string {
+// jobEnv builds the job-scoped execution environment: each input side's
+// commit, the output directory, and job identity (SB-051, SB-101,
+// SB-128). The input directory variables are per datum (each datum's own
+// staging mount) and are appended by the datum executor.
+func (d *daemon) jobEnv(pl pipelineRec, id, outCommit string, sides []client.Input, heads []client.Commit) []string {
 	env := []string{
-		inName + "_COMMIT=" + inCommit,
 		"OUT=/sandman/out",
 		"JOB_ID=" + id,
 		"OUTPUT_COMMIT=" + outCommit,
+	}
+	for i, s := range sides {
+		if i < len(heads) && heads[i].ID != "" {
+			env = append(env, s.Name+"_COMMIT="+heads[i].ID)
+		}
 	}
 	for k, v := range pl.Pipeline.Transform.Env {
 		if !reservedEnv[k] {
@@ -1170,14 +1264,18 @@ func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 	return reason
 }
 
-// runJob coordinates one job: enumerate the input's datums, run them with
-// a bounded worker pool, merge their outputs into the single output
-// commit, and record the per-datum outcomes in the pipeline's dedup table.
-func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
-	in := pl.Pipeline.Input
-	inName := in.Name
-	if inName == "" {
-		inName = in.Repo
+// runJob coordinates one job: enumerate the input sides' datums, take
+// their cartesian product, run the datums with a bounded worker pool, merge
+// their outputs into the single output commit, and record the per-datum
+// outcomes in the pipeline's dedup table. heads is the input pairing — one
+// commit per side, empty where a side has no head (SB-120's lone-input
+// job; its cross contributes no datums).
+func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
+	sides := inputSides(pl.Pipeline.Input)
+	for i := range sides {
+		if sides[i].Name == "" {
+			sides[i].Name = sides[i].Repo
+		}
 	}
 	dir := d.jobDir(id)
 	outDir := filepath.Join(dir, "out")
@@ -1191,8 +1289,15 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 	defer d.standbySettle(pl.Pipeline.Name)
 
 	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: "running",
-		InputCommits: []string{cm.ID}, Started: time.Now().UTC().Format(time.RFC3339Nano),
+		Started: time.Now().UTC().Format(time.RFC3339Nano),
 		Version: pl.Version, Transform: pl.Pipeline.Transform, Input: pl.Pipeline.Input}
+	seen := map[string]bool{}
+	for _, h := range heads {
+		if h.ID != "" && !seen[h.ID] {
+			seen[h.ID] = true
+			rec.InputCommits = append(rec.InputCommits, h.ID)
+		}
+	}
 	d.saveJob(rec)
 	fail := func(reason string) {
 		rec.State = "failure"
@@ -1201,23 +1306,44 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 		d.saveJob(rec)
 	}
 
-	// The job's datum set for log filters is the input revision's files
-	// (SB-060); the execution datum set is the glob-matched subset.
-	if datums, err := d.store.viewDatums(cm.ID); err == nil {
-		rec.Datums = datums
-		d.saveJob(rec)
+	// Resolve each side's input revision and enumerate its datums; the
+	// job's datum set is the cartesian product (SB-063). A side without a
+	// head contributes no datums, so the product is empty.
+	views := map[string]map[string]fileEntry{}
+	sideLists := make([][]datumSide, len(sides))
+	for i, s := range sides {
+		if i >= len(heads) || heads[i].ID == "" {
+			continue
+		}
+		view, err := d.store.resolveViewByID(heads[i].ID)
+		if err != nil {
+			fail("materialize input: " + err.Error())
+			return
+		}
+		views[s.Name] = view
+		sd := enumerateDatums(view, s.Glob)
+		for j := range sd {
+			sd[j].Name = s.Name
+		}
+		sideLists[i] = sd
 	}
-
-	// Resolve the input revision and enumerate the job's datums.
-	view, err := d.store.resolveViewByID(cm.ID)
-	if err != nil {
-		fail("materialize input: " + err.Error())
-		return
-	}
-	datums := enumerateDatums(view, in.Glob)
+	datums := crossDatums(sideLists)
 	for i := range datums {
-		datums[i].Hash = datumHash(view, datums[i].Files)
+		datums[i].Hash = datumHash(views, datums[i])
 	}
+	// the datum set for log filters is the first side's full input files
+	// (SB-060); cross jobs filter by their sides' files.
+	var logDatums []datumRef
+	for i := range sides {
+		if i >= len(heads) || heads[i].ID == "" {
+			continue
+		}
+		if vd, err := d.store.viewDatums(heads[i].ID); err == nil {
+			logDatums = append(logDatums, vd...)
+		}
+	}
+	rec.Datums = logDatums
+	d.saveJob(rec)
 
 	// The job's container output is captured into the log store as it is
 	// produced. A capture failure degrades to no logs, never to a broken
@@ -1255,8 +1381,9 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 		todo = append(todo, dt)
 	}
 
-	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, view: view, dedup: dedup, rj: rj}
-	jx.env = d.jobEnv(pl, id, outCommit.ID, inName, cm.ID)
+	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, views: views,
+		viewDirs: map[string]string{}, dedup: dedup, rj: rj}
+	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
 	failedAny := d.runDatums(jx, todo)
 
 	for _, dt := range datums {
@@ -1367,15 +1494,17 @@ func copyDir(src, dst string) int {
 // for the log store (timestamped, line-split). inName is the input's
 // environment variable name, which also names the in-container mount point.
 func (d *daemon) runPipelineContainer(pl pipelineRec, jobID, inName string, env []string, inDir, outDir string, capture io.Writer) (int, string) {
-	return d.runPipelineContainerNamed(pl, jobID, "sandman-"+jobID, inName, env, inDir, outDir, capture, "")
+	mounts := []string{"-v", inDir + ":/sandman/in/" + inName + ":ro"}
+	return d.runPipelineContainerNamed(pl, jobID, "sandman-"+jobID, env, mounts, outDir, capture)
 }
 
 // runPipelineContainerNamed runs the transform's container under an
 // explicit container name (per-datum containers are named after the datum
-// so a cancel can kill exactly the running ones). viewDir, when non-empty,
-// is the job's full input view, mounted read-only alongside the datum's
-// own files (SB-166: a datum may read data outside its own datum set).
-func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname, inName string, env []string, inDir, outDir string, capture io.Writer, viewDir string) (int, string) {
+// so a cancel can kill exactly the running ones). mounts carries the
+// per-input-side read-only mounts (each side's datum files at
+// /sandman/in/<name> and, when materialized, the side's full view at
+// /sandman/view/<name>).
+func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname string, env []string, mounts []string, outDir string, capture io.Writer) (int, string) {
 	tr := pl.Pipeline.Transform
 	image := tr.Image
 	if image == "" {
@@ -1383,12 +1512,9 @@ func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname, inName 
 	}
 	args := []string{"run", "--rm", "--name", cname,
 		"--label", "sandman.node=" + d.name,
-		"-v", inDir + ":/sandman/in/" + inName + ":ro",
 		"-v", outDir + ":/sandman/out",
 	}
-	if viewDir != "" {
-		args = append(args, "-v", viewDir+":/sandman/view/"+inName+":ro")
-	}
+	args = append(args, mounts...)
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}

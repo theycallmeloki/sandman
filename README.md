@@ -199,6 +199,16 @@ revisions, and jobs that run them.
   applies per datum. A failing datum fails the job — reason names the
   datum (SB-011) — and the job's `processed`/`recovered`/`failed`/
   `skipped` fields count the outcomes (SB-012)
+- **Cross inputs** — `input.cross` is a list of file-scoped inputs whose
+  datums combine as the cartesian product (SB-063/161): a job's datum set
+  is one glob match from every side. Each side is addressable by its own
+  name (`$<name>` and `$<name>_COMMIT`); `input.branch` selects a side's
+  branch (default master). Every input commit on any side creates a job
+  pairing that commit with the other sides' current heads (SB-120) — a
+  side with no head yet contributes no datums — and flushing a set of
+  commits (`client.FlushSet`) returns only the pairing job. Datum
+  enumeration is available standalone via `POST /api/v1/datums`
+  (SB-161)
 - `GET /api/v1/jobs[/{id}]` — jobs; `?pipeline=`, `?outputCommit=`,
   `?state=` (repeatable), `?history=` (version depth), `?full=1` (each
   job's own version's transform and input spec — history survives updates).

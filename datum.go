@@ -38,12 +38,20 @@ import (
 	"time"
 )
 
-// datum is one unit of work: the input files it reads (relative paths in
-// the input view) and its stable identity.
+// datum is one unit of work: one input-side contribution per declared
+// input side (a single-input job has one side), the files each side reads,
+// and a stable identity.
 type datum struct {
-	ID    string   // identity key: the matched path
-	Files []string // input file paths (relative)
-	Hash  string   // content hash of the datum's files
+	ID    string      // identity key (single input: the matched path; cross: the joined side keys)
+	Sides []datumSide // in declaration order
+	Hash  string      // content hash of all sides' files
+}
+
+// datumSide is one input side's contribution to a datum.
+type datumSide struct {
+	Name  string   // the input's environment variable name
+	ID    string   // the matched path within this side's view
+	Files []string // file paths in this side's view
 }
 
 // datumState is the durable per-datum record (the dedup table).
@@ -94,12 +102,12 @@ func globMatches(pattern, path string) bool {
 	return err == nil && ok
 }
 
-// enumerateDatums resolves a view into the job's datum set: every path the
-// glob matches is a datum — a directory match is a datum of its whole
+// enumerateDatums resolves one side's datum set from its view: every path
+// the glob matches is a datum — a directory match is a datum of its whole
 // subtree, and files swallowed by a directory datum are not separate
 // datums. Datums are ordered by id (D-14: execution order is not
 // contractual, but the output merge must be deterministic).
-func enumerateDatums(view map[string]fileEntry, glob string) []datum {
+func enumerateDatums(view map[string]fileEntry, glob string) []datumSide {
 	// candidate paths: every file path and every ancestor directory
 	candSet := map[string]bool{}
 	for p := range view {
@@ -118,7 +126,7 @@ func enumerateDatums(view map[string]fileEntry, glob string) []datum {
 		cands = append(cands, c)
 	}
 	sort.Strings(cands) // directories sort before their contents
-	var out []datum
+	var out []datumSide
 	shadowed := map[string]bool{} // files consumed by a directory datum
 	for _, c := range cands {
 		if shadowed[c] || !globMatches(glob, c) {
@@ -139,31 +147,62 @@ func enumerateDatums(view map[string]fileEntry, glob string) []datum {
 				shadowed[f] = true
 			}
 		}
-		out = append(out, datum{ID: c, Files: files})
+		out = append(out, datumSide{ID: c, Files: files})
 	}
 	return out
 }
 
-// datumHash digests a datum's files: the sorted "path:hash" pairs, so the
-// hash changes exactly when the datum's content changes.
-func datumHash(view map[string]fileEntry, files []string) string {
+// crossDatums builds a job's datum set from its sides' datum lists: the
+// cartesian product over the sides, one contribution per side (SB-063,
+// SB-161). A side with no datums makes the product empty. A single side
+// keeps the plain matched paths as datum ids; a cross datum's id joins the
+// side keys so identity stays stable across jobs.
+func crossDatums(sideLists [][]datumSide) []datum {
+	if len(sideLists) == 1 {
+		out := make([]datum, 0, len(sideLists[0]))
+		for _, sd := range sideLists[0] {
+			out = append(out, datum{ID: sd.ID, Sides: []datumSide{sd}})
+		}
+		return out
+	}
+	var out []datum
+	var rec func(int, []datumSide)
+	rec = func(i int, acc []datumSide) {
+		if i == len(sideLists) {
+			id := ""
+			for _, sd := range acc {
+				if id != "" {
+					id += "+"
+				}
+				id += sd.Name + "=" + sd.ID
+			}
+			out = append(out, datum{ID: id, Sides: acc})
+			return
+		}
+		for _, sd := range sideLists[i] {
+			rec(i+1, append(append([]datumSide{}, acc...), sd))
+		}
+	}
+	rec(0, nil)
+	return out
+}
+
+// datumHash digests a datum's files across all sides: the sorted
+// "side:path:hash" triples, so the hash changes exactly when the datum's
+// content changes.
+func datumHash(views map[string]map[string]fileEntry, dt datum) string {
 	h := sha256.New()
-	for _, f := range files {
-		h.Write([]byte(f))
-		h.Write([]byte{0})
-		h.Write([]byte(view[f].SHA))
-		h.Write([]byte{0})
+	for _, sd := range dt.Sides {
+		for _, f := range sd.Files {
+			h.Write([]byte(sd.Name))
+			h.Write([]byte{0})
+			h.Write([]byte(f))
+			h.Write([]byte{0})
+			h.Write([]byte(views[sd.Name][f].SHA))
+			h.Write([]byte{0})
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// fileRefs turns view paths into content references.
-func fileRefs(files []string, view map[string]fileEntry) []fileRef {
-	out := make([]fileRef, 0, len(files))
-	for _, f := range files {
-		out = append(out, fileRef{Path: f, Hash: view[f].SHA, Size: view[f].Size})
-	}
-	return out
 }
 
 // ---- the dedup table ----
@@ -211,16 +250,15 @@ type jobExec struct {
 	pl     pipelineRec
 	id     string
 	outDir string
-	view   map[string]fileEntry
-	env    []string // job-scoped environment; the input dir var is per datum
+	views  map[string]map[string]fileEntry // per input side: its view
+	env    []string                        // job-scoped environment; the input dir vars are per datum
 	rj     *runningJob
 
-	// viewDir is the job's materialized full input view, mounted read-only
+	// viewDirs are the sides' materialized full views, mounted read-only
 	// into every container at /sandman/view/<name> alongside the datum's
 	// own files: a datum may read data outside its own datum set (SB-166).
-	viewDir  string
-	viewOnce sync.Once
-	viewErr  error
+	viewMu   sync.Mutex
+	viewDirs map[string]string
 
 	dedupMu sync.Mutex
 	dedup   map[string]datumState
@@ -296,9 +334,15 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 		tries = 1
 	}
 	started := time.Now().UTC()
+	var inputFiles []fileRef
+	for _, sd := range dt.Sides {
+		for _, f := range sd.Files {
+			inputFiles = append(inputFiles, fileRef{Path: f, Hash: jx.views[sd.Name][f].SHA, Size: jx.views[sd.Name][f].Size})
+		}
+	}
 	rec := datumState{
 		Hash:       dt.Hash,
-		InputFiles: fileRefs(dt.Files, jx.view),
+		InputFiles: inputFiles,
 		Started:    started.Format(time.RFC3339Nano),
 		Worker:     worker,
 	}
@@ -351,38 +395,46 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 	}
 }
 
-// runDatumAttempt materializes one datum's input files, runs the transform
-// against them (the container, or the default copy entry point), and
-// returns success, the exit code, the output tail, and the produced files.
+// runDatumAttempt materializes one datum's per-side input files, runs the
+// transform against them (the container, or the default copy entry point),
+// and returns success, the exit code, the output tail, and the produced
+// files.
 func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (bool, int, string, []fileRef) {
-	inName := jx.pl.Pipeline.Input.Name
-	if inName == "" {
-		inName = jx.pl.Pipeline.Input.Repo
-	}
 	// per-attempt staging, keyed by the datum's index so concurrent and
 	// repeated datums never share a directory; a failed attempt's partial
 	// output is discarded
 	dir := filepath.Join(d.jobDir(jx.id), "datum", fmt.Sprintf("%d-%d", index, attempt))
-	inDir := filepath.Join(dir, "in", inName)
 	outDir := filepath.Join(dir, "out")
-	if err := os.MkdirAll(inDir, 0o755); err != nil {
-		return false, 1, err.Error(), nil
-	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return false, 1, err.Error(), nil
 	}
-	// materialize the datum's files at their relative paths
-	for _, f := range dt.Files {
-		data, err := d.store.readBlob(jx.view[f].SHA)
-		if err != nil {
-			return false, 1, "materialize input: " + err.Error(), nil
-		}
-		dst := filepath.Join(inDir, filepath.FromSlash(f))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	// materialize each side's files into its own input directory
+	var mounts []string
+	env := append([]string{}, jx.env...)
+	for _, sd := range dt.Sides {
+		inDir := filepath.Join(dir, "in", sd.Name)
+		if err := os.MkdirAll(inDir, 0o755); err != nil {
 			return false, 1, err.Error(), nil
 		}
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
-			return false, 1, err.Error(), nil
+		for _, f := range sd.Files {
+			data, err := d.store.readBlob(jx.views[sd.Name][f].SHA)
+			if err != nil {
+				return false, 1, "materialize input: " + err.Error(), nil
+			}
+			dst := filepath.Join(inDir, filepath.FromSlash(f))
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return false, 1, err.Error(), nil
+			}
+			if err := os.WriteFile(dst, data, 0o644); err != nil {
+				return false, 1, err.Error(), nil
+			}
+		}
+		env = append(env, sd.Name+"=/sandman/in/"+sd.Name)
+		mounts = append(mounts, "-v", inDir+":/sandman/in/"+sd.Name+":ro")
+		// the full side view is available to containers: a datum can read
+		// data outside its own datum set (SB-166)
+		if vd := d.ensureView(jx, sd.Name); vd != "" {
+			mounts = append(mounts, "-v", vd+":/sandman/view/"+sd.Name+":ro")
 		}
 	}
 
@@ -395,17 +447,20 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (boo
 	if capErr != nil {
 		capture = nil
 	}
-	env := append([]string{inName + "=/sandman/in/" + inName}, jx.env...)
 	tr := jx.pl.Pipeline.Transform
 	var code int
 	var tail string
 	if len(tr.Cmd) == 0 && len(tr.Stdin) == 0 {
-		code = copyDir(inDir, outDir)
+		// default entry point: copy every side's files to OUT
+		code = 0
+		for _, sd := range dt.Sides {
+			inDir := filepath.Join(dir, "in", sd.Name)
+			if c := copyDir(inDir, outDir); c != 0 {
+				code = c
+			}
+		}
 	} else {
-		// the full input view is available to containers (once per job):
-		// a datum can read data outside its own datum set (SB-166)
-		d.ensureView(jx)
-		code, tail = d.runPipelineContainerNamed(jx.pl, jx.id, cname, inName, env, inDir, outDir, capture, jx.viewDir)
+		code, tail = d.runPipelineContainerNamed(jx.pl, jx.id, cname, env, mounts, outDir, capture)
 	}
 	if capture != nil {
 		capture.Close()
@@ -421,13 +476,20 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (boo
 	return true, 0, "", files
 }
 
-// ensureView materializes the job's full input view once into the job's
+// ensureView materializes an input side's full view once into the job's
 // view directory (mounted into containers at /sandman/view/<name>).
-func (d *daemon) ensureView(jx *jobExec) {
-	jx.viewOnce.Do(func() {
-		jx.viewDir = filepath.Join(d.jobDir(jx.id), "view")
-		jx.viewErr = d.store.materializeView(jx.view, jx.viewDir)
-	})
+func (d *daemon) ensureView(jx *jobExec, side string) string {
+	jx.viewMu.Lock()
+	defer jx.viewMu.Unlock()
+	if dir, ok := jx.viewDirs[side]; ok {
+		return dir
+	}
+	dir := filepath.Join(d.jobDir(jx.id), "view", side)
+	if d.store.materializeView(jx.views[side], dir) != nil {
+		return ""
+	}
+	jx.viewDirs[side] = dir
+	return dir
 }
 
 // storeOutput lists a staging directory's files with their content hashes

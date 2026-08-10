@@ -193,12 +193,13 @@ func (d *daemon) finishTransaction(id string) error {
 	// pipeline staged here may consume another staged here, whose output
 	// repo does not exist yet (SB-162).
 	for _, op := range ops {
-		in := op.Spec.Input
-		if _, pending := txState[in.Repo]; pending {
-			continue
-		}
-		if _, err := os.Stat(d.store.repoDir(in.Repo)); err != nil {
-			return fmt.Errorf("input repo %q not found", in.Repo)
+		for _, s := range inputSides(op.Spec.Input) {
+			if _, pending := txState[s.Repo]; pending {
+				continue
+			}
+			if _, err := os.Stat(d.store.repoDir(s.Repo)); err != nil {
+				return fmt.Errorf("input repo %q not found", s.Repo)
+			}
 		}
 	}
 
@@ -211,8 +212,10 @@ func (d *daemon) finishTransaction(id string) error {
 	}
 	deps := map[string][]string{}
 	for name, spec := range final {
-		if dep, ok := final[spec.Input.Repo]; ok && spec.Input.Repo != name {
-			deps[name] = append(deps[name], dep.Name)
+		for _, s := range inputSides(spec.Input) {
+			if dep, ok := final[s.Repo]; ok && s.Repo != name {
+				deps[name] = append(deps[name], dep.Name)
+			}
 		}
 	}
 	order, err := topoOrder(final, deps)
