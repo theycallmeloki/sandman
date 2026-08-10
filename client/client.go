@@ -360,6 +360,22 @@ type Input struct {
 	Glob   string  `json:"glob,omitempty"`
 	Branch string  `json:"branch,omitempty"`
 	Cross  []Input `json:"cross,omitempty"`
+	// Join, when non-empty, makes the input a join: each member's glob
+	// captures a key (JoinOn selects the captured group, e.g. "$1" or
+	// "$1$3") and a datum exists for every key present in all members,
+	// containing one file per member (SB-074). Outer marks a member whose
+	// unmatched keys still produce datums, each carrying only that
+	// member's file — the unmatched members' directories are absent
+	// (SB-075). A file-scoped Input with Join set is invalid.
+	Join   []Input `json:"join,omitempty"`
+	JoinOn string  `json:"joinOn,omitempty"`
+	Outer  bool    `json:"outer,omitempty"`
+	// Group, when non-empty, makes the input a group: files across all
+	// members are collected by their GroupBy capture value into one datum
+	// per key (union, not cross product) (SB-076). A member with JoinOn
+	// joins first, then groups the joined pairs.
+	Group   []Input `json:"group,omitempty"`
+	GroupBy string  `json:"groupBy,omitempty"`
 	// Lazy marks the input as materialized on demand rather than eagerly
 	// (SB-014/015/017). The flag is part of the pipeline spec and is
 	// recorded on every job's input snapshot; sandman materializes the
@@ -384,6 +400,12 @@ func InputSides(in *Input) []Input {
 	}
 	if len(in.Cross) > 0 {
 		return in.Cross
+	}
+	if len(in.Join) > 0 {
+		return in.Join
+	}
+	if len(in.Group) > 0 {
+		return in.Group
 	}
 	return []Input{*in}
 }

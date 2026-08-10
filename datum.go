@@ -33,7 +33,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -736,6 +738,275 @@ func (d *daemon) ensureView(jx *jobExec, side string) string {
 	}
 	jx.viewDirs[side] = dir
 	return dir
+}
+
+// ---- join and group inputs (SB-074/075/076) ----
+
+// globRegex converts a glob pattern with capture groups into an anchored
+// regexp: ? matches one character, * any run, (...) is a capture group,
+// and literal dots are escaped. The captured groups feed join-on and
+// group-by selectors.
+func globRegex(glob string) *regexp.Regexp {
+	p := strings.TrimPrefix(glob, "/")
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(p); i++ {
+		switch p[i] {
+		case '(':
+			b.WriteString("(")
+		case ')':
+			b.WriteString(")")
+		case '*':
+			b.WriteString(".*")
+		case '?':
+			b.WriteString(".")
+		case '.':
+			b.WriteString(`\.`)
+		default:
+			b.WriteByte(p[i])
+		}
+	}
+	b.WriteString("$")
+	return regexp.MustCompile(b.String())
+}
+
+// captureKey extracts a path's join/group key: the glob's captured groups
+// selected by the selector ("$1", "$1$3", ...), concatenated in selector
+// order. ok is false when the path does not match the glob or the
+// selector names a missing group.
+func captureKey(glob, selector, path string) (string, bool) {
+	m := globRegex(glob).FindStringSubmatch(path)
+	if m == nil {
+		return "", false
+	}
+	var b strings.Builder
+	for _, tok := range strings.Split(selector, "$") {
+		if tok == "" {
+			continue
+		}
+		n, err := strconv.Atoi(tok)
+		if err != nil || n <= 0 || n >= len(m) {
+			return "", false
+		}
+		b.WriteString(m[n])
+	}
+	return b.String(), true
+}
+
+// joinDatums builds a join input's datum set (SB-074/075): each member's
+// files are bucketed by their join key; a key present in every member
+// yields the cross product of the members' file lists for that key; an
+// outer member's unmatched keys each form a datum carrying only that
+// member's file (the absent members' directories are not exposed).
+func joinDatums(views map[string]map[string]fileEntry, members []client.Input) []datum {
+	buckets := make([]map[string][]datumSide, len(members))
+	keySet := map[string]bool{}
+	for i, m := range members {
+		buckets[i] = map[string][]datumSide{}
+		for p := range views[m.Name] {
+			if key, ok := captureKey(m.Glob, m.JoinOn, p); ok {
+				buckets[i][key] = append(buckets[i][key], datumSide{ID: p, Files: []string{p}, Name: m.Name})
+				keySet[key] = true
+			}
+		}
+	}
+	// inner keys: present in every member
+	inner := map[string]bool{}
+	for k := range keySet {
+		all := true
+		for _, b := range buckets {
+			if len(b[k]) == 0 {
+				all = false
+				break
+			}
+		}
+		if all {
+			inner[k] = true
+		}
+	}
+	var out []datum
+	for _, k := range sortedKeys(inner) {
+		out = append(out, joinProduct(k, buckets)...)
+	}
+	// outer members' unmatched keys each form their own datum
+	for i, m := range members {
+		if !m.Outer {
+			continue
+		}
+		for k, files := range buckets[i] {
+			if inner[k] {
+				continue
+			}
+			for _, sd := range files {
+				id := sd.Name + "=" + sd.ID
+				out = append(out, datum{ID: id, Sides: []datumSide{sd}})
+			}
+		}
+	}
+	return out
+}
+
+// joinProduct is the cross product of the members' files for one key, one
+// datum per combination.
+func joinProduct(key string, buckets []map[string][]datumSide) []datum {
+	var out []datum
+	var rec func(int, []datumSide)
+	rec = func(i int, acc []datumSide) {
+		if i == len(buckets) {
+			id := ""
+			for _, sd := range acc {
+				if id != "" {
+					id += "+"
+				}
+				id += sd.Name + "=" + sd.ID
+			}
+			out = append(out, datum{ID: id, Sides: acc})
+			return
+		}
+		for _, sd := range buckets[i][key] {
+			rec(i+1, append(append([]datumSide{}, acc...), sd))
+		}
+	}
+	rec(0, nil)
+	return out
+}
+
+// groupDatums builds a group input's datum set (SB-076): files across all
+// members are collected by their group-by capture value — a key present in
+// any member forms a group containing every file with that key from every
+// member (union, never a cross product). A member with a join-on joins
+// first: its files pair with the other join members by their join keys,
+// and the whole pairs are then grouped.
+func groupDatums(views map[string]map[string]fileEntry, members []client.Input) []datum {
+	// group of join: pair first, then bucket the whole pairs
+	joined := false
+	for _, m := range members {
+		if m.JoinOn != "" {
+			joined = true
+			break
+		}
+	}
+	if joined {
+		units := joinUnits(views, members)
+		return groupUnits(units, members)
+	}
+	// plain group: bucket each member's files by its group key
+	groups := map[string][]datumSide{}
+	for _, m := range members {
+		for p := range views[m.Name] {
+			if key, ok := captureKey(m.Glob, m.GroupBy, p); ok {
+				groups[key] = append(groups[key], datumSide{ID: p, Files: []string{p}, Name: m.Name})
+			}
+		}
+	}
+	var out []datum
+	for _, k := range sortedSideKeys(groups) {
+		sides := groups[k]
+		id := ""
+		for _, sd := range sides {
+			if id != "" {
+				id += "+"
+			}
+			id += sd.Name + "=" + sd.ID
+		}
+		out = append(out, datum{ID: id, Sides: sides})
+	}
+	return out
+}
+
+// joinUnits pairs the join members by their join keys (inner semantics,
+// cross product within a key), returning one unit per pair — the unit is
+// the members' files of that pair.
+func joinUnits(views map[string]map[string]fileEntry, members []client.Input) [][]datumSide {
+	buckets := make([]map[string][]datumSide, len(members))
+	keySet := map[string]bool{}
+	for i, m := range members {
+		buckets[i] = map[string][]datumSide{}
+		for p := range views[m.Name] {
+			if key, ok := captureKey(m.Glob, m.JoinOn, p); ok {
+				buckets[i][key] = append(buckets[i][key], datumSide{ID: p, Files: []string{p}, Name: m.Name})
+				keySet[key] = true
+			}
+		}
+	}
+	var units [][]datumSide
+	for k := range keySet {
+		all := true
+		for _, b := range buckets {
+			if len(b[k]) == 0 {
+				all = false
+				break
+			}
+		}
+		if all {
+			for _, d := range joinProduct(k, buckets) {
+				units = append(units, d.Sides)
+			}
+		}
+	}
+	return units
+}
+
+// groupUnits buckets joined units by their group-by values; a unit's key
+// is its members' (agreeing) captured group values.
+func groupUnits(units [][]datumSide, members []client.Input) []datum {
+	groups := map[string][]datumSide{}
+	order := []string{}
+	for _, unit := range units {
+		key := ""
+		ok := true
+		for i, sd := range unit {
+			k, matched := captureKey(members[i].Glob, members[i].GroupBy, sd.ID)
+			if !matched {
+				ok = false
+				break
+			}
+			if i == 0 {
+				key = k
+			} else if k != key {
+				ok = false // the pair's sides disagree: split
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		if _, seen := groups[key]; !seen {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], unit...)
+	}
+	var out []datum
+	for _, k := range order {
+		sides := groups[k]
+		id := ""
+		for _, sd := range sides {
+			if id != "" {
+				id += "+"
+			}
+			id += sd.Name + "=" + sd.ID
+		}
+		out = append(out, datum{ID: id, Sides: sides})
+	}
+	return out
+}
+
+func sortedKeys(m map[string]bool) []string {
+	var ks []string
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+func sortedSideKeys(m map[string][]datumSide) []string {
+	var ks []string
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 // storeOutput lists a staging directory's files with their content hashes

@@ -229,6 +229,15 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Join and group inputs** — a join pairs files across repositories by a
+  captured glob group (`JoinOn` selects it, e.g. `$1` or `$1$3`): a datum
+  exists for every key present in all members, containing one file per
+  member; an outer member's unmatched keys each form a datum carrying only
+  that member's file, with the absent members' directories unexposed
+  (SB-074/075). A group collects every file sharing a `GroupBy` capture
+  value across all members into one datum (union, never a cross product),
+  and a group whose members carry join-ons joins first then groups the
+  whole pairs (SB-076)
 - **Secrets** — named typed metadata blobs with create/inspect/list/delete
   (the type is reported as "Opaque", the creation timestamp is
   system-assigned); every secret-management operation requires the

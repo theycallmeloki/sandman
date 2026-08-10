@@ -71,6 +71,24 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 	if in.Repo != "" && len(in.Cross) > 0 {
 		return fmt.Errorf("input cannot specify both a repo and a cross")
 	}
+	if len(in.Join) > 0 && len(in.Group) > 0 {
+		return fmt.Errorf("input cannot specify both a join and a group")
+	}
+	if len(in.Join) > 0 && in.Repo != "" {
+		return fmt.Errorf("input cannot specify both a repo and a join")
+	}
+	if len(in.Group) > 0 && in.Repo != "" {
+		return fmt.Errorf("input cannot specify both a repo and a group")
+	}
+	if len(in.Cross) > 0 && (in.JoinOn != "" || in.GroupBy != "") {
+		return fmt.Errorf("input cannot specify a cross with a join-on or group-by")
+	}
+	if in.JoinOn != "" && !validCaptureSelector(in.JoinOn) {
+		return fmt.Errorf("invalid join-on selector %q", in.JoinOn)
+	}
+	if in.GroupBy != "" && !validCaptureSelector(in.GroupBy) {
+		return fmt.Errorf("invalid group-by selector %q", in.GroupBy)
+	}
 	names := map[string]bool{}
 	for _, s := range inputSides(in) {
 		if s.Name == "" {
@@ -98,8 +116,29 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 		if s.Repo == pipelineName {
 			return fmt.Errorf("pipeline cannot have its output as an input")
 		}
+		if (len(s.Join) > 0 || len(s.Group) > 0) && (s.JoinOn != "" || s.GroupBy != "") {
+			return fmt.Errorf("nested joins and groups are not supported")
+		}
 	}
 	return nil
+}
+
+// validCaptureSelector checks a join-on/group-by selector: one or more
+// "$N" group references, e.g. "$1" or "$1$3".
+func validCaptureSelector(sel string) bool {
+	if sel == "" {
+		return false
+	}
+	for _, tok := range strings.Split(sel, "$") {
+		if tok == "" {
+			continue
+		}
+		n, err := strconv.Atoi(tok)
+		if err != nil || n <= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func validatePipelineSpec(p client.Pipeline) error {
@@ -1893,8 +1932,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 
 	// Resolve each side's input revision and enumerate its datums; the
-	// job's datum set is the cartesian product (SB-063). A side without a
-	// head contributes no datums, so the product is empty.
+	// job's datum set depends on the input kind: a cross takes the
+	// cartesian product (SB-063), a join pairs files by their join key
+	// (SB-074/075), a group collects files by their group key (SB-076). A
+	// side without a head contributes no datums, so the product is empty.
 	views := map[string]map[string]fileEntry{}
 	sideLists := make([][]datumSide, len(sides))
 	for i, s := range sides {
@@ -1914,7 +1955,16 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		}
 		sideLists[i] = sd
 	}
-	datums := crossDatums(sideLists)
+	in := pl.Pipeline.Input
+	var datums []datum
+	switch {
+	case len(in.Join) > 0:
+		datums = joinDatums(views, sides)
+	case len(in.Group) > 0:
+		datums = groupDatums(views, sides)
+	default:
+		datums = crossDatums(sideLists)
+	}
 	for i := range datums {
 		datums[i].Hash = datumHash(views, datums[i])
 	}
