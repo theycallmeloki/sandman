@@ -405,12 +405,8 @@ func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
 		}
 	}
 	newPaths := map[string]bool{}
-	filepath.Walk(outDir, func(p string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			if rel, err := filepath.Rel(outDir, p); err == nil {
-				newPaths[filepath.ToSlash(rel)] = true
-			}
-		}
+	walkFiles(outDir, nil, func(rel string, _ []byte) error {
+		newPaths[rel] = true
 		return nil
 	})
 	var removed []string
@@ -422,6 +418,65 @@ func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
 	sort.Strings(removed)
 	rec.Deleted = removed
 	return s.saveCommit(rec)
+}
+
+// walkFiles visits every file under dir with its content, following
+// symlinks: a symlink to a file yields the target's content at the link's
+// path, and a symlink to a directory yields the target's files under the
+// link's path prefix (SB-054 — a pipeline may emit symlinked output). A
+// depth cap breaks link cycles. linkTarget maps a symlink's target to a
+// host path when the target is container-internal (e.g. /sandman/in/...);
+// an empty result falls back to the native resolution.
+func walkFiles(dir string, linkTarget func(string) string, visit func(rel string, data []byte) error) error {
+	return walkFilesDepth(dir, "", 0, linkTarget, visit)
+}
+
+func walkFilesDepth(p, rel string, depth int, linkTarget func(string) string, visit func(rel string, data []byte) error) error {
+	if depth > 64 {
+		return fmt.Errorf("symlink depth exceeded at %q", p)
+	}
+	entries, err := os.ReadDir(p) // follows a symlinked directory
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		child := filepath.Join(p, e.Name())
+		crel := filepath.ToSlash(filepath.Join(rel, e.Name()))
+		info, err := os.Lstat(child)
+		if err != nil {
+			return err
+		}
+		resolved := child
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(child)
+			if err != nil {
+				return err
+			}
+			if linkTarget != nil {
+				if mapped := linkTarget(target); mapped != "" {
+					resolved = mapped
+				}
+			}
+			info, err = os.Stat(resolved) // follows the (possibly mapped) target
+			if err != nil {
+				return err
+			}
+		}
+		if info.IsDir() {
+			if err := walkFilesDepth(resolved, crel, depth+1, linkTarget, visit); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			return err
+		}
+		if err := visit(crel, data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // addFilesFromDir stores every file under dir into an open commit in one
@@ -438,26 +493,12 @@ func (s *apiStore) addFilesFromDir(commitID, dir string) error {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
 	var entries []fileEntry
-	walkErr := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
+	walkErr := walkFiles(dir, nil, func(rel string, data []byte) error {
 		sha, err := s.writeBlob(data)
 		if err != nil {
 			return err
 		}
-		entries = append(entries, fileEntry{Path: filepath.ToSlash(rel), SHA: sha, Size: uint64(len(data))})
+		entries = append(entries, fileEntry{Path: rel, SHA: sha, Size: uint64(len(data))})
 		return nil
 	})
 	if walkErr != nil {

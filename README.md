@@ -219,6 +219,14 @@ revisions, and jobs that run them.
   its start time, and its queue (SB-065), and `POST
   /api/v1/jobs/{id}/datums/{datumID}/restart` aborts a datum and starts
   it over with fresh progress (SB-064)
+- **Symlinked output** — a transform may emit its output as symbolic
+  links: the output revision stores the linked content (a link to a file
+  yields the target's content at the link's path; a link to a directory
+  its files), and a linked file's stored content is identical to the
+  input's — referenced, not copied (SB-054). Links to the in-container
+  input paths (`/sandman/in/...`, `/sandman/view/...`) and to temp files
+  the transform wrote (the job's directory is mounted at the container's
+  `/tmp`) are resolved when the output is scanned
 - **Cross inputs** — `input.cross` is a list of file-scoped inputs whose
   datums combine as the cartesian product (SB-063/161): a job's datum set
   is one glob match from every side. Each side is addressable by its own

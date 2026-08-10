@@ -264,6 +264,13 @@ type jobExec struct {
 	viewMu   sync.Mutex
 	viewDirs map[string]string
 
+	// tmpDir is the job's temp directory, mounted at the container's /tmp:
+	// temp files a transform creates are host-readable, so symlinks to
+	// them resolve in the output scan (SB-054).
+	tmpMu   sync.Mutex
+	tmpDir  string
+	tmpOnce sync.Once
+
 	// live worker status, persisted per event (SB-065/097)
 	workersMu sync.Mutex
 	workers   []workerStatus
@@ -548,6 +555,13 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	// materialize each side's files into its own input directory
 	var mounts []string
 	env := append([]string{}, jx.env...)
+	jx.tmpOnce.Do(func() {
+		jx.tmpDir = filepath.Join(d.jobDir(jx.id), "tmp")
+		os.MkdirAll(jx.tmpDir, 0o755)
+	})
+	if jx.tmpDir != "" {
+		mounts = append(mounts, "-v", jx.tmpDir+":/tmp")
+	}
 	for _, sd := range dt.Sides {
 		inDir := filepath.Join(dir, "in", sd.Name)
 		if err := os.MkdirAll(inDir, 0o755); err != nil {
@@ -582,6 +596,41 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	defer jx.unregisterContainer(cname)
 	jx.setActive(worker, dt.ID, started.Format(time.RFC3339Nano), cname)
 	defer jx.setActive(worker, "", "", "")
+
+	// symlinks the transform creates point at the container-internal input
+	// paths (/sandman/in/<name>/...) or at temp files it wrote (the job's
+	// /tmp mount); the host-side scan resolves both to host paths (SB-054)
+	sideDirs := map[string]string{}
+	for _, sd := range dt.Sides {
+		sideDirs[sd.Name] = filepath.Join(dir, "in", sd.Name)
+	}
+	link := func(target string) string {
+		for _, prefix := range []string{"/sandman/in/", "/sandman/view/"} {
+			if strings.HasPrefix(target, prefix) {
+				rest := strings.TrimPrefix(target, prefix)
+				name, file, hasFile := strings.Cut(rest, "/")
+				var base string
+				if b, ok := sideDirs[name]; ok {
+					base = b
+				} else {
+					jx.viewMu.Lock()
+					base = jx.viewDirs[name]
+					jx.viewMu.Unlock()
+				}
+				if base == "" {
+					return ""
+				}
+				if !hasFile {
+					return base // the whole side (a directory symlink)
+				}
+				return filepath.Join(base, filepath.FromSlash(file))
+			}
+		}
+		if strings.HasPrefix(target, "/tmp/") {
+			return filepath.Join(jx.tmpDir, filepath.FromSlash(strings.TrimPrefix(target, "/tmp/")))
+		}
+		return ""
+	}
 
 	capture, capErr := newLogCapture(d.logPath(jx.id))
 	if capErr != nil {
@@ -625,7 +674,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	}
 	accepted := tr.AcceptReturnCode != 0 && code == tr.AcceptReturnCode
 	if code == 0 || accepted {
-		files, err := d.storeOutput(outDir)
+		files, err := d.storeOutput(outDir, link)
 		if err != nil {
 			return "failed", "scan output: " + err.Error(), nil
 		}
@@ -640,7 +689,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		ecode, etail := d.runDatumContainer(jx.pl, ecname, env, mounts, outDir, capture, tr.ErrCmd, tr.ErrStdin)
 		jx.unregisterContainer(ecname)
 		if ecode == 0 {
-			files, err := d.storeOutput(outDir)
+			files, err := d.storeOutput(outDir, link)
 			if err != nil {
 				return "failed", "scan output: " + err.Error(), nil
 			}
@@ -680,31 +729,19 @@ func (d *daemon) ensureView(jx *jobExec, side string) string {
 
 // storeOutput lists a staging directory's files with their content hashes
 // and writes each file's content into the object store, so the returned
-// references are readable by hash.
-func (d *daemon) storeOutput(dir string) ([]fileRef, error) {
+// references are readable by hash. Symlinks are followed: a link to a file
+// stores the target's content, a link to a directory its files; linkTarget
+// maps container-internal symlink targets to host paths (SB-054).
+func (d *daemon) storeOutput(dir string, linkTarget func(string) string) ([]fileRef, error) {
 	var out []fileRef
-	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
+	walkErr := walkFiles(dir, linkTarget, func(rel string, data []byte) error {
 		sum := sha256.Sum256(data)
 		d.store.writeBlob(data)
-		out = append(out, fileRef{Path: filepath.ToSlash(rel), Hash: hex.EncodeToString(sum[:]), Size: uint64(len(data))})
+		out = append(out, fileRef{Path: rel, Hash: hex.EncodeToString(sum[:]), Size: uint64(len(data))})
 		return nil
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, err
+	return out, walkErr
 }
 
 // mergeOutputs writes the job's output commit content from every datum's
