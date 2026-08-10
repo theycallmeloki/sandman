@@ -219,6 +219,16 @@ revisions, and jobs that run them.
   its start time, and its queue (SB-065), and `POST
   /api/v1/jobs/{id}/datums/{datumID}/restart` aborts a datum and starts
   it over with fresh progress (SB-064)
+- **DAG propagation** — chains produce exactly one commit and one job per
+  stage per wave, repeatedly: a mid-DAG commit propagates forward only,
+  never re-triggering stages that do not consume it, and a racing pair of
+  input commits on the two sides of a cross never double-spawns the
+  pairing job (SB-021, SB-056). A job whose inputs contribute no datums
+  settles successful with nothing to produce — an empty wave never
+  propagates. A failed stage fails every downstream stage: the failure
+  propagates through the DAG as recorded, un-executed jobs, and flushing
+  the failing commit reports every stage's terminal state instead of
+  erroring (SB-022)
 - **Job queueing** — a pipeline's jobs run strictly one at a time, in
   spawn order: successive input commits queue on the pipeline's gate and
   come up in commit order, so with parallelism 1 exactly one job runs

@@ -830,11 +830,11 @@ func downstreamJobsSet(jobs []Job, commitIDs []string) []Job {
 	seen := map[string]bool{}
 	var out []Job
 	queue := []string{}
-	// direct matches: input set includes every commit in the set
+	// direct matches: input set includes every commit in the set. A job
+	// whose input set matches but has no output commit yet (queued, or a
+	// zero-datum job that settles without producing) is still the commit's
+	// job: the flush must wait for it.
 	for _, j := range jobs {
-		if j.OutputCommit == "" {
-			continue
-		}
 		got := map[string]bool{}
 		for _, ic := range j.InputCommits {
 			if set[ic] {
@@ -844,7 +844,9 @@ func downstreamJobsSet(jobs []Job, commitIDs []string) []Job {
 		if len(got) == len(set) {
 			seen[j.ID] = true
 			out = append(out, j)
-			queue = append(queue, j.OutputCommit)
+			if j.OutputCommit != "" {
+				queue = append(queue, j.OutputCommit)
+			}
 			if j.StatsCommit != "" {
 				queue = append(queue, j.StatsCommit)
 			}

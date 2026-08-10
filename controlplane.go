@@ -205,7 +205,7 @@ func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 	heads := d.pairHeads(rec.Pipeline.Input)
 	for _, h := range heads {
 		if h.ID != "" {
-			return d.spawnJob(rec, heads)
+			return d.spawnJob(rec, heads, "", "", nil)
 		}
 	}
 	return ""
@@ -227,7 +227,7 @@ var (
 // observe quiescence while a new job is on its way. heads is the job's
 // input pairing — one commit per input side, empty when a side has no
 // head (its cross contributes no datums).
-func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit) string {
+func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, id string, pre *jobRec) string {
 	if rec.Pipeline.Standby {
 		standbyMu.Lock()
 		standbyActive[rec.Pipeline.Name]++
@@ -237,8 +237,10 @@ func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit) string {
 		}
 		standbyMu.Unlock()
 	}
-	id := newJobID(d.name)
-	go d.runJob(*rec, heads, id)
+	if id == "" {
+		id = newJobID(d.name)
+	}
+	go d.runJob(*rec, heads, id, propagated, pre)
 	return id
 }
 
@@ -451,7 +453,7 @@ func (d *daemon) startPipeline(name string) error {
 	if d.hasJob(rec.Pipeline.Name, headID) {
 		return nil
 	}
-	d.spawnJob(rec, d.pairHeads(rec.Pipeline.Input))
+	d.spawnJob(rec, d.pairHeads(rec.Pipeline.Input), "", "", nil)
 	return nil
 }
 
@@ -880,10 +882,37 @@ func (d *daemon) mustListJobs() []client.Job {
 	return jobs
 }
 
+// jobByOutput finds the job that produced a commit, if any. Commits with
+// no producing job — user commits and spec commits — are not failures.
+func (d *daemon) jobByOutput(commitID string) (client.Job, bool) {
+	for _, j := range d.mustListJobs() {
+		if j.OutputCommit == commitID {
+			return j, true
+		}
+	}
+	return client.Job{}, false
+}
+
 func newJobID(node string) string {
 	b := make([]byte, 6)
 	rand.Read(b)
 	return node + "-" + hex.EncodeToString(b)
+}
+
+// newJobRec builds a job's initial record: the running state, the input
+// pairing it consumed, and the pipeline-version snapshots (SB-040/143).
+func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
+	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: "running",
+		Started: time.Now().UTC().Format(time.RFC3339Nano),
+		Version: pl.Version, Transform: pl.Pipeline.Transform, Input: pl.Pipeline.Input}
+	seen := map[string]bool{}
+	for _, h := range heads {
+		if h.ID != "" && !seen[h.ID] {
+			seen[h.ID] = true
+			rec.InputCommits = append(rec.InputCommits, h.ID)
+		}
+	}
+	return rec
 }
 
 // triggerForCommit launches one job per running pipeline subscribed to the
@@ -949,8 +978,67 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		// the pairing at trigger time: the new commit on its side, each
 		// other side at its current head (SB-120)
 		heads := d.pairHeads(rec.Pipeline.Input)
-		d.spawnJob(rec, heads)
+		// a commit produced by a failed job propagates the failure: the
+		// consuming pipeline's job is recorded failed without executing
+		// (SB-022)
+		propagated := ""
+		if j, ok := d.jobByOutput(cm.ID); ok && j.State == "failure" {
+			propagated = "upstream job " + j.ID + " failed: " + j.Reason
+		}
+		// exactly one job per input pairing: two sides' commits landing
+		// near-simultaneously can each pair with the other's fresh head,
+		// and the second trigger must not spawn a duplicate job for the
+		// same input set (SB-056: one job per wave, never extra). The
+		// duplicate check and the job record's creation are atomic, so a
+		// racing trigger sees the record instead of double-spawning.
+		triggerMu.Lock()
+		if d.hasRunningJobWithInputs(rec.Pipeline.Name, heads) {
+			triggerMu.Unlock()
+			continue
+		}
+		id := newJobID(d.name)
+		jr := newJobRec(*rec, heads, id)
+		os.MkdirAll(d.jobDir(id), 0o755) // saveJob does not create the dir
+		d.saveJob(jr)
+		triggerMu.Unlock()
+		d.spawnJob(rec, heads, propagated, id, jr)
 	}
+}
+
+// triggerMu serializes the duplicate check and the job record's creation
+// in triggerForCommit: a racing trigger for the same input pairing must
+// observe the record the first trigger just saved (SB-056).
+var triggerMu sync.Mutex
+
+// hasRunningJobWithInputs reports whether the pipeline already has a
+// non-terminal job consuming exactly this input set — the guard against
+// duplicate pairing jobs when two input sides' commits land together.
+func (d *daemon) hasRunningJobWithInputs(pipeline string, heads []client.Commit) bool {
+	set := map[string]bool{}
+	for _, h := range heads {
+		if h.ID != "" {
+			set[h.ID] = true
+		}
+	}
+	for _, j := range d.mustListJobs() {
+		if j.Pipeline != pipeline || j.State != "running" {
+			continue
+		}
+		if len(j.InputCommits) != len(set) {
+			continue
+		}
+		all := true
+		for _, ic := range j.InputCommits {
+			if !set[ic] {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // runningJob is the handle on an in-flight job's execution; pipeline is the
@@ -1433,7 +1521,7 @@ func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 // outcomes in the pipeline's dedup table. heads is the input pairing — one
 // commit per side, empty where a side has no head (SB-120's lone-input
 // job; its cross contributes no datums).
-func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
+func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated string, pre *jobRec) {
 	sides := inputSides(pl.Pipeline.Input)
 	for i := range sides {
 		if sides[i].Name == "" {
@@ -1451,15 +1539,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 	// defer covers every terminal path (success, failure, killed)
 	defer d.standbySettle(pl.Pipeline.Name)
 
-	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: "running",
-		Started: time.Now().UTC().Format(time.RFC3339Nano),
-		Version: pl.Version, Transform: pl.Pipeline.Transform, Input: pl.Pipeline.Input}
-	seen := map[string]bool{}
-	for _, h := range heads {
-		if h.ID != "" && !seen[h.ID] {
-			seen[h.ID] = true
-			rec.InputCommits = append(rec.InputCommits, h.ID)
-		}
+	rec := pre
+	if rec == nil {
+		rec = newJobRec(pl, heads, id)
 	}
 	d.saveJob(rec)
 
@@ -1480,6 +1562,23 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 		return
 	}
 	defer gate.release()
+
+	if propagated != "" {
+		// an upstream stage failed, so this stage fails too — recorded,
+		// never executed (SB-022). The empty output commit keeps the DAG's
+		// commits continuous, so the failure reaches every downstream stage
+		// and the flush can walk the chain.
+		rec.State = "failure"
+		rec.Reason = propagated
+		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		d.saveJob(rec) // terminal state durable before the commit finishes
+		if oc, err := d.store.startCommit(pl.Pipeline.Name, "", ""); err == nil {
+			rec.OutputCommit = oc.ID
+			d.saveJob(rec)
+			d.finishOutput(pl, oc, "", true)
+		}
+		return
+	}
 
 	fail := func(reason string) {
 		rec.State = "failure"
@@ -1531,6 +1630,17 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 	}
 	rec.Datums = logDatums
 	d.saveJob(rec)
+
+	// a job whose inputs contribute no datums settles successful with
+	// nothing to produce — no output commit, so an empty wave never
+	// propagates through the DAG (SB-056: exactly one commit per wave;
+	// SB-120's lone cross jobs produce nothing downstream)
+	if len(datums) == 0 {
+		rec.State = "success"
+		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		d.saveJob(rec)
+		return
+	}
 
 	// The job's container output is captured into the log store as it is
 	// produced. A capture failure degrades to no logs, never to a broken
@@ -1626,15 +1736,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 		// All-or-nothing output: finish the commit explicitly empty. A
 		// failed datum still leaves the job inspectable and the pipeline
 		// schedulable (SB-082).
-		d.finishOutput(pl, outCommit, "", true)
-		if pl.Pipeline.EnableStats {
-			// the failed job's datum records are still published on the
-			// stats branch (SB-113: output + statistics commits)
-			if statsID := d.writeStatsCommit(pl, dedup, datums); statsID != "" {
-				rec.StatsCommit = statsID
-			}
-		}
-		if rj.cancelled.Load() {
+		killed := rj.cancelled.Load()
+		if killed {
 			rec.State = "killed"
 			rec.Reason = "job cancelled"
 		} else {
@@ -1642,7 +1745,26 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 			rec.Reason = failedDatumReason(dedup, datums)
 		}
 		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		// the terminal state is durable before the output commit finishes,
+		// so the downstream trigger observes the failure (SB-022)
 		d.saveJob(rec)
+		d.finishOutput(pl, outCommit, "", true)
+		if !killed {
+			// a failed output is still a revision: every downstream stage
+			// is triggered and fails in turn (SB-022). A killed job's empty
+			// output is not a processing event — stopping a pipeline must
+			// not create spurious downstream commits (SB-020).
+			if fin, err := d.store.inspectCommit(outCommit.ID); err == nil {
+				d.triggerForCommit(fin)
+			}
+		}
+		if pl.Pipeline.EnableStats {
+			// the failed job's datum records are still published on the
+			// stats branch (SB-113: output + statistics commits)
+			if statsID := d.writeStatsCommit(pl, dedup, datums); statsID != "" {
+				rec.StatsCommit = statsID
+			}
+		}
 		d.saveDedup(pl.Pipeline.Name, dedup)
 		if rec.StatsCommit != "" {
 			if sc, err := d.store.inspectCommit(rec.StatsCommit); err == nil {
