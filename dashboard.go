@@ -44,7 +44,7 @@ func cmdDashboard(args []string) {
 	table.SetBorder(true).SetTitle(" nodes & containers ")
 
 	footer := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter).
-		SetText("[::d]q quit · ctrl-c quit[::]")
+		SetText("[::d]j/k scroll · q quit · ctrl-c quit[::]")
 
 	root := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(header, 1, 0, false).
@@ -52,12 +52,37 @@ func cmdDashboard(args []string) {
 		AddItem(footer, 1, 0, false)
 	app.SetRoot(root, true)
 
+	// Keyboard scrolling: the table clips below the fold on short terminals
+	// (mouse wheel scrolls natively); j/k/PgUp/PgDn/Home/End move the offset.
+	scrollRow := 0
+	scroll := func(delta int) {
+		scrollRow += delta
+		if scrollRow < 0 {
+			scrollRow = 0
+		}
+		table.SetOffset(scrollRow, 0)
+	}
 	app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		switch {
-		case ev.Key() == tcell.KeyCtrlC, ev.Key() == tcell.KeyEscape:
+		switch ev.Key() {
+		case tcell.KeyCtrlC, tcell.KeyEscape:
 			app.Stop()
-		case ev.Key() == tcell.KeyRune && ev.Rune() == 'q':
-			app.Stop()
+		case tcell.KeyPgUp:
+			scroll(-10)
+		case tcell.KeyPgDn:
+			scroll(10)
+		case tcell.KeyHome:
+			scroll(-1 << 30)
+		case tcell.KeyEnd:
+			scroll(1 << 30)
+		case tcell.KeyRune:
+			switch ev.Rune() {
+			case 'q':
+				app.Stop()
+			case 'j':
+				scroll(1)
+			case 'k':
+				scroll(-1)
+			}
 		}
 		return ev
 	})
@@ -71,11 +96,15 @@ func cmdDashboard(args []string) {
 			}
 		}
 		info.SetText(fmt.Sprintf("[::d]nodes %d · containers %d · %s[::]", len(stats), total, now.Format("15:04:05")))
-		drawTable(table, stats)
+		rows := drawTable(table, stats)
+		if scrollRow > rows-1 {
+			scrollRow = max(0, rows-1)
+			table.SetOffset(scrollRow, 0)
+		}
 		if unreach > 0 {
-			footer.SetText(fmt.Sprintf("[red]%d node(s) unreachable[::] · [::d]q quit · ctrl-c quit[::]", unreach))
+			footer.SetText(fmt.Sprintf("[red]%d node(s) unreachable[::] · [::d]j/k scroll · q quit · ctrl-c quit[::]", unreach))
 		} else {
-			footer.SetText("[::d]q quit · ctrl-c quit[::]")
+			footer.SetText("[::d]j/k scroll · q quit · ctrl-c quit[::]")
 		}
 	}
 
@@ -104,7 +133,7 @@ func cmdDashboard(args []string) {
 	}
 }
 
-func drawTable(t *tview.Table, stats []nodeStats) {
+func drawTable(t *tview.Table, stats []nodeStats) int {
 	t.Clear()
 	headers := []string{"CONTAINER", "IMAGE", "CPU", "MEM"}
 	for i, h := range headers {
@@ -112,7 +141,7 @@ func drawTable(t *tview.Table, stats []nodeStats) {
 	}
 	if len(stats) == 0 {
 		t.SetCell(1, 0, tview.NewTableCell("no nodes in the fleet yet — start `sandman daemon` on any host").SetTextColor(tcell.ColorGray))
-		return
+		return 2
 	}
 	row := 1
 	for _, ns := range stats {
@@ -169,6 +198,7 @@ func drawTable(t *tview.Table, stats []nodeStats) {
 			row++
 		}
 	}
+	return row
 }
 
 // pctCell formats a utilization percent, colored by load.

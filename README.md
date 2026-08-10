@@ -81,7 +81,9 @@ sandman stats | jq -r '[.node, .hostCpuPerc, .hostMemPerc] | @tsv'
 (the Go equivalent of htop's ncurses) — cell-based table layout that adapts
 to any terminal size, colors, and `q`/ctrl-c to quit. Each node row carries
 its own cpu/mem gauge; the rows below it break the node down per container.
-Any tool can consume the JSONL — the dashboard is just one consumer.
+On short terminals the table scrolls — mouse wheel, `j`/`k`, `PgUp`/`PgDn`,
+`Home`/`End`. Any tool can consume the JSONL — the dashboard is just one
+consumer.
 
 ## How it works
 
