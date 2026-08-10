@@ -228,6 +228,17 @@ func (c *Client) InspectCommit(id string) (Commit, error) {
 	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(id), nil, &out)
 }
 
+// DeleteCommit removes a commit and everything derived from it across the
+// DAG (SB-124): the commit's record, every downstream commit whose
+// provenance includes it, and the jobs that consumed them; surviving
+// commits' parent links are repaired and branch heads that pointed at a
+// removed commit move to the nearest surviving ancestor or disappear. Ref
+// is a commit id or repo@branch (the branch head). Deleting a branch head
+// supersedes an in-flight job processing it (SB-125).
+func (c *Client) DeleteCommit(ref string) error {
+	return c.do("DELETE", "/api/v1/commits/"+url.PathEscape(ref), nil, nil)
+}
+
 func (c *Client) HeadCommit(repo, branch string) (Commit, error) {
 	var out Commit
 	return out, c.do("GET", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch)+"/head", nil, &out)

@@ -1644,6 +1644,158 @@ func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 	return reason
 }
 
+// resolveCommitRef resolves a commit reference: a commit id, or
+// repo@branch meaning that branch's head.
+func (d *daemon) resolveCommitRef(ref string) (*commitRec, error) {
+	if repo, branch, ok := strings.Cut(ref, "@"); ok {
+		head, err := d.store.headCommitRec(repo, branch)
+		if err != nil {
+			return nil, err
+		}
+		return d.store.loadCommitByID(head.ID)
+	}
+	return d.store.loadCommitByID(ref)
+}
+
+// allCommitRecs enumerates every commit record in every repository.
+func (d *daemon) allCommitRecs() []*commitRec {
+	var out []*commitRec
+	repos, _ := d.store.listRepos()
+	for _, r := range repos {
+		dir := filepath.Join(d.store.repoDir(r.Name), "commits")
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			if b, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil {
+				var rec commitRec
+				if json.Unmarshal(b, &rec) == nil {
+					out = append(out, &rec)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// deleteCommit removes a commit and everything derived from it (SB-124):
+// the commit's own record, every commit in any repository whose
+// provenance includes it (transitively through the DAG), and the jobs
+// that consumed any of them. Surviving commits whose parent was removed
+// get their parent link cleared — the survivor becomes the first commit
+// of its branch — and branch heads that pointed at a removed commit move
+// to the nearest surviving ancestor or disappear. Deleting a branch head
+// supersedes an in-flight job processing it (SB-125). Deletion never
+// triggers pipelines: the surviving revisions were already processed.
+func (d *daemon) deleteCommit(ref string) error {
+	rec, err := d.resolveCommitRef(ref)
+	if err != nil {
+		return err
+	}
+	// the deletion set: the commit and every commit derived from it
+	deleted := map[string]bool{rec.ID: true}
+	for {
+		grown := false
+		for _, cm := range d.allCommitRecs() {
+			if deleted[cm.ID] {
+				continue
+			}
+			for _, leaf := range d.provenanceOf(cm.ID, map[string]bool{}) {
+				if deleted[leaf] {
+					deleted[cm.ID] = true
+					grown = true
+					break
+				}
+			}
+		}
+		if !grown {
+			break
+		}
+	}
+	// cancel in-flight jobs that consumed a deleted commit, then remove
+	// every affected job record (SB-124: job history reflects the removal;
+	// SB-125: the in-flight job is superseded, not left running)
+	for _, j := range d.mustListJobs() {
+		hit := false
+		for _, ic := range j.InputCommits {
+			if deleted[ic] {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			continue
+		}
+		d.cancelJob(j.ID) // a no-op for terminal jobs
+		os.RemoveAll(d.jobDir(j.ID))
+		os.Remove(d.logPath(j.ID))
+	}
+	// branch heads that point at a removed commit move to the nearest
+	// surviving ancestor, or the ref goes away. The repair is computed
+	// before the records are removed — a deleted head's parent chain is
+	// unrecoverable afterwards.
+	type headFix struct {
+		repo, branch, newHead string
+	}
+	var fixes []headFix
+	repos, _ := d.store.listRepos()
+	for _, r := range repos {
+		refsDir := filepath.Join(d.store.repoDir(r.Name), "refs")
+		entries, err := os.ReadDir(refsDir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			head := d.store.headCommit(r.Name, e.Name())
+			if head == "" || !deleted[head] {
+				continue
+			}
+			newHead := ""
+			for cur := head; ; {
+				cm, err := d.store.loadCommit(r.Name, cur)
+				if err != nil || cm.ParentID == "" {
+					break
+				}
+				cur = cm.ParentID
+				if !deleted[cur] {
+					newHead = cur
+					break
+				}
+			}
+			fixes = append(fixes, headFix{repo: r.Name, branch: e.Name(), newHead: newHead})
+		}
+	}
+	// remove the commit records
+	for _, cm := range d.allCommitRecs() {
+		if deleted[cm.ID] {
+			os.Remove(d.store.commitPath(cm.Repo, cm.ID))
+		}
+	}
+	// repair surviving commits: a removed parent is cleared
+	for _, cm := range d.allCommitRecs() {
+		if deleted[cm.ID] || cm.ParentID == "" {
+			continue
+		}
+		if deleted[cm.ParentID] {
+			cm.ParentID = ""
+			d.store.saveCommit(cm)
+		}
+	}
+	// apply the captured head repairs
+	for _, fx := range fixes {
+		if fx.newHead == "" {
+			os.Remove(filepath.Join(d.store.repoDir(fx.repo), "refs", fx.branch))
+		} else {
+			d.store.setHead(fx.repo, fx.branch, fx.newHead)
+		}
+	}
+	return nil
+}
+
 // runJob coordinates one job: enumerate the input sides' datums, take
 // their cartesian product, run the datums with a bounded worker pool, merge
 // their outputs into the single output commit, and record the per-datum

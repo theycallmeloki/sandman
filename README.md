@@ -229,6 +229,16 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Commit deletion** — `DeleteCommit` (by id or `repo@branch`) removes a
+  commit and everything derived from it across the whole downstream DAG:
+  every commit whose provenance includes it, and the jobs that consumed
+  them. Surviving commits whose parent was removed become the first commit
+  of their branch, and branch heads that pointed at a removed commit move
+  to the nearest surviving ancestor or disappear — the DAG stays
+  functional (SB-124). Deleting a branch head supersedes the in-flight
+  job processing it: the job is cancelled and removed, the branch reverts
+  to the previous commit, and later commits are processed normally
+  (SB-125)
 - **Output branches + deferred processing** — a pipeline's `outputBranch`
   names where its output lands (default `master`); output commits parent
   against that branch's head. Pipelines trigger on watched branch heads:

@@ -95,6 +95,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/commits/{id}/files/{path...}", hErr(d.deleteFileH))
 	mux.HandleFunc("GET /api/v1/commits/{id}/files/{path...}", hErr(d.getFileH))
 	mux.HandleFunc("GET /api/v1/commits/{id}/files", hErr(d.listFilesH))
+	mux.HandleFunc("DELETE /api/v1/commits/{id}", hErr(d.deleteCommitH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
 	mux.HandleFunc("GET /api/v1/pipelines", hErr(d.listPipelinesH))
 	mux.HandleFunc("GET /api/v1/pipelines/{name}", hErr(d.inspectPipelineH))
@@ -282,6 +283,16 @@ func (d *daemon) inspectCommitH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, cm)
+	return nil
+}
+
+// deleteCommitH deletes a commit (by id or repo@branch reference) and
+// everything derived from it across the DAG (SB-124/125).
+func (d *daemon) deleteCommitH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.deleteCommit(r.PathValue("id")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
 
