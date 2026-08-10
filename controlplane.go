@@ -1384,6 +1384,26 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, views: views,
 		viewDirs: map[string]string{}, dedup: dedup, rj: rj}
 	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
+
+	// Whole-job deadline (SB-116): at the boundary the job is cancelled and
+	// its active containers killed; it settles as killed, never as a plain
+	// failure. A job that already settled is unaffected (its containers are
+	// unregistered by then).
+	if tr := pl.Pipeline.Transform; tr.JobTimeout != "" {
+		if dur, err := time.ParseDuration(tr.JobTimeout); err == nil {
+			time.AfterFunc(dur, func() {
+				select {
+				case <-rj.done:
+					return
+				default:
+				}
+				rj.cancelled.Store(true)
+				for _, n := range rj.containerNames() {
+					exec.Command("docker", "kill", n).Run()
+				}
+			})
+		}
+	}
 	failedAny := d.runDatums(jx, todo)
 
 	for _, dt := range datums {
@@ -1492,19 +1512,11 @@ func copyDir(src, dst string) int {
 // returns its exit code plus a tail of combined stderr/stdout for failure
 // reporting. capture, when non-nil, also receives the full combined output
 // for the log store (timestamped, line-split). inName is the input's
-// environment variable name, which also names the in-container mount point.
-func (d *daemon) runPipelineContainer(pl pipelineRec, jobID, inName string, env []string, inDir, outDir string, capture io.Writer) (int, string) {
-	mounts := []string{"-v", inDir + ":/sandman/in/" + inName + ":ro"}
-	return d.runPipelineContainerNamed(pl, jobID, "sandman-"+jobID, env, mounts, outDir, capture)
-}
-
-// runPipelineContainerNamed runs the transform's container under an
-// explicit container name (per-datum containers are named after the datum
-// so a cancel can kill exactly the running ones). mounts carries the
-// per-input-side read-only mounts (each side's datum files at
-// /sandman/in/<name> and, when materialized, the side's full view at
-// /sandman/view/<name>).
-func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname string, env []string, mounts []string, outDir string, capture io.Writer) (int, string) {
+// runDatumContainer runs one command (the primary or the error handler)
+// in a throwaway container under an explicit name, with the datum's
+// per-side mounts and output directory. Returns the exit code and the
+// output tail.
+func (d *daemon) runDatumContainer(pl pipelineRec, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
 	tr := pl.Pipeline.Transform
 	image := tr.Image
 	if image == "" {
@@ -1518,7 +1530,7 @@ func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname string, 
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
-	if len(tr.Stdin) > 0 {
+	if len(stdin) > 0 {
 		args = append(args, "-i")
 	}
 	workdir := tr.Workdir
@@ -1527,7 +1539,6 @@ func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname string, 
 	}
 	args = append(args, "-w", workdir)
 
-	argv := tr.Cmd
 	if tr.User != "" {
 		// Run user code as the configured identity: create the user and
 		// working directory in-container, then su to it. Needs a
@@ -1539,8 +1550,8 @@ func (d *daemon) runPipelineContainerNamed(pl pipelineRec, jobID, cname string, 
 	}
 
 	cmd := exec.Command("docker", append(append(args, image), argv...)...)
-	if len(tr.Stdin) > 0 {
-		cmd.Stdin = strings.NewReader(strings.Join(tr.Stdin, "\n") + "\n")
+	if len(stdin) > 0 {
+		cmd.Stdin = strings.NewReader(strings.Join(stdin, "\n") + "\n")
 	}
 	var buf bytes.Buffer
 	w := io.Writer(&buf)

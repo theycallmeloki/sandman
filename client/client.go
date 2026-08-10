@@ -294,16 +294,23 @@ func (c *Client) ListFiles(commitID string) ([]FileInfo, error) {
 // runs the default entry point (see the package comment). AcceptReturnCode
 // declares one non-zero exit code that is treated as success (SB-033).
 // DatumTries retries a failing datum that many times before it is marked
-// failed (SB-134); a value of zero means one attempt.
+// failed (SB-134); a value of zero means one attempt. ErrCmd is a
+// secondary command run when the primary fails for a datum: if it
+// succeeds the datum is recovered, not failed (SB-012). DatumTimeout and
+// JobTimeout bound a datum's and a whole job's execution (SB-113/115/116).
 type Transform struct {
 	Image            string            `json:"image,omitempty"`
 	Cmd              []string          `json:"cmd,omitempty"`
 	Stdin            []string          `json:"stdin,omitempty"`
+	ErrCmd           []string          `json:"errCmd,omitempty"`
+	ErrStdin         []string          `json:"errStdin,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
 	User             string            `json:"user,omitempty"`
 	Workdir          string            `json:"workdir,omitempty"`
 	AcceptReturnCode int               `json:"acceptReturnCode,omitempty"`
 	DatumTries       int               `json:"datumTries,omitempty"`
+	DatumTimeout     string            `json:"datumTimeout,omitempty"`
+	JobTimeout       string            `json:"jobTimeout,omitempty"`
 }
 
 // Input is a file-scoped (PFS) input: files of the repo matched by Glob.

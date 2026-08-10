@@ -31,10 +31,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -347,8 +349,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 		Worker:     worker,
 	}
 	jx.setDatum(dt.ID, rec) // live record: the datum is in progress
-	var lastCode int
-	var lastTail string
+	var lastReason string
 	for attempt := 1; attempt <= tries; attempt++ {
 		if jx.canceled() {
 			rec.Outcome = "failed"
@@ -359,12 +360,12 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 			jx.setDatum(dt.ID, rec)
 			return
 		}
-		ok, code, tail, files := d.runDatumAttempt(jx, dt, index, attempt)
-		if ok {
+		outcome, reason, files := d.runDatumAttempt(jx, dt, index, attempt)
+		if outcome == "success" || outcome == "recovered" {
 			// the datum's output files are already content-addressed blobs
 			// (storeOutput): the record's references stay readable for
 			// carry-forward and the output merge
-			rec.Outcome = "success"
+			rec.Outcome = outcome
 			rec.Tries = attempt
 			rec.Files = files
 			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
@@ -372,41 +373,37 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 			jx.setDatum(dt.ID, rec)
 			return
 		}
-		lastCode, lastTail = code, tail
+		lastReason = reason
 		d.appendLogLine(jx.id, fmt.Sprintf("datum %s: errored running user code after %d attempt(s)", dt.ID, attempt))
 	}
 	rec.Outcome = "failed"
 	rec.Tries = tries
-	rec.Reason = fmt.Sprintf("exited with status %d", lastCode)
-	if lastTail != "" {
-		if r := strings.TrimSpace(lastTail); len(r) > 2000 {
-			r = r[len(r)-2000:]
-		}
-		rec.Reason += ": " + strings.TrimSpace(lastTail)
-	}
+	rec.Reason = lastReason
 	rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
 	rec.ProcessTime = time.Since(started).Seconds()
 	jx.setDatum(dt.ID, rec)
 	// a provisioning failure (the image cannot be obtained at all) is an
 	// environment problem, not a user-code failure: the pipeline enters
 	// the crashed state (SB-043, SB-091).
-	if isProvisioningError(lastTail) {
-		d.markPipelineCrashed(jx.pl.Pipeline.Name, "datum "+dt.ID+": "+strings.TrimSpace(lastTail))
+	if isProvisioningError(lastReason) {
+		d.markPipelineCrashed(jx.pl.Pipeline.Name, "datum "+dt.ID+": "+strings.TrimSpace(lastReason))
 	}
 }
 
-// runDatumAttempt materializes one datum's per-side input files, runs the
-// transform against them (the container, or the default copy entry point),
-// and returns success, the exit code, the output tail, and the produced
-// files.
-func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (bool, int, string, []fileRef) {
+// runDatumAttempt materializes one datum's per-side input files and runs
+// one attempt of the transform: the primary command, and — when it fails —
+// the error-handling command (SB-012), which may recover the datum. A
+// datum that exceeds its per-datum timeout is killed at the boundary
+// (SB-113). Returns the outcome, a diagnostic reason for failures, and the
+// produced files (nil for a failed attempt — its partial output is
+// discarded).
+func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (outcome, reason string, files []fileRef) {
 	// per-attempt staging, keyed by the datum's index so concurrent and
-	// repeated datums never share a directory; a failed attempt's partial
-	// output is discarded
+	// repeated datums never share a directory
 	dir := filepath.Join(d.jobDir(jx.id), "datum", fmt.Sprintf("%d-%d", index, attempt))
 	outDir := filepath.Join(dir, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return false, 1, err.Error(), nil
+		return "failed", err.Error(), nil
 	}
 	// materialize each side's files into its own input directory
 	var mounts []string
@@ -414,19 +411,19 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (boo
 	for _, sd := range dt.Sides {
 		inDir := filepath.Join(dir, "in", sd.Name)
 		if err := os.MkdirAll(inDir, 0o755); err != nil {
-			return false, 1, err.Error(), nil
+			return "failed", err.Error(), nil
 		}
 		for _, f := range sd.Files {
 			data, err := d.store.readBlob(jx.views[sd.Name][f].SHA)
 			if err != nil {
-				return false, 1, "materialize input: " + err.Error(), nil
+				return "failed", "materialize input: " + err.Error(), nil
 			}
 			dst := filepath.Join(inDir, filepath.FromSlash(f))
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return false, 1, err.Error(), nil
+				return "failed", err.Error(), nil
 			}
 			if err := os.WriteFile(dst, data, 0o644); err != nil {
-				return false, 1, err.Error(), nil
+				return "failed", err.Error(), nil
 			}
 		}
 		env = append(env, sd.Name+"=/sandman/in/"+sd.Name)
@@ -448,32 +445,78 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (boo
 		capture = nil
 	}
 	tr := jx.pl.Pipeline.Transform
+	var timedOut atomic.Bool
+	if tr.DatumTimeout != "" {
+		if dur, err := time.ParseDuration(tr.DatumTimeout); err == nil {
+			time.AfterFunc(dur, func() {
+				timedOut.Store(true)
+				exec.Command("docker", "kill", cname).Run()
+			})
+		}
+	}
+
+	run := func(cname string, argv, stdin []string) (int, string) {
+		if len(argv) == 0 && len(stdin) == 0 {
+			// default entry point: copy every side's files to OUT
+			code := 0
+			for _, sd := range dt.Sides {
+				inDir := filepath.Join(dir, "in", sd.Name)
+				if c := copyDir(inDir, outDir); c != 0 {
+					code = c
+				}
+			}
+			return code, ""
+		}
+		return d.runDatumContainer(jx.pl, cname, env, mounts, outDir, capture, argv, stdin)
+	}
+
 	var code int
 	var tail string
 	if len(tr.Cmd) == 0 && len(tr.Stdin) == 0 {
-		// default entry point: copy every side's files to OUT
-		code = 0
-		for _, sd := range dt.Sides {
-			inDir := filepath.Join(dir, "in", sd.Name)
-			if c := copyDir(inDir, outDir); c != 0 {
-				code = c
-			}
-		}
+		code, tail = run(cname, nil, nil) // default entry point: copy every side
 	} else {
-		code, tail = d.runPipelineContainerNamed(jx.pl, jx.id, cname, env, mounts, outDir, capture)
+		code, tail = run(cname, tr.Cmd, tr.Stdin)
 	}
 	if capture != nil {
 		capture.Close()
 	}
 	accepted := tr.AcceptReturnCode != 0 && code == tr.AcceptReturnCode
-	if code != 0 && !accepted {
-		return false, code, tail, nil
+	if code == 0 || accepted {
+		files, err := d.storeOutput(outDir)
+		if err != nil {
+			return "failed", "scan output: " + err.Error(), nil
+		}
+		return "success", "", files
 	}
-	files, err := d.storeOutput(outDir)
-	if err != nil {
-		return false, 1, "scan output: " + err.Error(), nil
+
+	// primary failed: the error-handling command runs in the same output
+	// directory and may recover the datum (SB-012)
+	if len(tr.ErrCmd) > 0 || len(tr.ErrStdin) > 0 {
+		ecname := cname + "-err"
+		jx.registerContainer(ecname)
+		ecode, etail := d.runDatumContainer(jx.pl, ecname, env, mounts, outDir, capture, tr.ErrCmd, tr.ErrStdin)
+		jx.unregisterContainer(ecname)
+		if ecode == 0 {
+			files, err := d.storeOutput(outDir)
+			if err != nil {
+				return "failed", "scan output: " + err.Error(), nil
+			}
+			return "recovered", "", files
+		}
+		tail += etail
 	}
-	return true, 0, "", files
+
+	reason = fmt.Sprintf("exited with status %d", code)
+	if timedOut.Load() {
+		reason = fmt.Sprintf("exceeded the %s datum timeout", tr.DatumTimeout)
+	}
+	if tail != "" {
+		if r := strings.TrimSpace(tail); len(r) > 2000 {
+			r = r[len(r)-2000:]
+		}
+		reason += ": " + strings.TrimSpace(tail)
+	}
+	return "failed", reason, nil
 }
 
 // ensureView materializes an input side's full view once into the job's
