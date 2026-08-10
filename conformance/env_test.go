@@ -18,14 +18,14 @@ func TestSB096_InputRepoEnvVar(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		files[fmt.Sprintf("file-%d", i)] = fmt.Sprintf("%d", i)
 	}
-	cm := commitFiles(t, repo, "master", files)
-
 	p := client.Pipeline{
 		Name:      uniq(t),
 		Transform: copyTransform(repo), // uses $<repo> to reach the input
-		Input:     client.Input{Repo: repo, Glob: "/*"},
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", files)
 
 	jobs := flushOK(t, cm.ID)
 	if len(jobs) != 1 {
@@ -48,17 +48,19 @@ func TestSB096_InputRepoEnvVar(t *testing.T) {
 func TestSB101_CustomEnvVarsVisible(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	cm := commitFiles(t, repo, "master", map[string]string{"file1": "x"})
 
 	p := client.Pipeline{
 		Name: uniq(t),
-		Transform: client.Transform{
-			Cmd: []string{"sh", "-c", "echo ${CUSTOM_ENV_VAR} > ${OUT}/value"},
-			Env: map[string]string{"CUSTOM_ENV_VAR": "custom-value"},
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "echo ${CUSTOM_ENV_VAR} > ${OUT}/value"},
+			Env:   map[string]string{"CUSTOM_ENV_VAR": "custom-value"},
 		},
-		Input: client.Input{Repo: repo},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", map[string]string{"file1": "x"})
 
 	jobs := flushOK(t, cm.ID)
 	got, err := c.GetFile(jobs[0].OutputCommit, "value")
@@ -77,18 +79,20 @@ func TestSB101_CustomEnvVarsVisible(t *testing.T) {
 func TestSB051_JobMetadataEnvVars(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	p := client.Pipeline{
 		Name: uniq(t),
-		Transform: client.Transform{
+		Transform: &client.Transform{
+			Image: "alpine",
 			Cmd: []string{"sh", "-c",
 				fmt.Sprintf(`printf '%%s' "${CUSTOM}" > ${OUT}/custom; printf '%%s' "${JOB_ID}" > ${OUT}/jobid; printf '%%s' "${OUTPUT_COMMIT}" > ${OUT}/outcommit; printf '%%s' "${%s_COMMIT}" > ${OUT}/incommit; printf '%%s' "${%s}/file" > ${OUT}/inpath`, repo, repo)},
 			Env: map[string]string{"CUSTOM": "bar"},
 		},
-		Input: client.Input{Repo: repo},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	jobs := flushOK(t, cm.ID)
 	if len(jobs) != 1 {
@@ -127,19 +131,21 @@ func TestSB051_JobMetadataEnvVars(t *testing.T) {
 func TestSB128_UserIdentityAndWorkingDir(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	p := client.Pipeline{
 		Name: uniq(t),
-		Transform: client.Transform{
+		Transform: &client.Transform{
+			Image: "alpine",
 			Cmd: []string{"sh", "-c",
 				fmt.Sprintf(`whoami > ${OUT}/whoami; pwd > ${OUT}/pwd; cp ${%s}/* ${OUT}/`, repo)},
 			User:    "test",
 			Workdir: "/home/test",
 		},
-		Input: client.Input{Repo: repo, Glob: "/*"},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	jobs := flushOK(t, cm.ID)
 	out := jobs[0].OutputCommit

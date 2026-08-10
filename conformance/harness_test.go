@@ -57,7 +57,12 @@ func TestMain(m *testing.M) {
 	}
 
 	c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
-	os.Exit(m.Run())
+	code := m.Run()
+	// os.Exit skips defers, so the daemon must die here or it keeps the
+	// inherited stderr pipe open and go test waits out its WaitDelay.
+	cmd.Process.Kill()
+	os.RemoveAll(state)
+	os.Exit(code)
 }
 
 func freePort() int {
@@ -82,21 +87,28 @@ func waitPort(port int, timeout time.Duration) bool {
 	return false
 }
 
-// uniq derives a name-unique, spec-legal identifier from the test name
-// (hyphens and underscores are allowed per SB-172; slashes are not).
+// uniq derives a name-unique, shell-identifier-safe identifier from the
+// test name. Repo names become environment variable names in jobs
+// (SB-096), so they must match [A-Za-z_][A-Za-z0-9_]* — docker rejects
+// other characters in -e names and sh misparses hyphens in ${...}.
+// Underscores stay; every other non-identifier character becomes one.
+// (SB-172 covers hyphens/underscores for pipeline names separately.)
 var uniqN int
 
 func uniq(t *testing.T) string {
 	uniqN++
 	s := strings.Map(func(r rune) rune {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
 			return r
 		default:
-			return '-'
+			return '_'
 		}
 	}, t.Name())
-	return fmt.Sprintf("%s-%d", s, uniqN)
+	if s == "" || (s[0] >= '0' && s[0] <= '9') {
+		s = "sb_" + s
+	}
+	return fmt.Sprintf("%s_%d", s, uniqN)
 }
 
 // ---- Given helpers ----
@@ -162,8 +174,9 @@ func wantErr(t *testing.T, err error, substr string) {
 
 // copyTransform is the standard pipeline transform: copy every input file
 // matched by the glob into the output directory (per SB-001).
-func copyTransform(inputName string) client.Transform {
-	return client.Transform{
-		Cmd: []string{"sh", "-c", fmt.Sprintf("cp ${%s}/* ${OUT}/", inputName)},
+func copyTransform(inputName string) *client.Transform {
+	return &client.Transform{
+		Image: "alpine",
+		Cmd:   []string{"sh", "-c", fmt.Sprintf("cp -r ${%s}/* ${OUT}/", inputName)},
 	}
 }

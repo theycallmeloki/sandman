@@ -14,14 +14,15 @@ import (
 func TestSB001_SingleInputPipelineCopiesInputFiles(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	p := client.Pipeline{
 		Name:      uniq(t),
 		Transform: copyTransform(repo),
-		Input:     client.Input{Repo: repo, Glob: "/*"},
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	jobs := flushOK(t, cm.ID)
 	if len(jobs) != 1 {
@@ -61,14 +62,15 @@ func TestSB002_RepoSizeEqualsHeadFileBytes(t *testing.T) {
 func TestSB003_NamedInputPreservesFile(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	cm := commitFiles(t, repo, "master", map[string]string{"file": "content"})
 
 	p := client.Pipeline{
 		Name:      uniq(t),
 		Transform: copyTransform("in"),
-		Input:     client.Input{Name: "in", Repo: repo, Glob: "/*"},
+		Input:     &client.Input{Name: "in", Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "content"})
 
 	jobs := flushOK(t, cm.ID)
 	out := jobs[0].OutputCommit
@@ -95,6 +97,13 @@ func TestSB005_LargeFilesPassThroughByteForByte(t *testing.T) {
 		data[i] = pattern[i%len(pattern)]
 	}
 
+	p := client.Pipeline{
+		Name:      uniq(t),
+		Transform: copyTransform(repo),
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
+	}
+	mustPipeline(t, p)
+
 	cm, err := c.StartCommit(repo, "master", "")
 	if err != nil {
 		t.Fatalf("start commit: %v", err)
@@ -105,13 +114,6 @@ func TestSB005_LargeFilesPassThroughByteForByte(t *testing.T) {
 	if _, err := c.FinishCommit(cm.ID, "", false); err != nil {
 		t.Fatalf("finish commit: %v", err)
 	}
-
-	p := client.Pipeline{
-		Name:      uniq(t),
-		Transform: copyTransform(repo),
-		Input:     client.Input{Repo: repo, Glob: "/*"},
-	}
-	mustPipeline(t, p)
 
 	jobs := flushOK(t, cm.ID)
 	out := jobs[0].OutputCommit
@@ -132,14 +134,15 @@ func TestSB005_LargeFilesPassThroughByteForByte(t *testing.T) {
 func TestSB016_EmptyFilesReachExecution(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	cm := commitFiles(t, repo, "master", map[string]string{"empty": ""})
 
 	p := client.Pipeline{
 		Name:      uniq(t),
 		Transform: copyTransform(repo),
-		Input:     client.Input{Repo: repo, Glob: "/*"},
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", map[string]string{"empty": ""})
 
 	jobs := flushOK(t, cm.ID)
 	out := jobs[0].OutputCommit

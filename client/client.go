@@ -9,14 +9,19 @@
 //   - For each pipeline input, the job receives an environment variable named
 //     after the input (its name, defaulting to the repository name) whose
 //     value is the absolute path to that input's data directory (SB-096).
+//     The name must be a valid shell identifier ([A-Za-z_][A-Za-z0-9_]*),
+//     because it is used verbatim as an environment variable name.
 //   - The job receives <NAME>_COMMIT = id of the input revision, OUT = path
 //     to the output directory, JOB_ID = job id, OUTPUT_COMMIT = output
-//     commit id (SB-051). The output directory name "out" is reserved and
-//     cannot be used as an input name (SB-170).
+//     commit id (SB-051). These four names are reserved: a custom
+//     environment variable may not shadow them. The output directory name
+//     "out" is reserved and cannot be used as an input name (SB-170).
 //   - A pipeline with no command and no stdin runs a default entry point
 //     that copies every input file to the output unchanged (SB-126). A
 //     pipeline with no command but with stdin is accepted at creation and
-//     fails when the job starts (SB-149).
+//     transitions to the failure state (SB-149).
+//   - An input's glob is required at creation (SB-159, SB-170) and selects
+//     which files of the input revision the job sees.
 //   - A commit finished with the empty flag is explicitly empty: parent
 //     content is not readable through it, even at the branch head (SB-118).
 package client
@@ -114,7 +119,7 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 
 type Repo struct {
 	Name      string   `json:"name"`
-	SizeBytes uint64   `json:"sizeBytes"` // total size of files at head of main branch
+	SizeBytes uint64   `json:"sizeBytes"` // total size of files at the head of the primary branch
 	Branches  []string `json:"branches,omitempty"`
 }
 
@@ -196,7 +201,11 @@ func (c *Client) ListFiles(commitID string) ([]FileInfo, error) {
 
 // ---- Pipelines ----
 
+// Transform is the execution description of a pipeline. Image is the
+// container image (empty means "alpine"); when Cmd is empty the pipeline
+// runs the default entry point (see the package comment).
 type Transform struct {
+	Image   string            `json:"image,omitempty"`
 	Cmd     []string          `json:"cmd,omitempty"`
 	Stdin   []string          `json:"stdin,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
@@ -204,10 +213,13 @@ type Transform struct {
 	Workdir string            `json:"workdir,omitempty"`
 }
 
+// Input is a file-scoped (PFS) input: files of the repo matched by Glob.
+// Name aliases the input's environment variable and defaults to the repo
+// name; it must be a valid shell identifier and not "out" (SB-170).
 type Input struct {
-	Name string `json:"name,omitempty"` // alias; defaults to the repository name
+	Name string `json:"name,omitempty"`
 	Repo string `json:"repo"`
-	Glob string `json:"glob,omitempty"` // defaults to "/*"
+	Glob string `json:"glob,omitempty"`
 }
 
 type Parallelism struct {
@@ -218,8 +230,8 @@ type Parallelism struct {
 type Pipeline struct {
 	Name        string       `json:"name"`
 	Description string       `json:"description,omitempty"`
-	Transform   Transform    `json:"transform"`
-	Input       Input        `json:"input"`
+	Transform   *Transform   `json:"transform"`
+	Input       *Input       `json:"input"`
 	Parallelism *Parallelism `json:"parallelism,omitempty"`
 }
 

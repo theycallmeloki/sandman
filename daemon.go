@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -61,11 +62,13 @@ func pruneOrphans(node string) {
 }
 
 // daemon is the node side of the fabric: it advertises itself, browses for
-// peers, and serves jobs over one TCP port.
+// peers, serves jobs over one TCP port, and hosts the HTTP API on the same
+// port (connections are routed by their first bytes).
 type daemon struct {
 	reg     *registry
 	state   string
 	name    string
+	store   *apiStore
 	syncIdx uint64
 	cpuBusy atomic.Uint64 // host cpu busy percent * 1000, sampled each tick
 }
@@ -133,11 +136,12 @@ func cmdDaemon(args []string) {
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
-	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name}
+	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state)}
 	if err := d.reg.loadStatic(); err != nil {
 		log.Printf("peers file: %v", err)
 	}
 	pruneOrphans(*name)
+	d.markStaleJobsFailed() // jobs running in a previous daemon died with it
 
 	server, err := advertise(*name, *port)
 	if err != nil {
@@ -201,12 +205,22 @@ func cmdDaemon(args []string) {
 		os.Exit(0)
 	}()
 
+	// The HTTP API shares this port with the text protocol. HTTP conns are
+	// routed to http.Server (keep-alive friendly) via a channel listener;
+	// the text protocol keeps its own per-connection handler.
+	apiConns := make(chan net.Conn)
+	apiSrv := &http.Server{
+		Handler:           d.apiHandler(),
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+	go apiSrv.Serve(&chanListener{ch: apiConns})
+
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go d.handleConn(c)
+		go d.serveConn(c, apiConns)
 	}
 }
 
@@ -262,10 +276,9 @@ func (d *daemon) syncOnce() {
 	}
 }
 
-func (d *daemon) handleConn(c net.Conn) {
+func (d *daemon) handleConn(c net.Conn, r *bufio.Reader) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(30 * time.Second)) // handshake window
-	r := bufio.NewReader(c)
 	w := bufio.NewWriter(c)
 
 	tok, err := readLine(r)

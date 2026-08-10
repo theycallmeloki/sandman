@@ -133,6 +133,59 @@ S: EXIT 0
 
 One job per connection, no idle timeout — long jobs hang like local processes.
 
+## The HTTP API: repos, pipelines, jobs
+
+The daemon also serves a JSON API on the **same port** — each connection is
+routed by its first bytes (an HTTP method line goes to the API, `HELLO` to
+the text protocol). This is the data and control plane: immutable revisions
+in content-addressed repositories, pipelines that turn revisions into
+revisions, and jobs that run them.
+
+- `POST/GET/DELETE /api/v1/repos[/{name}]` — repositories
+- `POST /api/v1/repos/{repo}/commits` — start a revision on a branch
+- `PUT /api/v1/commits/{id}/files/{path}` — write a file into an open revision
+- `POST /api/v1/commits/{id}/finish` — close it (`empty: true` makes it an
+  explicit empty commit: nothing is readable through it, even at the head)
+- `GET /api/v1/commits/{id}` `GET …/files` `GET …/files/{path}` — read
+- `POST/GET/DELETE /api/v1/pipelines[/{name}]` — pipelines
+- `GET /api/v1/jobs[/{id}]` — jobs. Flushing is a client-side wait: poll
+  jobs until every job for a revision is terminal (the `client.Flush`
+  helper does exactly that)
+
+**State is plain files** under the state dir — cat it:
+
+```
+repos/<repo>/refs/<branch>       one-line commit ids
+repos/<repo>/commits/<id>.json   revision records
+repos/<repo>/.objects/<sha>/…    file content, content-addressed (dedup)
+pipelines/<name>.json            pipeline records
+jobs/<id>/job.json               job records (+ in/ and out/ scratch dirs)
+```
+
+**Pipeline conventions** (the executable contract, mirrored in
+`client/` and enforced by `conformance/`): an input is a repo plus a glob,
+and the job sees each input as an environment variable named after it whose
+value is the input directory (so `$repo/*` addresses the data). Jobs also
+receive `OUT`, `JOB_ID`, `OUTPUT_COMMIT`, and `<input>_COMMIT`. Finishing a
+commit triggers one job per subscribed pipeline; the job's `OUT` directory
+becomes a new commit in the pipeline's output repo (named after the
+pipeline) — finish is recursive, so pipelines chain. A pipeline with no
+command and no stdin copies inputs to output; with stdin but no command it
+is accepted and immediately fails. Job output is all-or-nothing: a failed
+job's output commit is finished empty. Pipelines process commits finished
+*after* their creation — no backfill.
+
+```sh
+curl -X POST localhost:4242/api/v1/repos        -d '{"name":"in"}'
+curl -X POST localhost:4242/api/v1/pipelines    -d '{"name":"cp","transform":{"image":"alpine","cmd":["sh","-c","cp $in/* $OUT/"]},"input":{"repo":"in","glob":"/*"}}'
+curl -X POST localhost:4242/api/v1/repos/in/commits -d '{}'   # → commit id
+# PUT files…, finish, then flush for the job
+```
+
+The conformance suite (`go test ./conformance/`) is the behaviour contract:
+one test per spec record, driving this API through the `client` package.
+
+
 ## Security posture
 
 Trusted-LAN by design: the firewall is the auth. The daemon is the only thing
@@ -146,14 +199,17 @@ networks, or an L2 segment you control. No TLS, no tokens, no encryption (v1).
   the rest
 - No scheduler, retries, or queueing — placement is your pipeline, by design
 - No auth or encryption — see above
-- Artifacts stay in the node's scratch dir (`/var/lib/sandman/jobs/<id>/`);
-  a fetch verb is not built yet
+- Fabric `run` artifacts stay in the node's scratch dir
+  (`/var/lib/sandman/jobs/<id>/`); pipeline jobs publish to output repos
+  instead, which a fetch verb is not built for yet
+- Pipelines see one input repo and no cron/aggregate/service inputs yet
 
 ## Development
 
 ```sh
 make build        # static binary
 go vet ./...      # sanity
+go test ./conformance/   # behaviour contract: boots a daemon, drives the API
 ```
 
 Test fabric on one host (mDNS loopback lets two daemons see each other):

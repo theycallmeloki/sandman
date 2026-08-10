@@ -14,7 +14,7 @@ func TestSB039_PipelineNameUniqueness(t *testing.T) {
 	mustRepo(t, repo)
 	name := uniq(t)
 
-	p := client.Pipeline{Name: name, Transform: copyTransform(repo), Input: client.Input{Repo: repo}}
+	p := client.Pipeline{Name: name, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}}
 	mustPipeline(t, p)
 
 	err := c.CreatePipeline(p)
@@ -28,10 +28,10 @@ func TestSB090_SelfReferentialInputRejected(t *testing.T) {
 	p := client.Pipeline{
 		Name:      name,
 		Transform: copyTransform(name),
-		Input:     client.Input{Repo: name, Glob: "/"},
+		Input:     &client.Input{Repo: name, Glob: "/"},
 	}
 	err := c.CreatePipeline(p)
-	wantErr(t, err, "error") // any descriptive rejection: the pipeline must not be created
+	wantErr(t, err, "output") // a pipeline must not have its own output repo as an input
 }
 
 // SB-126 — a pipeline created without a command runs a default entry point
@@ -39,14 +39,15 @@ func TestSB090_SelfReferentialInputRejected(t *testing.T) {
 func TestSB126_CommandlessPipelineCopies(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	p := client.Pipeline{
 		Name:      uniq(t),
-		Transform: client.Transform{}, // no cmd, no stdin → default entry point
-		Input:     client.Input{Repo: repo, Glob: "/*"},
+		Transform: &client.Transform{}, // no cmd, no stdin → default entry point
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
+
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 
 	jobs := flushOK(t, cm.ID)
 	if len(jobs) != 1 {
@@ -70,11 +71,12 @@ func TestSB129_EmptyCommitsTriggerJobsNoStdinDeadlock(t *testing.T) {
 
 	p := client.Pipeline{
 		Name: uniq(t),
-		Transform: client.Transform{
+		Transform: &client.Transform{
+			Image: "alpine",
 			Cmd:   []string{"true"}, // never reads stdin
 			Stdin: []string{"data the command never reads"},
 		},
-		Input: client.Input{Repo: repo},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p)
 
@@ -98,7 +100,7 @@ func TestSB129_EmptyCommitsTriggerJobsNoStdinDeadlock(t *testing.T) {
 func TestSB147_CreateWithoutNameRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	p := client.Pipeline{Transform: copyTransform(repo), Input: client.Input{Repo: repo}}
+	p := client.Pipeline{Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}}
 	err := c.CreatePipeline(p)
 	wantErr(t, err, "pipeline")
 }
@@ -108,7 +110,7 @@ func TestSB147_CreateWithoutNameRejected(t *testing.T) {
 func TestSB148_CreateWithoutTransformRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
-	p := client.Pipeline{Name: uniq(t), Input: client.Input{Repo: repo}}
+	p := client.Pipeline{Name: uniq(t), Input: &client.Input{Repo: repo, Glob: "/*"}}
 	err := c.CreatePipeline(p)
 	wantErr(t, err, "transform")
 }
@@ -123,10 +125,11 @@ func TestSB149_NoCommandAcceptedButFailsAtStart(t *testing.T) {
 	name := uniq(t)
 	p := client.Pipeline{
 		Name: name,
-		Transform: client.Transform{
+		Transform: &client.Transform{
+			Image: "alpine",
 			Stdin: []string{"a stdin line"}, // no command
 		},
-		Input: client.Input{Repo: repo},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
 	}
 	mustPipeline(t, p) // creation succeeds
 
@@ -169,14 +172,14 @@ func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
 		want string
 	}{
 		{"no name no transform", client.Pipeline{}, "invalid pipeline spec"},
-		{"name without transform", client.Pipeline{Name: uniq(t), Input: client.Input{Repo: repo}}, "transform"},
+		{"name without transform", client.Pipeline{Name: uniq(t), Input: &client.Input{Repo: repo, Glob: "/*"}}, "transform"},
 		{"empty input", client.Pipeline{Name: uniq(t), Transform: copyTransform(repo)}, "no input set"},
-		{"input missing everything", client.Pipeline{Name: uniq(t), Transform: copyTransform(repo), Input: client.Input{}}, "input must specify a name"},
-		{"input missing repo", client.Pipeline{Name: uniq(t), Transform: copyTransform(repo), Input: client.Input{Name: "in"}}, "input must specify a repo"},
-		{"input missing glob", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: client.Input{Name: "in", Repo: repo}}, "input must specify a glob"},
-		{"input named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: client.Input{Name: "out", Repo: repo, Glob: "/*"}}, `input cannot be named "out"`},
-		{"input repo named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: client.Input{Repo: "out", Glob: "/*"}}, `input cannot be named "out"`},
-		{"nonexistent repo", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: client.Input{Name: "in", Repo: "does-not-exist", Glob: "/*"}}, "not found"},
+		{"input missing everything", client.Pipeline{Name: uniq(t), Transform: copyTransform(repo), Input: &client.Input{}}, "input must specify a name"},
+		{"input missing repo", client.Pipeline{Name: uniq(t), Transform: copyTransform(repo), Input: &client.Input{Name: "in"}}, "input must specify a repo"},
+		{"input missing glob", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Name: "in", Repo: repo}}, "input must specify a glob"},
+		{"input named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Name: "out", Repo: repo, Glob: "/*"}}, `input cannot be named "out"`},
+		{"input repo named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Repo: "out", Glob: "/*"}}, `input cannot be named "out"`},
+		{"nonexistent repo", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Name: "in", Repo: "does-not-exist", Glob: "/*"}}, "not found"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,13 +197,13 @@ func TestSB170_InputNamedOutAndMissingGlobRejected(t *testing.T) {
 
 	err := c.CreatePipeline(client.Pipeline{
 		Name: uniq(t), Transform: copyTransform("out"),
-		Input: client.Input{Name: "out", Repo: repo, Glob: "/*"},
+		Input: &client.Input{Name: "out", Repo: repo, Glob: "/*"},
 	})
 	wantErr(t, err, "out")
 
 	err = c.CreatePipeline(client.Pipeline{
 		Name: uniq(t), Transform: copyTransform("in"),
-		Input: client.Input{Name: "in", Repo: repo}, // no glob
+		Input: &client.Input{Name: "in", Repo: repo}, // no glob
 	})
 	wantErr(t, err, "glob")
 }
@@ -211,7 +214,7 @@ func TestSB171_NonexistentInputRepoRejected(t *testing.T) {
 	err := c.CreatePipeline(client.Pipeline{
 		Name:      uniq(t),
 		Transform: copyTransform("in"),
-		Input:     client.Input{Name: "in", Repo: "no-such-repo", Glob: "/*"},
+		Input:     &client.Input{Name: "in", Repo: "no-such-repo", Glob: "/*"},
 	})
 	wantErr(t, err, "not found")
 }
@@ -221,7 +224,7 @@ func TestSB172_NamesWithHyphensAndUnderscores(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := "my-pipeline_01"
-	p := client.Pipeline{Name: name, Transform: copyTransform(repo), Input: client.Input{Repo: repo}}
+	p := client.Pipeline{Name: name, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}}
 	mustPipeline(t, p)
 	if _, err := c.InspectPipeline(name); err != nil {
 		t.Fatalf("inspect: %v", err)
@@ -236,7 +239,7 @@ func TestSB173_MixedParallelismRejected(t *testing.T) {
 	err := c.CreatePipeline(client.Pipeline{
 		Name:      uniq(t),
 		Transform: copyTransform(repo),
-		Input:     client.Input{Repo: repo},
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
 		Parallelism: &client.Parallelism{
 			Constant:    1,
 			Coefficient: 1.0,
