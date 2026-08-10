@@ -131,6 +131,21 @@ func (r *registry) writeSnapshot() {
 	os.Rename(tmp, filepath.Join(r.dir, "registry"))
 }
 
+// mergeSync folds a peer learned over the wire (registry gossip) into the
+// view. Sync peers are ephemeral like mdns peers: last-seen refreshed,
+// staleness applies. Gossip is the safety net for mDNS's lossiness — the
+// kernel delivers multicast to one shared-5353 socket per packet, so a
+// specific peer pair can be starved; TCP pull of a peer's registry always
+// converges (Rule of Robustness).
+func (r *registry) mergeSync(name, addr, docker string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if name == r.own {
+		return
+	}
+	r.peers[name] = &peer{Name: name, Addr: addr, Docker: docker, Source: "sync", LastSeen: time.Now()}
+}
+
 // addStatic records a manual peer in the peers file (the attach verb).
 func addStatic(dir, name, addr string) error {
 	path := filepath.Join(dir, "peers")

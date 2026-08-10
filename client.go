@@ -87,6 +87,9 @@ func clientRun(node, state, image string, env, argv []string) {
 
 	run, err := readLine(r)
 	if err != nil || len(run) == 0 || run[0] != "RUNNING" {
+		if len(run) > 1 && run[0] == "ERR" {
+			die("node rejected job: "+strings.Join(run[1:], " "), 1)
+		}
 		die("node rejected job", 1)
 	}
 

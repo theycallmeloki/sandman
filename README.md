@@ -89,6 +89,13 @@ kept in the registry file with a last-seen timestamp and are forgotten after
 the node immediately. The registry file is the transparent view — `cat
 /var/lib/sandman/registry` is the fleet.
 
+mDNS on Linux delivers multicast to one socket per packet when several
+processes share UDP 5353 (reuseport hashing), so a specific peer pair can be
+starved while others work. The daemon therefore also gossips: each
+maintenance tick it pulls one known peer's registry over the wire (`NODES`
+verb) and merges it — mDNS bootstraps, TCP converges. Discovery is eventual,
+never a hard dependency.
+
 **Jobs.** A job is an ephemeral `docker run`: the daemon creates the container
 with a scratch workdir, starts it attached, and relays the three fds over the
 connection. Exit codes come from `docker start -a` (never `docker wait`, which

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -61,9 +62,10 @@ func pruneOrphans(node string) {
 // daemon is the node side of the fabric: it advertises itself, browses for
 // peers, and serves jobs over one TCP port.
 type daemon struct {
-	reg   *registry
-	state string
-	name  string
+	reg     *registry
+	state   string
+	name    string
+	syncIdx uint64
 }
 
 func cmdDaemon(args []string) {
@@ -108,6 +110,7 @@ func cmdDaemon(args []string) {
 			d.reg.loadStatic()
 			d.reg.prune()
 			d.reg.writeSnapshot()
+			d.syncOnce()
 		}
 	}()
 
@@ -135,6 +138,58 @@ func cmdDaemon(args []string) {
 			continue
 		}
 		go d.handleConn(c)
+	}
+}
+
+// syncOnce pulls one known peer's registry over the wire and merges it,
+// round-robin across peers per tick. mDNS bootstrap + TCP gossip: any peer
+// learned by any daemon propagates fleet-wide within a few ticks, even when
+// the kernel's shared-5353 multicast hashing starves a specific peer pair.
+func (d *daemon) syncOnce() {
+	peers := d.reg.list()
+	if len(peers) == 0 {
+		return
+	}
+	idx := int(atomic.AddUint64(&d.syncIdx, 1)-1) % len(peers)
+	p := peers[idx]
+	if p.Source == "local" {
+		return // ourselves; next tick advances the index
+	}
+	conn, err := net.DialTimeout("tcp", p.Addr, 2*time.Second)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	r := bufio.NewReader(conn)
+	w := bufio.NewWriter(conn)
+	if writeLine(w, "HELLO", ProtoVersion) != nil {
+		return
+	}
+	if ok, err := readLine(r); err != nil || len(ok) == 0 || ok[0] != "OK" {
+		return
+	}
+	if writeLine(w, "NODES") != nil {
+		return
+	}
+	head, err := readLine(r)
+	if err != nil || len(head) != 2 || head[0] != "NODES" {
+		return
+	}
+	n, _ := strconv.Atoi(head[1])
+	for i := 0; i < n; i++ {
+		tok, err := readLine(r)
+		if err != nil {
+			return
+		}
+		if len(tok) < 3 || tok[0] != "NODE" {
+			continue
+		}
+		docker := "-"
+		if len(tok) > 3 {
+			docker = tok[3]
+		}
+		d.reg.mergeSync(tok[1], tok[2], docker)
 	}
 }
 
