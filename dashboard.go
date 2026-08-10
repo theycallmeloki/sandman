@@ -123,9 +123,15 @@ func drawTable(t *tview.Table, stats []nodeStats) {
 			continue
 		}
 		t.SetCell(row, 0, tview.NewTableCell(ns.Node).SetTextColor(tcell.ColorAqua).SetAttributes(tcell.AttrBold))
-		t.SetCell(row, 1, tview.NewTableCell(ns.Addr).SetTextColor(tcell.ColorGray))
-		t.SetCell(row, 2, tview.NewTableCell("docker "+ns.Docker).SetTextColor(tcell.ColorGray))
-		t.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%d running", len(ns.Containers))).SetTextColor(tcell.ColorGray))
+		t.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("%s · %d running", ns.Addr, len(ns.Containers))).SetTextColor(tcell.ColorGray))
+		// node-level utilization: host cpu (5s sample) and real memory
+		t.SetCell(row, 2, pctCell(ns.HostCpuPerc))
+		mem := ""
+		if ns.HostMemT > 0 {
+			ratio := float64(ns.HostMemU) / float64(ns.HostMemT)
+			mem = fmt.Sprintf("%s %s / %s · %.1f%%", memBar(ratio, 14), humanBytes(ns.HostMemU), humanBytes(ns.HostMemT), ns.HostMemPerc)
+		}
+		t.SetCell(row, 3, tview.NewTableCell(mem).SetTextColor(utilColor(ns.HostMemPerc)))
 		row++
 		for _, c := range ns.Containers {
 			// Our jobs are named sandman-<jobid>; trim the prefix and leave
@@ -162,6 +168,26 @@ func drawTable(t *tview.Table, stats []nodeStats) {
 			t.SetCell(row, 3, tview.NewTableCell(mem).SetTextColor(color))
 			row++
 		}
+	}
+}
+
+// pctCell formats a utilization percent, colored by load.
+func pctCell(p float64) *tview.TableCell {
+	if p <= 0 {
+		return tview.NewTableCell("")
+	}
+	return tview.NewTableCell(fmt.Sprintf("%.1f%%", p)).SetTextColor(utilColor(p))
+}
+
+// utilColor: green idle, yellow busy, red saturated.
+func utilColor(p float64) tcell.Color {
+	switch {
+	case p > 80:
+		return tcell.ColorRed
+	case p > 40:
+		return tcell.ColorYellow
+	default:
+		return tcell.ColorGreen
 	}
 }
 

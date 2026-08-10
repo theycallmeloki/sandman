@@ -35,11 +35,16 @@ type containerInfo struct {
 }
 
 type nodeStats struct {
-	Node       string          `json:"node"`
-	Addr       string          `json:"addr"`
-	Docker     string          `json:"docker,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Containers []containerInfo `json:"containers,omitempty"`
+	Node        string          `json:"node"`
+	Addr        string          `json:"addr"`
+	Docker      string          `json:"docker,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Containers  []containerInfo `json:"containers,omitempty"`
+	HostCpus    int             `json:"hostCpus,omitempty"`
+	HostMemT    uint64          `json:"hostMemTotal,omitempty"`
+	HostMemU    uint64          `json:"hostMemUsed,omitempty"`
+	HostMemPerc float64         `json:"hostMemPerc,omitempty"` // percent
+	HostCpuPerc float64         `json:"hostCpuPerc,omitempty"` // percent, 5s sample
 }
 
 // fleetNode is one entry in the fleet view.
@@ -178,9 +183,27 @@ func queryNodeStats(n fleetNode, timeout time.Duration) nodeStats {
 		return ns
 	}
 	head, err := readLine(r)
-	if err != nil || len(head) != 2 || head[0] != "STATS" {
+	if err != nil || len(head) < 2 || head[0] != "STATS" {
 		ns.Error = "node rejected stats"
 		return ns
+	}
+	// header carries host facts: STATS <count> <hostJSON>
+	if len(head) >= 3 {
+		var host struct {
+			Cpus     int     `json:"cpus"`
+			MemTotal uint64  `json:"memTotal"`
+			MemUsed  uint64  `json:"memUsed"`
+			CPUBusy  float64 `json:"cpuBusy"`
+		}
+		if json.Unmarshal([]byte(head[2]), &host) == nil {
+			ns.HostCpus = host.Cpus
+			ns.HostMemT = host.MemTotal
+			ns.HostMemU = host.MemUsed
+			if host.MemTotal > 0 {
+				ns.HostMemPerc = 100 * float64(host.MemUsed) / float64(host.MemTotal)
+			}
+			ns.HostCpuPerc = host.CPUBusy
+		}
 	}
 	count, _ := strconv.Atoi(head[1])
 	for i := 0; i < count; i++ {

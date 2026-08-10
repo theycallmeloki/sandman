@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,6 +67,60 @@ type daemon struct {
 	state   string
 	name    string
 	syncIdx uint64
+	cpuBusy atomic.Uint64 // host cpu busy percent * 1000, sampled each tick
+}
+
+// cpuSample is one /proc/stat reading for host-wide cpu utilization.
+type cpuSample struct {
+	idle, total uint64
+}
+
+func readCpu() cpuSample {
+	b, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return cpuSample{}
+	}
+	line := strings.SplitN(string(b), "\n", 2)[0]
+	f := strings.Fields(line)
+	if len(f) < 8 {
+		return cpuSample{}
+	}
+	var total uint64
+	for _, s := range f[1:] {
+		if v, err := strconv.ParseUint(s, 10, 64); err == nil {
+			total += v
+		}
+	}
+	idle, _ := strconv.ParseUint(f[4], 10, 64) // idle
+	ioWait, _ := strconv.ParseUint(f[5], 10, 64)
+	return cpuSample{idle: idle + ioWait, total: total}
+}
+
+// readMem reads host memory totals from /proc/meminfo (kB -> bytes).
+// used = MemTotal - MemAvailable, the kernel's honest "in use" figure.
+func readMem() (total, used uint64) {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0
+	}
+	var memTotal, memAvail uint64
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		kb, err := strconv.ParseUint(f[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch f[0] {
+		case "MemTotal:":
+			memTotal = kb
+		case "MemAvailable:":
+			memAvail = kb
+		}
+	}
+	return memTotal * 1024, (memTotal - memAvail) * 1024
 }
 
 func cmdDaemon(args []string) {
@@ -99,7 +154,21 @@ func cmdDaemon(args []string) {
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
+		var last cpuSample
+		haveLast := false
 		for range t.C {
+			// host-wide cpu utilization, delta since the previous tick
+			cur := readCpu()
+			if haveLast && cur.total > last.total && cur.idle >= last.idle {
+				dIdle := cur.idle - last.idle
+				dTotal := cur.total - last.total
+				if dTotal > 0 {
+					busy := 100 * (1 - float64(dIdle)/float64(dTotal))
+					d.cpuBusy.Store(uint64(busy*1000 + 0.5))
+				}
+			}
+			last, haveLast = cur, true
+
 			ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
 			ch := make(chan *zeroconf.ServiceEntry, 64)
 			go browse(ctx, ch)
@@ -290,7 +359,22 @@ func (d *daemon) handleStats(w *bufio.Writer) {
 		}
 	}
 
-	if err := writeLine(w, "STATS", strconv.Itoa(len(conts))); err != nil {
+	// Host-level facts ride in the STATS header: cpu count, real memory
+	// totals, and host-wide cpu utilization (sampled over the 5s tick).
+	type hostStats struct {
+		Cpus     int     `json:"cpus"`
+		MemTotal uint64  `json:"memTotal"`
+		MemUsed  uint64  `json:"memUsed"`
+		CPUBusy  float64 `json:"cpuBusy"`
+	}
+	memTotal, memUsed := readMem()
+	host, _ := json.Marshal(hostStats{
+		Cpus:     runtime.NumCPU(),
+		MemTotal: memTotal,
+		MemUsed:  memUsed,
+		CPUBusy:  float64(d.cpuBusy.Load()) / 1000,
+	})
+	if err := writeLine(w, "STATS", strconv.Itoa(len(conts)), string(host)); err != nil {
 		return
 	}
 	for _, c := range conts {

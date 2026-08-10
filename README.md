@@ -67,18 +67,21 @@ sandman run b2 -- alpine sh -c 'exit 7'; echo $?    # 7
 ## Monitoring: stats and dashboard
 
 The `STATS` wire verb answers with every running container on the node plus
-live resource usage (cpu %, mem bytes/limit, pids) as JSON lines. The client
-polls every known node and emits **JSONL to stdout** — one object per node,
-pipe-friendly:
+live resource usage (cpu %, mem bytes/limit, pids) as JSON lines, and the
+host's own figures ride in the header: cpu count, real memory from
+/proc/meminfo, and host-wide cpu utilization sampled over the daemon's 5s
+tick. The client polls every known node and emits **JSONL to stdout** — one
+object per node, pipe-friendly:
 
 ```sh
-sandman stats | jq -r '[.node, ([.containers[].cpu] | add)] | @tsv'
+sandman stats | jq -r '[.node, .hostCpuPerc, .hostMemPerc] | @tsv'
 ```
 
 `sandman dashboard` is a thin renderer over the same data: a tview/tcell TUI
 (the Go equivalent of htop's ncurses) — cell-based table layout that adapts
-to any terminal size, colors, and `q`/ctrl-c to quit. Any tool can consume
-the JSONL — the dashboard is just one consumer.
+to any terminal size, colors, and `q`/ctrl-c to quit. Each node row carries
+its own cpu/mem gauge; the rows below it break the node down per container.
+Any tool can consume the JSONL — the dashboard is just one consumer.
 
 ## How it works
 
