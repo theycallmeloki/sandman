@@ -366,9 +366,13 @@ type Pipeline struct {
 	// Reprocess is a persisted spec field: every job re-executes all of
 	// its datums instead of skipping datums unchanged from a previous
 	// successful run (SB-166; D-13 — an update that sets it requests full
-	// reprocessing). Update is a request flag (create when absent, SB-040).
-	Update    bool `json:"update,omitempty"`
-	Reprocess bool `json:"reprocess,omitempty"`
+	// reprocessing). EnableStats persists per-datum statistics: a stats
+	// branch on the output repo and inspectable datum records (SB-080);
+	// it is one-way — an update cannot disable it (SB-081). Update is a
+	// request flag (create when absent, SB-040).
+	Update      bool `json:"update,omitempty"`
+	Reprocess   bool `json:"reprocess,omitempty"`
+	EnableStats bool `json:"enableStats,omitempty"`
 }
 
 // Pipeline state machine (P7): running, stopped, standby, failure, degraded,
@@ -481,6 +485,55 @@ func (c *Client) EnumerateDatums(input Input) ([]Datum, error) {
 	return out, c.do("POST", "/api/v1/datums", map[string]any{"input": input}, &out)
 }
 
+// DatumInfo is one datum's record for a job: identity, per-side input
+// files, the produced output files, outcome state (running | success |
+// recovered | failed | skipped), process time, and timing (SB-080/082/113).
+type DatumInfo struct {
+	ID          string      `json:"id"`
+	State       string      `json:"state"`
+	InputFiles  []DatumFile `json:"inputFiles,omitempty"`
+	OutputFiles []DatumFile `json:"outputFiles,omitempty"`
+	ProcessTime float64     `json:"processTime,omitempty"` // seconds
+	Started     string      `json:"started,omitempty"`
+	Finished    string      `json:"finished,omitempty"`
+	Worker      int         `json:"worker,omitempty"`
+	Reason      string      `json:"reason,omitempty"`
+}
+
+// DatumPage is a paginated datum listing (SB-080/083): the page's datums
+// plus the total page count and the served (zero-based) page index.
+type DatumPage struct {
+	Datums     []DatumInfo `json:"datums"`
+	TotalPages int         `json:"totalPages"`
+	Page       int         `json:"page"`
+}
+
+// ListDatums lists a job's datums, state-ordered (failed first, skipped
+// last — SB-082/084) and paginated. limit 0 requests everything; a page
+// index at or beyond the page count errors (SB-083).
+func (c *Client) ListDatums(jobID string, limit, page int) (DatumPage, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	if page > 0 {
+		q.Set("page", fmt.Sprintf("%d", page))
+	}
+	qs := ""
+	if len(q) > 0 {
+		qs = "?" + q.Encode()
+	}
+	var out DatumPage
+	return out, c.do("GET", "/api/v1/jobs/"+url.PathEscape(jobID)+"/datums"+qs, nil, &out)
+}
+
+// InspectDatum returns one datum's record; it errors when the pipeline
+// does not record per-datum statistics (SB-081).
+func (c *Client) InspectDatum(jobID, datumID string) (DatumInfo, error) {
+	var out DatumInfo
+	return out, c.do("GET", "/api/v1/jobs/"+url.PathEscape(jobID)+"/datums/"+url.PathEscape(datumID), nil, &out)
+}
+
 // ---- Jobs and flush ----
 
 // Job states (P7): running, success, failure, killed, skipped.
@@ -500,6 +553,9 @@ type Job struct {
 	Version   int        `json:"version,omitempty"`
 	Transform *Transform `json:"transform,omitempty"`
 	Input     *Input     `json:"input,omitempty"`
+	// StatsCommit is the job's per-datum statistics commit on the output
+	// repo's "stats" branch, when statistics are enabled (SB-086/113).
+	StatsCommit string `json:"statsCommit,omitempty"`
 	// Per-datum outcome counts (SB-012): processed (success), recovered
 	// (primary failed, error handler succeeded), failed, skipped (datum
 	// unchanged from a previous successful run).
@@ -754,6 +810,9 @@ func downstreamJobsSet(jobs []Job, commitIDs []string) []Job {
 			seen[j.ID] = true
 			out = append(out, j)
 			queue = append(queue, j.OutputCommit)
+			if j.StatsCommit != "" {
+				queue = append(queue, j.StatsCommit)
+			}
 		}
 	}
 	for len(queue) > 0 {
@@ -768,6 +827,9 @@ func downstreamJobsSet(jobs []Job, commitIDs []string) []Job {
 					seen[j.ID] = true
 					out = append(out, j)
 					queue = append(queue, j.OutputCommit)
+					if j.StatsCommit != "" {
+						queue = append(queue, j.StatsCommit)
+					}
 					break
 				}
 			}

@@ -102,6 +102,8 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", hErr(d.startPipelineH))
 	mux.HandleFunc("GET /api/v1/jobs", hErr(d.listJobsH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/datums", hErr(d.listDatumsH))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/datums/{datumID}", hErr(d.inspectDatumH))
 	mux.HandleFunc("GET /api/v1/logs", hErr(d.logsH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", hErr(d.cancelJobH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", hErr(d.cancelJobH))
@@ -439,6 +441,29 @@ func (d *daemon) startPipelineH(w http.ResponseWriter, r *http.Request) error {
 }
 
 // ---- jobs ----
+
+// listDatumsH serves GET /api/v1/jobs/{id}/datums (SB-080/083).
+func (d *daemon) listDatumsH(w http.ResponseWriter, r *http.Request) error {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	page, _ := strconv.Atoi(q.Get("page"))
+	out, err := d.listDatums(r.PathValue("id"), limit, page)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, out)
+	return nil
+}
+
+// inspectDatumH serves GET /api/v1/jobs/{id}/datums/{datumID} (SB-080).
+func (d *daemon) inspectDatumH(w http.ResponseWriter, r *http.Request) error {
+	info, err := d.inspectDatum(r.PathValue("id"), r.PathValue("datumID"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, info)
+	return nil
+}
 
 func (d *daemon) listJobsH(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()

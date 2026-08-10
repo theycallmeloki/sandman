@@ -165,6 +165,15 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 // does not schedule any job; the caller decides when the pipeline runs.
 func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	p.Update = false
+	// the output repo exists from creation: downstream pipelines can be
+	// defined against it before it has any commits (SB-086's stats branch).
+	// An existing repo (a keepRepo delete followed by a recreate, SB-157)
+	// is reused as-is.
+	if _, err := os.Stat(d.store.repoDir(p.Name)); err != nil {
+		if err := d.store.createRepo(p.Name); err != nil {
+			return nil, err
+		}
+	}
 	rec := pipelineRec{Pipeline: p, State: "running", Version: 1}
 	if len(p.Transform.Cmd) == 0 && len(p.Transform.Stdin) > 0 {
 		// No command to feed the stdin lines to: accepted, but the pipeline
@@ -303,6 +312,11 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelineRec, error) {
 	name := existing.Pipeline.Name
 	p.Update = false
+	if existing.Pipeline.EnableStats && !p.EnableStats {
+		// per-datum statistics are one-way: an update cannot disable them
+		// (SB-081)
+		return nil, fmt.Errorf("statistics cannot be disabled once enabled")
+	}
 	v := existing.Version + 1
 	rec := pipelineRec{
 		Pipeline:  p,
@@ -658,6 +672,9 @@ type jobRec struct {
 	Transform    *client.Transform `json:"transform,omitempty"`
 	Input        *client.Input     `json:"input,omitempty"`
 	Datums       []datumRef        `json:"datums,omitempty"`
+	DatumIDs     []string          `json:"datumIds,omitempty"`
+	DatumStates  map[string]string `json:"datumStates,omitempty"`
+	StatsCommit  string            `json:"statsCommit,omitempty"`
 	Processed    int               `json:"processed,omitempty"`
 	Recovered    int               `json:"recovered,omitempty"`
 	Failed       int               `json:"failed,omitempty"`
@@ -679,6 +696,7 @@ func (rec *jobRec) job() client.Job {
 		Started:      rec.Started,
 		Finished:     rec.Finished,
 		Version:      rec.Version,
+		StatsCommit:  rec.StatsCommit,
 		Processed:    rec.Processed,
 		Recovered:    rec.Recovered,
 		Failed:       rec.Failed,
@@ -1331,6 +1349,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 	for i := range datums {
 		datums[i].Hash = datumHash(views, datums[i])
 	}
+	for _, dt := range datums {
+		rec.DatumIDs = append(rec.DatumIDs, dt.ID)
+	}
+	d.saveJob(rec)
 	// the datum set for log filters is the first side's full input files
 	// (SB-060); cross jobs filter by their sides' files.
 	var logDatums []datumRef
@@ -1364,19 +1386,28 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 	// Dedup (D-13): a datum whose content is unchanged from a previous
 	// successful run is skipped — the pipeline does not pay for data it
 	// already processed — unless the pipeline reprocesses every job
-	// (SB-166). Skipped datums carry their previous output forward.
+	// (SB-166). The skip is recorded on the job, never on the shared
+	// record: the record must keep its last successful outcome so later
+	// jobs can still skip on it (SB-085). Every datum gets a placeholder
+	// record so the job's full datum set is listable mid-flight with its
+	// input files (SB-080).
 	dedup := d.loadDedup(pl.Pipeline.Name)
 	reprocess := pl.Pipeline.Reprocess
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	rec.DatumStates = map[string]string{}
 	var todo []datum
 	for _, dt := range datums {
 		if st, ok := dedup[dt.ID]; ok && !reprocess && st.Outcome == "success" && st.Hash == dt.Hash {
-			st.Outcome = "skipped"
-			st.Started = now
-			st.Finished = now
-			st.ProcessTime = 0
-			dedup[dt.ID] = st
+			rec.DatumStates[dt.ID] = "skipped"
 			continue
+		}
+		if _, ok := dedup[dt.ID]; !ok {
+			var inputFiles []fileRef
+			for _, sd := range dt.Sides {
+				for _, f := range sd.Files {
+					inputFiles = append(inputFiles, fileRef{Path: f, Hash: views[sd.Name][f].SHA, Size: views[sd.Name][f].Size})
+				}
+			}
+			dedup[dt.ID] = datumState{Hash: dt.Hash, InputFiles: inputFiles}
 		}
 		todo = append(todo, dt)
 	}
@@ -1407,7 +1438,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 	failedAny := d.runDatums(jx, todo)
 
 	for _, dt := range datums {
-		switch dedup[dt.ID].Outcome {
+		if _, ok := rec.DatumStates[dt.ID]; !ok {
+			rec.DatumStates[dt.ID] = dedup[dt.ID].Outcome
+		}
+		switch rec.DatumStates[dt.ID] {
 		case "success":
 			rec.Processed++
 		case "recovered":
@@ -1424,6 +1458,13 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 		// failed datum still leaves the job inspectable and the pipeline
 		// schedulable (SB-082).
 		d.finishOutput(pl, outCommit, "", true)
+		if pl.Pipeline.EnableStats {
+			// the failed job's datum records are still published on the
+			// stats branch (SB-113: output + statistics commits)
+			if statsID := d.writeStatsCommit(pl, dedup, datums); statsID != "" {
+				rec.StatsCommit = statsID
+			}
+		}
 		if rj.cancelled.Load() {
 			rec.State = "killed"
 			rec.Reason = "job cancelled"
@@ -1434,6 +1475,11 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
 		d.saveJob(rec)
 		d.saveDedup(pl.Pipeline.Name, dedup)
+		if rec.StatsCommit != "" {
+			if sc, err := d.store.inspectCommit(rec.StatsCommit); err == nil {
+				d.triggerForCommit(sc)
+			}
+		}
 		return
 	}
 
@@ -1461,6 +1507,14 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 		fail("upload output: " + err.Error())
 		return
 	}
+	// statistics-enabled pipelines also produce a per-job statistics
+	// commit on the output repo's "stats" branch, consumable downstream
+	// (SB-086, SB-113's two-commit count)
+	if pl.Pipeline.EnableStats {
+		if statsID := d.writeStatsCommit(pl, dedup, datums); statsID != "" {
+			rec.StatsCommit = statsID
+		}
+	}
 	rec.State = "success"
 	rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
 	d.saveJob(rec)
@@ -1468,6 +1522,11 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 
 	// The output commit is a real revision of the output repo: propagate.
 	d.triggerForCommit(fin)
+	if rec.StatsCommit != "" {
+		if sc, err := d.store.inspectCommit(rec.StatsCommit); err == nil {
+			d.triggerForCommit(sc)
+		}
+	}
 }
 
 // copyDir copies every file under src into dst, preserving relative paths

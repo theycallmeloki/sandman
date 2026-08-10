@@ -199,6 +199,17 @@ revisions, and jobs that run them.
   applies per datum. A failing datum fails the job — reason names the
   datum (SB-011) — and the job's `processed`/`recovered`/`failed`/
   `skipped` fields count the outcomes (SB-012)
+- **Per-datum statistics** — `enableStats: true` in the pipeline spec
+  (one-way: an update cannot disable it, SB-081) records each datum's
+  outcome, input/output files, process time, and timing. `GET
+  /api/v1/jobs/{id}/datums` lists them — live during execution (queued
+  datums included as pending, SB-080/114), state-ordered (failed,
+  recovered, success, skipped — SB-082/084), paginated with
+  `?limit=&page=` and an out-of-range error (SB-083); `GET
+  …/datums/{datumID}` inspects one (an error when stats are off,
+  SB-081). The pipeline's output repo gains a `stats` branch — one
+  commit per job holding one record file per datum — that downstream
+  pipelines can consume (SB-086, SB-113's two-commit count)
 - **Cross inputs** — `input.cross` is a list of file-scoped inputs whose
   datums combine as the cartesian product (SB-063/161): a job's datum set
   is one glob match from every side. Each side is addressable by its own
