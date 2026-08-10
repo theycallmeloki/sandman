@@ -219,6 +219,15 @@ revisions, and jobs that run them.
   its start time, and its queue (SB-065), and `POST
   /api/v1/jobs/{id}/datums/{datumID}/restart` aborts a datum and starts
   it over with fresh progress (SB-064)
+- **Job queueing** — a pipeline's jobs run strictly one at a time, in
+  spawn order: successive input commits queue on the pipeline's gate and
+  come up in commit order, so with parallelism 1 exactly one job runs
+  (SB-123). Cancelling the running job lets the next queued job start,
+  and cancelling one job never cancels the others; a cancel that arrives
+  while a job is queued settles it killed without doing any work. The
+  system stays correct under a burst of rapid revisions across many
+  pipelines: every revision is consumed with a job, the head converges,
+  and the job index stays queryable (SB-121)
 - **Symlinked output** — a transform may emit its output as symbolic
   links: the output revision stores the linked content (a link to a file
   yields the target's content at the link's path; a link to a directory

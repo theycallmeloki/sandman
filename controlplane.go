@@ -959,9 +959,12 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 // from a plain failure (SB-122). containers tracks the live datum
 // container names so a cancel can kill every one of them.
 type runningJob struct {
-	pipeline  string
-	cancelled atomic.Bool
-	done      chan struct{}
+	pipeline   string
+	cancelled  atomic.Bool
+	cancelCh   chan struct{}
+	cancelOnce sync.Once
+	started    atomic.Bool // the job passed the pipeline's gate
+	done       chan struct{}
 
 	containersMu sync.Mutex
 	containers   map[string]struct{}
@@ -998,7 +1001,7 @@ var (
 )
 
 func registerRunning(id, pipeline string) *runningJob {
-	rj := &runningJob{pipeline: pipeline, done: make(chan struct{})}
+	rj := &runningJob{pipeline: pipeline, cancelCh: make(chan struct{}), done: make(chan struct{})}
 	jobsMu.Lock()
 	running[id] = rj
 	jobsMu.Unlock()
@@ -1058,6 +1061,122 @@ var (
 	outputMuGuard sync.Mutex
 	outputMu      = map[string]*sync.Mutex{}
 )
+
+// jobGate serializes a pipeline's jobs in spawn order: strictly one job at
+// a time, the slot handed to the oldest waiter (SB-123). With parallelism
+// 1 the jobs of successive commits therefore come up in commit order and
+// only one runs at a time; cancelling the running job lets the next queued
+// job start, and cancelling one job never touches the others. Serializing
+// every job of a pipeline also keeps its output commits strictly ordered,
+// so a later commit's content is never stranded under an earlier commit's
+// output.
+type jobGate struct {
+	mu   sync.Mutex
+	head *jobGateNode // the next waiter to receive the slot
+	tail *jobGateNode
+	held bool // the slot is taken by a running job
+}
+
+type jobGateNode struct {
+	ch   chan struct{}
+	next *jobGateNode
+}
+
+var (
+	jobGateGuard sync.Mutex
+	jobGates     = map[string]*jobGate{}
+)
+
+func (d *daemon) jobGate(pipeline string) *jobGate {
+	jobGateGuard.Lock()
+	defer jobGateGuard.Unlock()
+	g, ok := jobGates[pipeline]
+	if !ok {
+		g = &jobGate{}
+		jobGates[pipeline] = g
+	}
+	return g
+}
+
+// enter queues the job and blocks until it is handed the slot. It returns
+// false when a cancel arrived while the job was queued (or raced the slot
+// hand-off): the job never ran, and the slot was released or passed on.
+func (g *jobGate) enter(rj *runningJob) bool {
+	n := &jobGateNode{ch: make(chan struct{})}
+	g.mu.Lock()
+	if g.tail != nil {
+		g.tail.next = n
+	} else {
+		g.head = n
+	}
+	g.tail = n
+	start := false
+	if !g.held {
+		// the gate is free: hand the slot to this job immediately
+		g.held = true
+		g.head = n.next
+		if g.head == nil {
+			g.tail = nil
+		}
+		start = true
+	}
+	g.mu.Unlock()
+	if !start {
+		select {
+		case <-n.ch:
+		case <-rj.cancelCh:
+			// cancelled while queued: unlink so the slot reaches the next
+			// waiter when the current holder releases it
+			g.remove(n)
+			return false
+		}
+	}
+	rj.started.Store(true)
+	if rj.cancelled.Load() {
+		// a cancel raced the hand-off: decline the slot
+		g.release()
+		return false
+	}
+	return true
+}
+
+// remove unlinks a still-queued node; the jobs behind it move up.
+func (g *jobGate) remove(n *jobGateNode) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var prev *jobGateNode
+	for cur := g.head; cur != nil; cur = cur.next {
+		if cur == n {
+			if prev != nil {
+				prev.next = cur.next
+			} else {
+				g.head = cur.next
+			}
+			if g.tail == cur {
+				g.tail = prev
+			}
+			return
+		}
+		prev = cur
+	}
+}
+
+// release hands the slot to the next queued job, or frees it when the
+// queue is empty.
+func (g *jobGate) release() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.head != nil {
+		n := g.head
+		g.head = n.next
+		if g.head == nil {
+			g.tail = nil
+		}
+		close(n.ch)
+		return
+	}
+	g.held = false
+}
 
 func (d *daemon) repoLock(repo string) *sync.Mutex {
 	outputMuGuard.Lock()
@@ -1130,6 +1249,14 @@ func (d *daemon) cancelJob(id string) error {
 		return nil // already terminal
 	}
 	rj.cancelled.Store(true)
+	rj.cancelOnce.Do(func() { close(rj.cancelCh) })
+	if !rj.started.Load() {
+		// the job is queued behind the pipeline's gate: it has no work to
+		// kill, and it will settle as killed when it reaches the slot's
+		// front (SB-123). Returning now lets a later job start as soon as
+		// the running one settles — a queued cancel never blocks on it.
+		return nil
+	}
 	go func() {
 		for i := 0; i < 120; i++ { // ~30s of retries, or until the job settles
 			select {
@@ -1335,6 +1462,25 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 		}
 	}
 	d.saveJob(rec)
+
+	// Per-pipeline serialization (SB-123): one job at a time, in spawn
+	// order — the record is already saved, so a queued job is visible and
+	// cancellable. A cancel that arrived while queued settles the job
+	// killed without doing any work and passes the slot on.
+	gate := d.jobGate(pl.Pipeline.Name)
+	if !gate.enter(rj) {
+		rec.State = "killed"
+		rec.Reason = "job cancelled"
+		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := os.Stat(filepath.Join(dir, "job.json")); err == nil {
+			// the record may have been deleted while the job was queued
+			// (deleteJob removes the whole job directory); never resurrect
+			d.saveJob(rec)
+		}
+		return
+	}
+	defer gate.release()
+
 	fail := func(reason string) {
 		rec.State = "failure"
 		rec.Reason = reason
