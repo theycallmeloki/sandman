@@ -188,6 +188,15 @@ revisions, and jobs that run them.
   older lines; `?follow=1` streams new lines live as they are produced
   (newline-delimited `{"line":…}` until the client disconnects). An
   unconstrained query searches every job's logs (D-21)
+- `POST /api/v1/transactions` — open a transaction; `POST
+  /api/v1/pipelines?transaction=<id>` stages a create or update into it;
+  `POST …/transactions/{id}/finish` applies every staged operation
+  atomically — all or nothing — and `DELETE …/{id}` aborts. Pipelines
+  staged together may consume each other's output (the input repo need
+  not exist yet); after finish the chain runs end to end, and updating
+  two pipelines in one transaction yields exactly one new job and one new
+  commit per pipeline. Finishing fails with "outside of transaction" if a
+  staged pipeline was modified outside the transaction meanwhile (SB-163)
 - `POST /api/v1/reset` — remove every repository, pipeline, and job;
   idempotent, and it refuses to run on corrupted metadata (D-08)
 
@@ -202,6 +211,7 @@ pipelines/<name>.json            pipeline records (current version)
 pipelines/versions/<name>/<v>.json  immutable version history (ancestry)
 jobs/<id>/job.json               job records (+ in/ and out/ scratch dirs)
 logs/<jobid>.jsonl               captured container output, timestamped lines
+transactions/<id>/000000.json    staged transaction operations, in order
 ```
 
 **Pipeline conventions** (the executable contract, mirrored in

@@ -704,6 +704,40 @@ func (c *Client) FetchFile(commitID, p string, download bool) (FileFetch, error)
 	return data, err
 }
 
+// ---- Transactions (SB-162/163) ----
+
+// StartTransaction opens a transaction and returns its id.
+func (c *Client) StartTransaction() (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := c.do("POST", "/api/v1/transactions", nil, &out); err != nil {
+		return "", err
+	}
+	return out.ID, nil
+}
+
+// CreatePipelineTx stages a pipeline create (or, with p.Update, an update)
+// into an open transaction; it takes effect only when the transaction
+// finishes. Pipelines staged together may consume each other's output
+// (SB-162).
+func (c *Client) CreatePipelineTx(p Pipeline, tx string) error {
+	return c.do("POST", "/api/v1/pipelines?transaction="+url.QueryEscape(tx), p, nil)
+}
+
+// FinishTransaction applies every staged operation atomically: either all
+// take effect or none do. It fails with an "outside of transaction" error
+// when a staged pipeline was modified outside the transaction meanwhile
+// (SB-163).
+func (c *Client) FinishTransaction(tx string) error {
+	return c.do("POST", "/api/v1/transactions/"+url.PathEscape(tx)+"/finish", nil, nil)
+}
+
+// DeleteTransaction aborts an open transaction, discarding its staged ops.
+func (c *Client) DeleteTransaction(tx string) error {
+	return c.do("DELETE", "/api/v1/transactions/"+url.PathEscape(tx), nil, nil)
+}
+
 // ---- Client-side detailed rendering (SB-036) ----
 
 func (c *Client) DescribeRepo(name string) (string, error) {

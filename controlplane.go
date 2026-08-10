@@ -54,9 +54,12 @@ var reservedEnv = map[string]bool{
 // one when the update flag is set (SB-040). The validation order is the
 // SB-159 contract: spec present, name, transform, input, then input fields
 // (name → reserved "out" → repo → glob), then cross-references
-// (self-reference before repo existence, so a pipeline never mistakes its
-// own future output repo for a missing input).
-func (d *daemon) createPipeline(p client.Pipeline) error {
+// validatePipelineSpec checks the structural SB-159 rules that do not
+// depend on surrounding store state: spec, name, transform, input name
+// (valid shell identifier, not "out"), repo, glob, self-reference, and
+// parallelism. Repo existence and name uniqueness are checked by the
+// caller (they resolve differently inside a transaction, SB-162).
+func validatePipelineSpec(p client.Pipeline) error {
 	if p.Name == "" && p.Transform == nil {
 		return fmt.Errorf("invalid pipeline spec")
 	}
@@ -91,11 +94,20 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	if in.Repo == p.Name {
 		return fmt.Errorf("pipeline cannot have its output as an input")
 	}
-	if _, err := os.Stat(d.store.repoDir(in.Repo)); err != nil {
-		return fmt.Errorf("input repo %q not found", in.Repo)
-	}
 	if p.Parallelism != nil && p.Parallelism.Constant != 0 && p.Parallelism.Coefficient != 0 {
 		return fmt.Errorf("cannot specify both a constant and a coefficient of parallelism")
+	}
+	return nil
+}
+
+// (self-reference before repo existence, so a pipeline never mistakes its
+// own future output repo for a missing input).
+func (d *daemon) createPipeline(p client.Pipeline) error {
+	if err := validatePipelineSpec(p); err != nil {
+		return err
+	}
+	if _, err := os.Stat(d.store.repoDir(p.Input.Repo)); err != nil {
+		return fmt.Errorf("input repo %q not found", p.Input.Repo)
 	}
 
 	// update (or create) branching. A corrupt record is an incomplete
@@ -113,6 +125,18 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		}
 	}
 
+	rec, err := d.applyCreate(p)
+	if err != nil {
+		return err
+	}
+	d.scheduleHeadJob(rec)
+	return nil
+}
+
+// applyCreate persists a pipeline's version-1 metadata: the spec commit
+// (SB-164) and the head record with its immutable version archive. It
+// does not schedule any job; the caller decides when the pipeline runs.
+func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	p.Update = false
 	p.Reprocess = false
 	rec := pipelineRec{Pipeline: p, State: "running", Version: 1}
@@ -128,18 +152,26 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	d.writeSpecCommit(p.Name, p, 1)
 	d.archiveVersion(&rec)
 	if err := d.savePipeline(&rec); err != nil {
-		return err
+		return nil, err
 	}
+	return &rec, nil
+}
 
-	// A pipeline created over existing history processes the current branch
-	// head once, in one output commit (SB-023, SB-053). Failure and stopped
-	// pipelines do not run.
-	if rec.State != "failure" && !rec.Stopped {
-		if head, err := d.store.headCommitRec(in.Repo, defaultBranch); err == nil && head.Finished {
-			go d.runJob(rec, head)
-		}
+// scheduleHeadJob processes the input branch head once under the pipeline's
+// current version, when there is a finished head and the pipeline is able
+// to run (SB-023, SB-053, SB-042/092/143 for updates). Failure and stopped
+// pipelines never run. It returns the spawned job's id, or "" when nothing
+// was scheduled — the caller can wait for exactly that job to settle.
+func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
+	if rec.State == "failure" || rec.Stopped {
+		return ""
 	}
-	return nil
+	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil && head.Finished {
+		id := newJobID(d.name)
+		go d.runJob(*rec, head, id)
+		return id
+	}
+	return ""
 }
 
 // updatePipeline applies a new version of an existing pipeline (SB-040).
@@ -148,9 +180,21 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 // the new transform — the version transition is itself a processing event
 // (SB-042, SB-092, SB-143). A stopped pipeline stays stopped (SB-044).
 func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error {
-	name := existing.Pipeline.Name
-	d.cancelPipelineJobs(name) // SB-045: no old-version work may race the new head job
+	d.cancelPipelineJobs(existing.Pipeline.Name) // SB-045: no old-version work may race the new head job
+	rec, err := d.applyUpdate(existing, p)
+	if err != nil {
+		return err
+	}
+	d.scheduleHeadJob(rec)
+	return nil
+}
 
+// applyUpdate persists a new version of an existing pipeline — the spec
+// commit (SB-164), the version archive, and the head record — without
+// scheduling any job. In-flight work cancellation is the caller's job so
+// a transaction can coordinate it.
+func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelineRec, error) {
+	name := existing.Pipeline.Name
 	p.Update = false
 	p.Reprocess = false
 	v := existing.Version + 1
@@ -170,14 +214,9 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 	d.writeSpecCommit(name, p, v)
 	d.archiveVersion(&rec)
 	if err := d.savePipeline(&rec); err != nil {
-		return err
+		return nil, err
 	}
-	if rec.State != "failure" && !rec.Stopped {
-		if head, err := d.store.headCommitRec(p.Input.Repo, defaultBranch); err == nil && head.Finished {
-			go d.runJob(rec, head)
-		}
-	}
-	return nil
+	return &rec, nil
 }
 
 // writeSpecCommit records one pipeline definition as a commit in the spec
@@ -278,7 +317,7 @@ func (d *daemon) startPipeline(name string) error {
 	for _, cid := range d.store.chainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt) {
 		if !d.hasJob(rec.Pipeline.Name, cid) {
 			if cm, err := d.store.inspectCommit(cid); err == nil {
-				go d.runJob(*rec, cm)
+				go d.runJob(*rec, cm, newJobID(d.name))
 			}
 		}
 	}
@@ -673,6 +712,12 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		if p.State == "failure" || p.State == "crashed" {
 			continue
 		}
+		// A pipeline whose transaction head job has not been scheduled yet
+		// must not be triggered twice: the transaction coordinator is the
+		// sole scheduler for it (SB-162: exactly one job per update).
+		if txNoteTrigger(p.Name) {
+			continue
+		}
 		rec, err := d.loadPipeline(p.Name)
 		if err != nil || rec.Pipeline.Input == nil {
 			continue
@@ -681,7 +726,7 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 			continue // stopped pipelines ignore new commits (SB-048)
 		}
 		if rec.Pipeline.Input.Repo == cm.Repo {
-			go d.runJob(*rec, cm)
+			go d.runJob(*rec, cm, newJobID(d.name))
 		}
 	}
 }
@@ -914,6 +959,7 @@ func (d *daemon) reset() error {
 	os.RemoveAll(filepath.Join(d.state, "pipelines"))
 	os.RemoveAll(filepath.Join(d.state, "jobs"))
 	os.RemoveAll(filepath.Join(d.state, "logs"))
+	os.RemoveAll(filepath.Join(d.state, "transactions"))
 	if err := os.MkdirAll(filepath.Join(d.state, "repos"), 0o755); err != nil {
 		return err
 	}
@@ -937,14 +983,14 @@ func (d *daemon) loadPipeline(name string) (*pipelineRec, error) {
 // (or the default copy entry point), upload the OUT directory into a new
 // commit of the pipeline's output repo, and finish it. All or nothing: a
 // failed job's output commit is finished empty, so partial output is never
-// observable.
-func (d *daemon) runJob(pl pipelineRec, cm client.Commit) {
+// observable. The job id is supplied by the caller so schedulers can track
+// the job they spawned.
+func (d *daemon) runJob(pl pipelineRec, cm client.Commit, id string) {
 	in := pl.Pipeline.Input
 	inName := in.Name
 	if inName == "" {
 		inName = in.Repo
 	}
-	id := newJobID(d.name)
 	dir := d.jobDir(id)
 	inDir := filepath.Join(dir, "in", inName)
 	outDir := filepath.Join(dir, "out")

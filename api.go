@@ -103,6 +103,9 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", hErr(d.cancelJobH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", hErr(d.cancelJobH))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", hErr(d.deleteJobH))
+	mux.HandleFunc("POST /api/v1/transactions", hErr(d.startTransactionH))
+	mux.HandleFunc("POST /api/v1/transactions/{id}/finish", hErr(d.finishTransactionH))
+	mux.HandleFunc("DELETE /api/v1/transactions/{id}", hErr(d.deleteTransactionH))
 	mux.HandleFunc("POST /api/v1/reset", hErr(d.resetH))
 	mux.HandleFunc("PUT /api/v1/tags/{name}", hErr(d.putTagH))
 	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
@@ -292,6 +295,14 @@ func (d *daemon) createPipelineH(w http.ResponseWriter, r *http.Request) error {
 	var p pipelineRec
 	if err := decodeBody(r, &p.Pipeline); err != nil {
 		return fmt.Errorf("invalid request body")
+	}
+	if tx := r.URL.Query().Get("transaction"); tx != "" {
+		// stage the create/update into an open transaction (SB-162/163)
+		if err := d.stageTxOp(tx, p.Pipeline); err != nil {
+			return err
+		}
+		writeJSON(w, map[string]string{"ok": "true", "transaction": tx})
+		return nil
 	}
 	if err := d.createPipeline(p.Pipeline); err != nil {
 		return err
