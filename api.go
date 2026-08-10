@@ -104,6 +104,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/datums", hErr(d.listDatumsH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/datums/{datumID}", hErr(d.inspectDatumH))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/datums/{datumID}/restart", hErr(d.restartDatumH))
 	mux.HandleFunc("GET /api/v1/logs", hErr(d.logsH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", hErr(d.cancelJobH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", hErr(d.cancelJobH))
@@ -462,6 +463,16 @@ func (d *daemon) inspectDatumH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, info)
+	return nil
+}
+
+// restartDatumH serves POST /api/v1/jobs/{id}/datums/{datumID}/restart
+// (SB-064).
+func (d *daemon) restartDatumH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.restartDatum(r.PathValue("id"), r.PathValue("datumID")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
 

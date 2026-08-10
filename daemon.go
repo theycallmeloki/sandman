@@ -71,6 +71,10 @@ type daemon struct {
 	store   *apiStore
 	syncIdx uint64
 	cpuBusy atomic.Uint64 // host cpu busy percent * 1000, sampled each tick
+
+	// liveJobs maps running job ids to their execution contexts for the
+	// datum API (restart, SB-064).
+	liveJobs sync.Map
 }
 
 // cpuSample is one /proc/stat reading for host-wide cpu utilization.

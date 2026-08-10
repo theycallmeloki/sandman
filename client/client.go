@@ -354,12 +354,38 @@ type Parallelism struct {
 	Coefficient float64 `json:"coefficient,omitempty"`
 }
 
+// ChunkSpec configures how a side's glob matches are grouped into datums
+// (SB-102): either a target number of datums or a target chunk size. It is
+// an internal scheduling knob — the output must be identical regardless.
+type ChunkSpec struct {
+	Number    int `json:"number,omitempty"`
+	SizeBytes int `json:"sizeBytes,omitempty"`
+}
+
+// WorkerStatus is one worker's live state while its job runs (SB-065/097):
+// the datum it is processing, when it started, and how many datums are
+// queued behind it (bounded by the pipeline's maxQueueSize).
+type WorkerStatus struct {
+	Worker  int    `json:"worker"`
+	Datum   string `json:"datum,omitempty"`
+	Started string `json:"started,omitempty"`
+	Queue   int    `json:"queue"`
+}
+
 type Pipeline struct {
 	Name        string       `json:"name"`
 	Description string       `json:"description,omitempty"`
 	Transform   *Transform   `json:"transform"`
 	Input       *Input       `json:"input"`
 	Parallelism *Parallelism `json:"parallelism,omitempty"`
+	ChunkSpec   *ChunkSpec   `json:"chunkSpec,omitempty"`
+	// MaxQueueSize bounds each worker's queued (not yet started) datums;
+	// a value of zero means a queue of one (SB-097). Autoscaling derives
+	// the execution scale from the datum count, capped at the configured
+	// parallelism (SB-165; the cap is never exceeded, and never more
+	// workers than datums).
+	MaxQueueSize int  `json:"maxQueueSize,omitempty"`
+	Autoscaling  bool `json:"autoscaling,omitempty"`
 	// Standby pipelines idle in the standby state and activate only when
 	// work arrives, returning to standby once it settles (SB-049/050).
 	Standby bool `json:"standby,omitempty"`
@@ -534,6 +560,13 @@ func (c *Client) InspectDatum(jobID, datumID string) (DatumInfo, error) {
 	return out, c.do("GET", "/api/v1/jobs/"+url.PathEscape(jobID)+"/datums/"+url.PathEscape(datumID), nil, &out)
 }
 
+// RestartDatum aborts a datum's current processing and starts it over:
+// the next status observation shows it running with a later start time,
+// and the job still completes (SB-064).
+func (c *Client) RestartDatum(jobID, datumID string) error {
+	return c.do("POST", "/api/v1/jobs/"+url.PathEscape(jobID)+"/datums/"+url.PathEscape(datumID)+"/restart", nil, nil)
+}
+
 // ---- Jobs and flush ----
 
 // Job states (P7): running, success, failure, killed, skipped.
@@ -563,6 +596,8 @@ type Job struct {
 	Recovered int `json:"recovered,omitempty"`
 	Failed    int `json:"failed,omitempty"`
 	Skipped   int `json:"skipped,omitempty"`
+	// Workers is the live per-worker status while the job runs (SB-065).
+	Workers []WorkerStatus `json:"workers,omitempty"`
 }
 
 func (c *Client) ListJobs() ([]Job, error) {

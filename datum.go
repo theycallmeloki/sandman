@@ -264,8 +264,38 @@ type jobExec struct {
 	viewMu   sync.Mutex
 	viewDirs map[string]string
 
+	// live worker status, persisted per event (SB-065/097)
+	workersMu sync.Mutex
+	workers   []workerStatus
+
+	// restart requests (SB-064): a datum id requested to abort and re-run
+	restartMu sync.Mutex
+	restart   map[string]bool
+
 	dedupMu sync.Mutex
 	dedup   map[string]datumState
+}
+
+// requestRestart asks that a datum's current processing be aborted and
+// restarted (SB-064).
+func (jx *jobExec) requestRestart(datumID string) {
+	jx.restartMu.Lock()
+	defer jx.restartMu.Unlock()
+	if jx.restart == nil {
+		jx.restart = map[string]bool{}
+	}
+	jx.restart[datumID] = true
+}
+
+// restartRequested reports (and clears) a pending restart for the datum.
+func (jx *jobExec) restartRequested(datumID string) bool {
+	jx.restartMu.Lock()
+	defer jx.restartMu.Unlock()
+	if jx.restart[datumID] {
+		delete(jx.restart, datumID)
+		return true
+	}
+	return false
 }
 
 func (jx *jobExec) canceled() bool {
@@ -305,8 +335,10 @@ func (jx *jobExec) unregisterContainer(name string) {
 
 // runDatums executes every datum with a bounded worker pool and reports
 // whether any datum ended failed. The pool size is the pipeline's
-// parallelism constant, capped at the datum count (SB-165: never more
-// workers than datums).
+// parallelism constant (the autoscaling cap), capped at the datum count
+// (SB-165: never more workers than datums). Each worker has a bounded
+// queue of at most maxQueueSize (default 1) pending datums (SB-097); the
+// coordinator feeds the queues round-robin, blocking on full ones.
 func (d *daemon) runDatums(jx *jobExec, todo []datum) bool {
 	workers := 1
 	if jx.pl.Pipeline.Parallelism != nil && jx.pl.Pipeline.Parallelism.Constant > 0 {
@@ -318,21 +350,36 @@ func (d *daemon) runDatums(jx *jobExec, todo []datum) bool {
 	if workers < 1 {
 		return false
 	}
-	work := make(chan int)
+	bound := 1
+	if jx.pl.Pipeline.MaxQueueSize > 0 {
+		bound = jx.pl.Pipeline.MaxQueueSize
+	}
+	chans := make([]chan int, workers)
+	jx.initWorkers(workers)
+	for w := range chans {
+		chans[w] = make(chan int, bound)
+	}
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := range work {
-				d.execDatum(jx, todo[i], w, i)
+			for i := range chans[w] {
+				// a restart (SB-064) re-runs the datum in place: no
+				// channel round-trip, so a re-queue can never hit a closed
+				// worker channel
+				for d.execDatum(jx, todo[i], w, i) {
+				}
 			}
 		}(w)
 	}
 	for i := range todo {
-		work <- i
+		chans[i%workers] <- i
+		jx.setQueue(i%workers, len(chans[i%workers]))
 	}
-	close(work)
+	for _, ch := range chans {
+		close(ch)
+	}
 	wg.Wait()
 	for _, dt := range todo {
 		if jx.dedup[dt.ID].Outcome == "failed" {
@@ -342,10 +389,74 @@ func (d *daemon) runDatums(jx *jobExec, todo []datum) bool {
 	return false
 }
 
+// workerStatus is one worker's live state, persisted at <jobDir>/workers.json
+// so job inspection sees it mid-flight (SB-065/097).
+type workerStatus struct {
+	Worker  int    `json:"worker"`
+	Datum   string `json:"datum,omitempty"`
+	Started string `json:"started,omitempty"`
+	Queue   int    `json:"queue"`
+	Cname   string `json:"cname,omitempty"` // the active container, for restart
+}
+
+func (jx *jobExec) initWorkers(n int) {
+	jx.workersMu.Lock()
+	defer jx.workersMu.Unlock()
+	jx.workers = make([]workerStatus, n)
+	for i := range jx.workers {
+		jx.workers[i].Worker = i
+	}
+	jx.saveWorkersLocked()
+}
+
+func (jx *jobExec) saveWorkers() {
+	jx.workersMu.Lock()
+	defer jx.workersMu.Unlock()
+	jx.saveWorkersLocked()
+}
+
+func (jx *jobExec) saveWorkersLocked() {
+	b, err := json.Marshal(jx.workers)
+	if err != nil {
+		return
+	}
+	p := filepath.Join(jx.d.jobDir(jx.id), "workers.json")
+	// write to a temp name then rename: an inspection never reads a torn
+	// file (the status is read live while the workers update it)
+	tmp := p + ".tmp"
+	if os.WriteFile(tmp, b, 0o644) == nil {
+		os.Rename(tmp, p)
+	}
+}
+
+// setActive records the datum a worker is processing (or "" when it
+// finished) with its start time and the active container.
+func (jx *jobExec) setActive(worker int, datumID, started, cname string) {
+	jx.workersMu.Lock()
+	if worker < len(jx.workers) {
+		jx.workers[worker].Datum = datumID
+		jx.workers[worker].Started = started
+		jx.workers[worker].Cname = cname
+	}
+	jx.saveWorkersLocked()
+	jx.workersMu.Unlock()
+}
+
+func (jx *jobExec) setQueue(worker, queue int) {
+	jx.workersMu.Lock()
+	if worker < len(jx.workers) {
+		jx.workers[worker].Queue = queue
+	}
+	jx.saveWorkersLocked()
+	jx.workersMu.Unlock()
+}
+
 // execDatum processes one datum: up to DatumTries attempts of the primary
 // command, each logged to the job log (SB-134), then the record is
-// finalized. A cancelled job stops starting attempts.
-func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
+// finalized. A cancelled job stops starting attempts; a restart request
+// (SB-064) aborts the datum mid-flight and returns true so the worker
+// re-queues it.
+func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bool) {
 	tr := jx.pl.Pipeline.Transform
 	tries := tr.DatumTries
 	if tries < 1 {
@@ -366,7 +477,8 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 	}
 	jx.setDatum(dt.ID, rec) // live record: the datum is in progress
 	var lastReason string
-	for attempt := 1; attempt <= tries; attempt++ {
+	attempt := 1
+	for {
 		if jx.canceled() {
 			rec.Outcome = "failed"
 			rec.Reason = "job cancelled"
@@ -374,9 +486,19 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
 			rec.ProcessTime = time.Since(started).Seconds()
 			jx.setDatum(dt.ID, rec)
-			return
+			return false
 		}
-		outcome, reason, files := d.runDatumAttempt(jx, dt, index, attempt)
+		if jx.restartRequested(dt.ID) {
+			// the datum's processing was aborted: re-run it from scratch
+			// with fresh progress (SB-064) — checked even after the last
+			// attempt, since the abort lands mid-attempt
+			jx.setDatum(dt.ID, datumState{Hash: dt.Hash, InputFiles: inputFiles})
+			return true
+		}
+		if attempt > tries {
+			break // all tries exhausted: finalize as failed below
+		}
+		outcome, reason, files := d.runDatumAttempt(jx, dt, index, attempt, started, worker)
 		if outcome == "success" || outcome == "recovered" {
 			// the datum's output files are already content-addressed blobs
 			// (storeOutput): the record's references stay readable for
@@ -387,10 +509,11 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
 			rec.ProcessTime = time.Since(started).Seconds()
 			jx.setDatum(dt.ID, rec)
-			return
+			return false
 		}
 		lastReason = reason
 		d.appendLogLine(jx.id, fmt.Sprintf("datum %s: errored running user code after %d attempt(s)", dt.ID, attempt))
+		attempt++
 	}
 	rec.Outcome = "failed"
 	rec.Tries = tries
@@ -404,6 +527,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 	if isProvisioningError(lastReason) {
 		d.markPipelineCrashed(jx.pl.Pipeline.Name, "datum "+dt.ID+": "+strings.TrimSpace(lastReason))
 	}
+	return false
 }
 
 // runDatumAttempt materializes one datum's per-side input files and runs
@@ -413,7 +537,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) {
 // (SB-113). Returns the outcome, a diagnostic reason for failures, and the
 // produced files (nil for a failed attempt — its partial output is
 // discarded).
-func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (outcome, reason string, files []fileRef) {
+func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, started time.Time, worker int) (outcome, reason string, files []fileRef) {
 	// per-attempt staging, keyed by the datum's index so concurrent and
 	// repeated datums never share a directory
 	dir := filepath.Join(d.jobDir(jx.id), "datum", fmt.Sprintf("%d-%d", index, attempt))
@@ -451,10 +575,13 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int) (out
 		}
 	}
 
-	// the container is registered so a cancel can kill it mid-flight
+	// the container is registered so a cancel can kill it mid-flight; the
+	// worker status exposes the datum in progress (SB-064/065/097)
 	cname := fmt.Sprintf("sandman-%s-%d-%d", jx.id, index, attempt)
 	jx.registerContainer(cname)
 	defer jx.unregisterContainer(cname)
+	jx.setActive(worker, dt.ID, started.Format(time.RFC3339Nano), cname)
+	defer jx.setActive(worker, "", "", "")
 
 	capture, capErr := newLogCapture(d.logPath(jx.id))
 	if capErr != nil {
@@ -615,6 +742,71 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum) error {
 	return nil
 }
 
+// mergeSides combines same-name side datums into one (a chunk).
+func mergeSides(sides []datumSide) datumSide {
+	var out datumSide
+	for _, s := range sides {
+		out.Name = s.Name
+		if out.ID != "" {
+			out.ID += ","
+		}
+		out.ID += s.ID
+		out.Files = append(out.Files, s.Files...)
+	}
+	return out
+}
+
+// sideSize sums a side datum's file sizes.
+func sideSize(s datumSide, view map[string]fileEntry) uint64 {
+	var n uint64
+	for _, f := range s.Files {
+		n += view[f].Size
+	}
+	return n
+}
+
+// chunkSideDatums groups a side's datums into chunks (SB-102): a target
+// datum count (number) or a target chunk size in bytes. Files are never
+// split; the grouped datum's identity joins its members', so dedup keys
+// stay stable across jobs with the same chunking.
+func chunkSideDatums(sd []datumSide, spec *client.ChunkSpec, view map[string]fileEntry) []datumSide {
+	if spec == nil || (spec.Number <= 0 && spec.SizeBytes <= 0) {
+		return sd
+	}
+	if spec.Number > 0 {
+		per := (len(sd) + spec.Number - 1) / spec.Number
+		if per < 1 {
+			per = 1
+		}
+		var out []datumSide
+		for i := 0; i < len(sd); i += per {
+			end := i + per
+			if end > len(sd) {
+				end = len(sd)
+			}
+			out = append(out, mergeSides(sd[i:end]))
+		}
+		return out
+	}
+	var out []datumSide
+	var cur []datumSide
+	var curSize uint64
+	for _, s := range sd {
+		size := sideSize(s, view)
+		if len(cur) > 0 && curSize+size > uint64(spec.SizeBytes) {
+			out = append(out, mergeSides(cur))
+			cur = nil
+			curSize = 0
+		}
+		cur = append(cur, s)
+		curSize += size
+	}
+	if len(cur) > 0 {
+		out = append(out, mergeSides(cur))
+	}
+	return out
+}
+
 // ---- the datum API (per-datum statistics, SB-080/081/082/083/084) ----
 
 // writeStatsCommit publishes a job's per-datum records as a commit on the
@@ -644,6 +836,41 @@ func (d *daemon) writeStatsCommit(pl pipelineRec, dedup map[string]datumState, d
 		return ""
 	}
 	return fin.ID
+}
+
+// restartDatum aborts a datum's current processing and starts it over
+// (SB-064): the running container is killed, the datum's record is reset,
+// and the worker re-queues it, so the next status observation shows it
+// running with a fresh, later start time.
+func (d *daemon) restartDatum(jobID, datumID string) error {
+	v, ok := d.liveJobs.Load(jobID)
+	if !ok {
+		return fmt.Errorf("job %q is not running", jobID)
+	}
+	jx := v.(*jobExec)
+	var cname string
+	jx.workersMu.Lock()
+	for _, ws := range jx.workers {
+		if ws.Datum == datumID {
+			cname = ws.Cname
+			break
+		}
+	}
+	jx.workersMu.Unlock()
+	if cname == "" {
+		return fmt.Errorf("datum %q is not currently being processed", datumID)
+	}
+	jx.requestRestart(datumID)
+	// the container may still be starting (the record is written on
+	// pick-up, before docker run creates it): retry the kill until it
+	// lands (SB-064)
+	for i := 0; i < 50; i++ { // ~10s
+		if exec.Command("docker", "kill", cname).Run() == nil {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("datum %q container %s did not terminate", datumID, cname)
 }
 
 // statsEnabled reports whether the pipeline currently records per-datum

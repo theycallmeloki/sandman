@@ -822,19 +822,37 @@ func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string
 	return out, nil
 }
 func (d *daemon) inspectJob(id string) (client.Job, error) {
+	var info client.Job
 	if b, err := os.ReadFile(filepath.Join(d.jobDir(id), "job.json")); err == nil {
 		var rec jobRec
 		if json.Unmarshal(b, &rec) == nil {
-			return rec.job(), nil
+			info = rec.job()
 		}
 	}
 	// a job may also be keyed by the output commit it produced (SB-135)
-	for _, j := range d.mustListJobs() {
-		if j.OutputCommit == id {
-			return j, nil
+	if info.ID == "" {
+		for _, j := range d.mustListJobs() {
+			if j.OutputCommit == id {
+				info = j
+				break
+			}
 		}
 	}
-	return client.Job{}, fmt.Errorf("job %q not found: specify a Job or an OutputCommit", id)
+	if info.ID == "" {
+		return client.Job{}, fmt.Errorf("job %q not found: specify a Job or an OutputCommit", id)
+	}
+	// the live per-worker status (SB-065/097)
+	if b, err := os.ReadFile(filepath.Join(d.jobDir(info.ID), "workers.json")); err == nil {
+		var ws []workerStatus
+		if json.Unmarshal(b, &ws) == nil {
+			for _, w := range ws {
+				info.Workers = append(info.Workers, client.WorkerStatus{
+					Worker: w.Worker, Datum: w.Datum, Started: w.Started, Queue: w.Queue,
+				})
+			}
+		}
+	}
+	return info, nil
 }
 
 // markStaleJobsFailed repairs the state after a daemon restart: jobs that
@@ -1340,6 +1358,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 		}
 		views[s.Name] = view
 		sd := enumerateDatums(view, s.Glob)
+		sd = chunkSideDatums(sd, pl.Pipeline.ChunkSpec, view)
 		for j := range sd {
 			sd[j].Name = s.Name
 		}
@@ -1415,6 +1434,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id string) {
 	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, views: views,
 		viewDirs: map[string]string{}, dedup: dedup, rj: rj}
 	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
+	// the live execution context is visible to the datum API (restart,
+	// SB-064) while the job runs
+	d.liveJobs.Store(id, jx)
+	defer d.liveJobs.Delete(id)
 
 	// Whole-job deadline (SB-116): at the boundary the job is cancelled and
 	// its active containers killed; it settles as killed, never as a plain

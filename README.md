@@ -210,6 +210,15 @@ revisions, and jobs that run them.
   SB-081). The pipeline's output repo gains a `stats` branch — one
   commit per job holding one record file per datum — that downstream
   pipelines can consume (SB-086, SB-113's two-commit count)
+- **Scheduling knobs** — `chunkSpec` (a target datum count or chunk size)
+  groups a side's glob matches into datums without changing the output
+  (SB-102); `maxQueueSize` bounds each worker's pending datums (SB-097);
+  `autoscaling` sizes the worker pool to the datum count, capped at the
+  configured parallelism (SB-165, D-01's scale-to-zero via standby). A
+  running job's `workers` status reports each worker's current datum,
+  its start time, and its queue (SB-065), and `POST
+  /api/v1/jobs/{id}/datums/{datumID}/restart` aborts a datum and starts
+  it over with fresh progress (SB-064)
 - **Cross inputs** — `input.cross` is a list of file-scoped inputs whose
   datums combine as the cartesian product (SB-063/161): a job's datum set
   is one glob match from every side. Each side is addressable by its own
