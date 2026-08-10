@@ -99,6 +99,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", hErr(d.startPipelineH))
 	mux.HandleFunc("GET /api/v1/jobs", hErr(d.listJobsH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
+	mux.HandleFunc("GET /api/v1/logs", hErr(d.logsH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", hErr(d.cancelJobH))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", hErr(d.cancelJobH))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", hErr(d.deleteJobH))

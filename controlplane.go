@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -460,6 +461,7 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 	for _, j := range d.mustListJobs() {
 		if j.Pipeline == name {
 			os.RemoveAll(d.jobDir(j.ID))
+			os.Remove(d.logPath(j.ID))
 		}
 	}
 	os.Remove(d.pipelinePath(name))
@@ -474,6 +476,14 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 }
 
 // ---- jobs ----
+
+// datumRef is one input file of a job — its path and content hash — the
+// per-datum handle for log filters (SB-060). A job's datum set is the
+// input revision's full view.
+type datumRef struct {
+	Path string `json:"path"`
+	Hash string `json:"hash"`
+}
 
 // jobRec is the persisted form of a job. Version, Transform, and Input are
 // snapshots of the pipeline version that created the job: historical jobs
@@ -490,6 +500,7 @@ type jobRec struct {
 	Version      int               `json:"version,omitempty"`
 	Transform    *client.Transform `json:"transform,omitempty"`
 	Input        *client.Input     `json:"input,omitempty"`
+	Datums       []datumRef        `json:"datums,omitempty"`
 }
 
 func (d *daemon) jobDir(id string) string {
@@ -522,6 +533,19 @@ func (d *daemon) listJobs() ([]client.Job, error) {
 	return d.listJobsFiltered("", "", nil, false, nil)
 }
 
+// requirePipeline fails when the named pipeline does not exist or its
+// definition record is corrupted (the listing of jobs or logs of a missing
+// pipeline is an error, not an empty result; SB-026/027).
+func (d *daemon) requirePipeline(pipeline string) error {
+	if _, err := d.loadPipeline(pipeline); err != nil {
+		if _, statErr := os.Stat(d.pipelinePath(pipeline)); statErr == nil {
+			return fmt.Errorf("pipeline %q is incomplete", pipeline)
+		}
+		return fmt.Errorf("pipeline %q not found", pipeline)
+	}
+	return nil
+}
+
 // listJobsFiltered lists jobs, applying the pipeline, output-commit, and
 // inclusive state-set filters (SB-093, SB-095), plus a history depth
 // (0 = current version only, N = N most recent versions, -1 = every
@@ -530,11 +554,8 @@ func (d *daemon) listJobs() ([]client.Job, error) {
 // does not exist is an error, not an empty list (SB-026/027).
 func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string, full bool, history *int) ([]client.Job, error) {
 	if pipeline != "" {
-		if _, err := d.loadPipeline(pipeline); err != nil {
-			if _, statErr := os.Stat(d.pipelinePath(pipeline)); statErr == nil {
-				return nil, fmt.Errorf("pipeline %q is incomplete", pipeline)
-			}
-			return nil, fmt.Errorf("pipeline %q not found", pipeline)
+		if err := d.requirePipeline(pipeline); err != nil {
+			return nil, err
 		}
 	}
 	entries, err := os.ReadDir(filepath.Join(d.state, "jobs"))
@@ -839,6 +860,7 @@ func (d *daemon) deleteJob(id string) error {
 	if err := d.cancelJob(id); err != nil {
 		return err
 	}
+	os.Remove(d.logPath(id))
 	return os.RemoveAll(d.jobDir(id))
 }
 
@@ -891,6 +913,7 @@ func (d *daemon) reset() error {
 	os.RemoveAll(filepath.Join(d.state, "repos"))
 	os.RemoveAll(filepath.Join(d.state, "pipelines"))
 	os.RemoveAll(filepath.Join(d.state, "jobs"))
+	os.RemoveAll(filepath.Join(d.state, "logs"))
 	if err := os.MkdirAll(filepath.Join(d.state, "repos"), 0o755); err != nil {
 		return err
 	}
@@ -950,6 +973,19 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit) {
 		fail("materialize input: " + err.Error())
 		return
 	}
+	// the job's datum set is the input revision's files (SB-060 filters)
+	if datums, err := d.store.viewDatums(cm.ID); err == nil {
+		rec.Datums = datums
+		d.saveJob(rec)
+	}
+
+	// The job's container output is captured into the log store as it is
+	// produced. A capture failure degrades to no logs, never to a broken
+	// job: execution is the control plane's job, logs are the meta plane's.
+	capture, capErr := newLogCapture(d.logPath(id))
+	if capErr != nil {
+		capture = nil
+	}
 
 	outCommit, err := d.store.startCommit(pl.Pipeline.Name, "", "")
 	if err != nil {
@@ -983,7 +1019,10 @@ func (d *daemon) runJob(pl pipelineRec, cm client.Commit) {
 		// Default entry point (SB-126): copy every input file to OUT.
 		exit = copyDir(inDir, outDir)
 	} else {
-		exit, tail = d.runPipelineContainer(pl, id, inName, env, inDir, outDir)
+		exit, tail = d.runPipelineContainer(pl, id, inName, env, inDir, outDir, capture)
+	}
+	if capture != nil {
+		capture.Close() // flush any unterminated line; the log is complete
 	}
 
 	if exit != 0 {
@@ -1085,9 +1124,10 @@ func copyDir(src, dst string) int {
 
 // runPipelineContainer runs the transform in a throwaway container and
 // returns its exit code plus a tail of combined stderr/stdout for failure
-// reporting. inName is the input's environment variable name, which also
-// names the in-container mount point.
-func (d *daemon) runPipelineContainer(pl pipelineRec, jobID, inName string, env []string, inDir, outDir string) (int, string) {
+// reporting. capture, when non-nil, also receives the full combined output
+// for the log store (timestamped, line-split). inName is the input's
+// environment variable name, which also names the in-container mount point.
+func (d *daemon) runPipelineContainer(pl pipelineRec, jobID, inName string, env []string, inDir, outDir string, capture io.Writer) (int, string) {
 	tr := pl.Pipeline.Transform
 	image := tr.Image
 	if image == "" {
@@ -1126,8 +1166,12 @@ func (d *daemon) runPipelineContainer(pl pipelineRec, jobID, inName string, env 
 		cmd.Stdin = strings.NewReader(strings.Join(tr.Stdin, "\n") + "\n")
 	}
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	w := io.Writer(&buf)
+	if capture != nil {
+		w = io.MultiWriter(&buf, capture)
+	}
+	cmd.Stdout = w
+	cmd.Stderr = w
 	runErr := cmd.Run()
 	code := 0
 	if runErr != nil {

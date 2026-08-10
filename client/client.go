@@ -262,6 +262,9 @@ func (c *Client) CommitHistory(repo, branch string) ([]Commit, error) {
 type FileInfo struct {
 	Path string `json:"path"`
 	Size uint64 `json:"size"`
+	// Hash is the hex sha256 of the file content (the datum identifier for
+	// log filters, SB-060).
+	Hash string `json:"hash,omitempty"`
 }
 
 func (c *Client) PutFile(commitID, p string, data []byte) error {
@@ -744,4 +747,79 @@ func (c *Client) DescribeJob(id string) (string, error) {
 	}
 	return fmt.Sprintf("Job: %s\nPipeline: %s\nState: %s\nOutputCommit: %s\nInputCommits: %v\n",
 		j.ID, j.Pipeline, j.State, j.OutputCommit, j.InputCommits), nil
+}
+
+// ---- Logs (SB-059/060/061, D-21) ----
+
+// LogParams selects the log lines a query returns. A datum filter narrows
+// by an input file of the jobs (matched by path or by content hash, which
+// is hex sha256 as returned by file listings) and requires a pipeline or
+// job filter. Since is a relative window: lines older than now−Since are
+// excluded. An empty filter set queries every job's logs (D-21: logs from
+// all jobs are searchable globally).
+type LogParams struct {
+	Pipeline  string
+	Job       string
+	DatumPath string // input file path filter
+	Datum     string // input file path or content hash filter
+	Since     time.Duration
+}
+
+func (p LogParams) query(follow bool) string {
+	q := url.Values{}
+	if p.Pipeline != "" {
+		q.Set("pipeline", p.Pipeline)
+	}
+	if p.Job != "" {
+		q.Set("job", p.Job)
+	}
+	if p.DatumPath != "" {
+		q.Set("datumPath", p.DatumPath)
+	}
+	if p.Datum != "" {
+		q.Set("datum", p.Datum)
+	}
+	if p.Since != 0 {
+		q.Set("since", p.Since.String())
+	}
+	if follow {
+		q.Set("follow", "1")
+	}
+	return q.Encode()
+}
+
+// Logs returns the matching log lines, oldest first.
+func (c *Client) Logs(p LogParams) ([]string, error) {
+	var out struct {
+		Lines []string `json:"lines"`
+	}
+	if err := c.do("GET", "/api/v1/logs?"+p.query(false), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Lines, nil
+}
+
+// FollowLogs opens a live log stream: newline-delimited JSON objects
+// {"line": "..."} for lines captured after the request began (live only).
+// The returned body must be closed to end the stream. The stream uses a
+// dedicated client with no timeout; follow mode never terminates on its
+// own.
+func (c *Client) FollowLogs(p LogParams) (io.ReadCloser, error) {
+	req, err := http.NewRequest("GET", c.base+"/api/v1/logs?"+p.query(true), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		var e struct {
+			Error string `json:"error"`
+		}
+		json.NewDecoder(resp.Body).Decode(&e)
+		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
+	}
+	return resp.Body, nil
 }

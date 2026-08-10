@@ -621,7 +621,7 @@ func (s *apiStore) listFiles(commitID string) ([]client.FileInfo, error) {
 	}
 	out := make([]client.FileInfo, 0, len(view))
 	for p, f := range view {
-		out = append(out, client.FileInfo{Path: p, Size: f.Size})
+		out = append(out, client.FileInfo{Path: p, Size: f.Size, Hash: f.SHA})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
@@ -664,6 +664,24 @@ func (s *apiStore) materializeInput(commitID, dir string) error {
 		}
 	}
 	return nil
+}
+
+// viewDatums lists the input files of a commit with their content hashes —
+// the datum set of a job processing that commit (SB-060 log filters). The
+// whole view is the datum set: a job runs over the full input revision.
+func (s *apiStore) viewDatums(commitID string) ([]datumRef, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	view, err := s.resolveViewByID(commitID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]datumRef, 0, len(view))
+	for p, f := range view {
+		out = append(out, datumRef{Path: p, Hash: f.SHA})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, nil
 }
 
 // chainFromHead lists the commit ids of a branch from the head down to

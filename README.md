@@ -180,6 +180,14 @@ revisions, and jobs that run them.
   revision — including downstream stages — is terminal (the `client.Flush`
   helper does exactly that, confirming the graph has stopped growing, and
   terminating empty when every consumer is stopped or failed)
+- `GET /api/v1/logs` — a job's log lines: every container's stdout/stderr
+  is captured timestamped and complete. `?pipeline=` or `?job=` (either a
+  job id or its output commit) select the stream; `?datumPath=` and
+  `?datum=` (a file path or its content hash) narrow by input file and
+  require a pipeline or job; `?since=` is a relative window excluding
+  older lines; `?follow=1` streams new lines live as they are produced
+  (newline-delimited `{"line":…}` until the client disconnects). An
+  unconstrained query searches every job's logs (D-21)
 - `POST /api/v1/reset` — remove every repository, pipeline, and job;
   idempotent, and it refuses to run on corrupted metadata (D-08)
 
@@ -193,6 +201,7 @@ repos/spec/…                     internal repo: one spec commit per pipeline d
 pipelines/<name>.json            pipeline records (current version)
 pipelines/versions/<name>/<v>.json  immutable version history (ancestry)
 jobs/<id>/job.json               job records (+ in/ and out/ scratch dirs)
+logs/<jobid>.jsonl               captured container output, timestamped lines
 ```
 
 **Pipeline conventions** (the executable contract, mirrored in
