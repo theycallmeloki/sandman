@@ -271,6 +271,76 @@ func (d *daemon) standbySettle(name string) {
 	}
 }
 
+// runPipeline manually triggers a pipeline run (SB-010). Provenance, when
+// non-empty, fixes the exact input revisions the job processes — one per
+// side, matched by the side's repo and branch; two commits of the same
+// branch are rejected, and a commit outside the pipeline's input lineage
+// is rejected. JobID re-executes an existing job's input pairing. With
+// neither, the current branch heads are used. The run's output never
+// propagates downstream (a manual run is not a processing wave).
+func (d *daemon) runPipeline(name string, provenance []string, jobID string) (client.Job, error) {
+	rec, err := d.loadPipeline(name)
+	if err != nil {
+		return client.Job{}, err
+	}
+	if rec.Pipeline.Input == nil {
+		return client.Job{}, fmt.Errorf("pipeline %q has no inputs and cannot be run", name)
+	}
+	provenance = append([]string{}, provenance...)
+	if jobID != "" {
+		j, err := d.inspectJob(jobID)
+		if err != nil {
+			return client.Job{}, err
+		}
+		provenance = append(provenance, j.InputCommits...)
+	}
+	sides := inputSides(rec.Pipeline.Input)
+	heads := make([]client.Commit, len(sides))
+	seenBranch := map[string]bool{}
+	for _, pid := range provenance {
+		cm, err := d.store.loadCommitByID(pid)
+		if err != nil {
+			return client.Job{}, fmt.Errorf("provenance commit %s: not found", pid)
+		}
+		if seenBranch[cm.Repo+"/"+cm.Branch] {
+			return client.Job{}, fmt.Errorf("provenance contains two commits of branch %s/%s", cm.Repo, cm.Branch)
+		}
+		seenBranch[cm.Repo+"/"+cm.Branch] = true
+		found := false
+		for i, s := range sides {
+			if s.Repo == cm.Repo && inputBranch(s) == cm.Branch {
+				heads[i] = client.Commit{ID: cm.ID, Repo: cm.Repo, Branch: cm.Branch}
+				found = true
+			}
+		}
+		if !found {
+			return client.Job{}, fmt.Errorf("provenance commit %s is not part of the pipeline's input", pid)
+		}
+	}
+	if len(provenance) == 0 {
+		heads = d.pairHeads(rec.Pipeline.Input)
+		any := false
+		for _, h := range heads {
+			if h.ID != "" {
+				any = true
+				break
+			}
+		}
+		if !any {
+			// nothing to run against: no provenance, and no input commits
+			// exist (SB-010 clause 6: an unrunnable pipeline errors)
+			return client.Job{}, fmt.Errorf("pipeline %q has no input commits to run", name)
+		}
+	}
+	id := newJobID(d.name)
+	jr := newJobRec(*rec, heads, id)
+	jr.Manual = true
+	os.MkdirAll(d.jobDir(id), 0o755)
+	d.saveJob(jr)
+	d.spawnJob(rec, heads, "", id, jr)
+	return jr.job(), nil
+}
+
 // standbyIdle parks a just-created or just-updated standby pipeline in the
 // standby state when it has no work to do: with no finished input head on
 // any side, nothing will be scheduled until a commit arrives (SB-049).
@@ -614,7 +684,7 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 	rec, loadErr := d.loadPipeline(name)
 	if loadErr != nil {
 		if _, err := os.Stat(d.pipelinePath(name)); err != nil {
-			return fmt.Errorf("pipeline %q not found", name)
+			return nil // deleting an already-deleted pipeline is a no-op (SB-010)
 		}
 		rec = nil // incomplete pipeline: name-only delete
 	} else if !force {
@@ -677,10 +747,13 @@ type jobRec struct {
 	DatumIDs     []string          `json:"datumIds,omitempty"`
 	DatumStates  map[string]string `json:"datumStates,omitempty"`
 	StatsCommit  string            `json:"statsCommit,omitempty"`
-	Processed    int               `json:"processed,omitempty"`
-	Recovered    int               `json:"recovered,omitempty"`
-	Failed       int               `json:"failed,omitempty"`
-	Skipped      int               `json:"skipped,omitempty"`
+	// Manual marks a job spawned by an explicit pipeline run: its output
+	// never propagates downstream (SB-010).
+	Manual    bool `json:"manual,omitempty"`
+	Processed int  `json:"processed,omitempty"`
+	Recovered int  `json:"recovered,omitempty"`
+	Failed    int  `json:"failed,omitempty"`
+	Skipped   int  `json:"skipped,omitempty"`
 }
 
 func (d *daemon) jobDir(id string) string {
@@ -1804,11 +1877,12 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		// so the downstream trigger observes the failure (SB-022)
 		d.saveJob(rec)
 		d.finishOutput(pl, outCommit, "", true)
-		if !killed {
+		if !killed && !rec.Manual {
 			// a failed output is still a revision: every downstream stage
 			// is triggered and fails in turn (SB-022). A killed job's empty
 			// output is not a processing event — stopping a pipeline must
-			// not create spurious downstream commits (SB-020).
+			// not create spurious downstream commits (SB-020); neither is a
+			// manual run's (SB-010).
 			if fin, err := d.store.inspectCommit(outCommit.ID); err == nil {
 				d.triggerForCommit(fin)
 			}
@@ -1866,7 +1940,12 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	d.saveJob(rec)
 	d.saveDedup(pl.Pipeline.Name, dedup)
 
-	// The output commit is a real revision of the output repo: propagate.
+	// The output commit is a real revision of the output repo: propagate —
+	// unless this was a manual run, whose output is not a processing wave
+	// (SB-010: runs never propagate downstream).
+	if rec.Manual {
+		return
+	}
 	d.triggerForCommit(fin)
 	if rec.StatsCommit != "" {
 		if sc, err := d.store.inspectCommit(rec.StatsCommit); err == nil {

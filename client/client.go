@@ -502,6 +502,23 @@ func (c *Client) StartPipeline(name string) error {
 	return c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/start", nil, nil)
 }
 
+// RunPipeline manually triggers a pipeline run (SB-010). Provenance, when
+// non-empty, is the exact set of input revisions the job must process —
+// not the branch heads; when empty, the current branch heads are used.
+// JobID, when non-empty, targets an existing job whose input pairing is
+// re-executed. A run never propagates downstream.
+func (c *Client) RunPipeline(name string, provenance []string, jobID string) (Job, error) {
+	var out Job
+	body := map[string]any{}
+	if len(provenance) > 0 {
+		body["provenance"] = provenance
+	}
+	if jobID != "" {
+		body["job"] = jobID
+	}
+	return out, c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/run", body, &out)
+}
+
 // ---- Datums ----
 
 // Datum is one unit of a job's work: its identity and the input files it

@@ -229,6 +229,14 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Manual pipeline runs** — `RunPipeline` triggers a job on demand: with
+  no provenance it re-processes the current branch heads; with explicit
+  provenance it processes exactly those input revisions (validated: a
+  commit outside the pipeline's input lineage or two commits of one
+  branch are rejected; a pipeline with nothing to process cannot be run);
+  with a job id it re-executes that job's input pairing. A run's output
+  never propagates downstream — a manual run is not a processing wave
+  (SB-010). Deleting an already-deleted pipeline is a no-op
 - **Provenance pairing** — a cross whose sides derive from the same source
   branch pairs them at the same source revision: a trigger that would pair
   a fresh commit with the other side's still-stale head is deferred until

@@ -100,6 +100,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/pipelines/{name}", hErr(d.deletePipelineH))
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/stop", hErr(d.stopPipelineH))
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", hErr(d.startPipelineH))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/run", hErr(d.runPipelineH))
 	mux.HandleFunc("GET /api/v1/jobs", hErr(d.listJobsH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/datums", hErr(d.listDatumsH))
@@ -484,6 +485,25 @@ func (d *daemon) startPipelineH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// runPipelineH handles a manual pipeline run (SB-010): a new job over
+// explicit provenance commits (or the current heads), never propagating
+// downstream.
+func (d *daemon) runPipelineH(w http.ResponseWriter, r *http.Request) error {
+	var body struct {
+		Provenance []string `json:"provenance"`
+		Job        string   `json:"job"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		return fmt.Errorf("invalid request body")
+	}
+	job, err := d.runPipeline(r.PathValue("name"), body.Provenance, body.Job)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, job)
 	return nil
 }
 
