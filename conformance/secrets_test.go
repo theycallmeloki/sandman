@@ -142,3 +142,70 @@ func TestSB154_AuthDisabledOpenPosture(t *testing.T) {
 		t.Fatalf("wrong-token create under no auth: %v", err)
 	}
 }
+
+// TestSB051_SecretBinding — a pipeline's explicit secret references
+// (SB-051 clause 2, D-05) reach the job: the key's value as a mounted
+// file at the configured path and as an environment variable.
+func TestSB051_SecretBinding(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	commitFiles(t, repo, "master", map[string]string{"file": "x\n"})
+
+	secretName := uniq(t)
+	if err := c.CreateSecret(secretName, map[string]string{"foo": "secretfoo"}); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	p := client.Pipeline{
+		Name: uniq(t),
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd: []string{"sh", "-c",
+				"cat /sandman/secrets/foo > ${OUT}/mounted; echo ${SECRET_FOO} > ${OUT}/env"},
+			Secrets: []client.SecretMount{
+				{Name: secretName, Key: "foo", MountPath: "/sandman/secrets", EnvVar: "SECRET_FOO"},
+			},
+		},
+		Input: &client.Input{Repo: repo, Glob: "/"},
+	}
+	mustPipeline(t, p)
+	cm := commitFiles(t, repo, "master", map[string]string{"file2": "y\n"})
+	jobs := flushOK(t, cm.ID)
+
+	b, err := c.GetFile(jobs[0].OutputCommit, "mounted")
+	if err != nil {
+		t.Fatalf("read mounted secret: %v", err)
+	}
+	if string(b) != "secretfoo" {
+		t.Fatalf("mounted secret = %q, want %q", string(b), "secretfoo")
+	}
+	b, err = c.GetFile(jobs[0].OutputCommit, "env")
+	if err != nil {
+		t.Fatalf("read secret env: %v", err)
+	}
+	if got := strings.TrimRight(string(b), "\n"); got != "secretfoo" {
+		t.Fatalf("secret env var = %q, want %q", got, "secretfoo")
+	}
+}
+
+// TestSB051_SecretBindingRejectsMissing — a pipeline may reference a
+// secret only through an explicit binding to an existing secret (D-05).
+func TestSB051_SecretBindingRejectsMissing(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	p := client.Pipeline{
+		Name: uniq(t),
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "true"},
+			Secrets: []client.SecretMount{
+				{Name: "does-not-exist", Key: "k", EnvVar: "K"},
+			},
+		},
+		Input: &client.Input{Repo: repo, Glob: "/"},
+	}
+	err := c.CreatePipeline(p)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("create err = %v, want missing-secret error", err)
+	}
+}

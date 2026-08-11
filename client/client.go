@@ -429,6 +429,11 @@ type Transform struct {
 	// SB-152).
 	PodSpec  string `json:"podSpec,omitempty"`
 	PodPatch string `json:"podPatch,omitempty"`
+	// Secrets binds named secrets from the system's secret store into
+	// every job's environment (SB-051 clause 2, D-05): a mount's Key is
+	// written as a file at MountPath/<key> and/or injected as the EnvVar.
+	// Each reference names an existing secret — the binding is explicit.
+	Secrets []SecretMount `json:"secrets,omitempty"`
 	// ResourceRequests and ResourceLimits declare the execution
 	// environment's resources (SB-067/068/069/070): Memory as a size
 	// string ("100M"), CPU as a fractional core count, Disk as a size
@@ -656,6 +661,18 @@ type Pipeline struct {
 	Egress *Egress `json:"egress,omitempty"`
 }
 
+// SecretMount references one secret's key into the execution
+// environment (SB-051): MountPath mounts the key's value as a file at
+// MountPath/<key> (paths must live under /sandman/ — the execution
+// namespace); EnvVar injects the key's value as that environment
+// variable. At least one of the two must be set.
+type SecretMount struct {
+	Name      string `json:"name"`
+	Key       string `json:"key,omitempty"`
+	MountPath string `json:"mountPath,omitempty"`
+	EnvVar    string `json:"envVar,omitempty"`
+}
+
 // Egress is a pipeline's external output destination (SB-013, D-17).
 // URL names the destination; file:// destinations copy the output files
 // into the target directory, and any other scheme is refused at egress
@@ -705,6 +722,7 @@ type PipelineInfo struct {
 	Spout        *Spout         `json:"spout,omitempty"`
 	Service      *Service       `json:"service,omitempty"`
 	Egress       *Egress        `json:"egress,omitempty"`
+	Secrets      []SecretMount  `json:"secrets,omitempty"`
 	Placement    string         `json:"placement,omitempty"`
 	JobCounts    map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
 }

@@ -282,6 +282,38 @@ func validateService(p client.Pipeline) error {
 	return nil
 }
 
+// validateSecrets checks a pipeline's secret bindings (SB-051, D-05):
+// each reference names a secret, mounts under the /sandman/ execution
+// namespace, and env injections use valid shell identifiers that are not
+// reserved. Secret existence is checked at creation (the daemon-level
+// check in createPipeline).
+func validateSecrets(p client.Pipeline) error {
+	for i := range p.Transform.Secrets {
+		m := p.Transform.Secrets[i]
+		if m.Name == "" {
+			return fmt.Errorf("secret reference %d is missing its name", i)
+		}
+		if m.MountPath == "" && m.EnvVar == "" {
+			return fmt.Errorf("secret %q must set a mount path or an env var", m.Name)
+		}
+		if m.MountPath != "" && !strings.HasPrefix(m.MountPath, "/sandman/") {
+			return fmt.Errorf("secret %q mount path %q must be under /sandman/ (the execution namespace)", m.Name, m.MountPath)
+		}
+		if m.EnvVar != "" {
+			if m.Key == "" {
+				return fmt.Errorf("secret %q env var injection needs a key", m.Name)
+			}
+			if !shIdent.MatchString(m.EnvVar) {
+				return fmt.Errorf("secret env var %q is not a valid shell identifier", m.EnvVar)
+			}
+			if reservedEnv[m.EnvVar] {
+				return fmt.Errorf("secret env var %q is reserved", m.EnvVar)
+			}
+		}
+	}
+	return nil
+}
+
 // externalPortTaken reports whether another live pipeline already declares
 // the external port — two services cannot share the control-plane host's
 // bound port (SB-100).
@@ -354,6 +386,9 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	if err := validateSpout(p); err != nil {
 		return err
 	}
+	if err := validateSecrets(p); err != nil {
+		return err
+	}
 	if p.Input == nil {
 		// a spout has no input repo to check; anything else with no input
 		// is rejected by the spec validation's "no input set"
@@ -365,6 +400,13 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	}
 	if p.Service != nil && d.externalPortTaken(p.Service.ExternalPort, p.Name) {
 		return fmt.Errorf("external port %d is already declared by another service pipeline", p.Service.ExternalPort)
+	}
+	for _, m := range p.Transform.Secrets {
+		// D-05: a pipeline consumes a secret only through an explicit
+		// reference to an existing secret
+		if _, err := d.loadSecret(m.Name); err != nil {
+			return fmt.Errorf("secret %q not found", m.Name)
+		}
 	}
 	// materialize the input's implicit defaults into the stored spec so
 	// extraction echoes them (SB-151): every side's name defaults to its
@@ -1012,6 +1054,7 @@ func (rec *pipelineRec) info() client.PipelineInfo {
 		Spout:        rec.Pipeline.Spout,
 		Service:      rec.Pipeline.Service,
 		Egress:       rec.Pipeline.Egress,
+		Secrets:      rec.Pipeline.Transform.Secrets,
 		Placement:    rec.Pipeline.Placement,
 	}
 }
@@ -2651,6 +2694,45 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 				os.MkdirAll(host, 0o755)
 			}
 			jx.extraMounts = append(jx.extraMounts, "-v", host+":/sandman/volumes/"+name)
+		}
+	}
+	// secret bindings (SB-051 clause 2, D-05): each reference's key is
+	// written as a file at MountPath/<key> and/or injected as the env
+	// var, so secret values reach the execution environment before the
+	// job starts
+	for i, m := range pl.Pipeline.Transform.Secrets {
+		srec, err := d.loadSecret(m.Name)
+		if err != nil {
+			fail("secret: " + err.Error())
+			d.finishOutput(pl, outCommit, "", true)
+			return
+		}
+		if m.EnvVar != "" {
+			v, ok := srec.Data[m.Key]
+			if !ok {
+				fail(fmt.Sprintf("secret %q has no key %q", m.Name, m.Key))
+				d.finishOutput(pl, outCommit, "", true)
+				return
+			}
+			jx.extraEnv = append(jx.extraEnv, m.EnvVar+"="+v)
+		}
+		if m.MountPath != "" {
+			dir := filepath.Join(d.jobDir(id), "secrets", strconv.Itoa(i))
+			os.MkdirAll(dir, 0o755)
+			if m.Key != "" {
+				v, ok := srec.Data[m.Key]
+				if !ok {
+					fail(fmt.Sprintf("secret %q has no key %q", m.Name, m.Key))
+					d.finishOutput(pl, outCommit, "", true)
+					return
+				}
+				os.WriteFile(filepath.Join(dir, m.Key), []byte(v), 0o644)
+			} else {
+				for k, v := range srec.Data {
+					os.WriteFile(filepath.Join(dir, k), []byte(v), 0o644)
+				}
+			}
+			jx.extraMounts = append(jx.extraMounts, "-v", dir+":"+m.MountPath)
 		}
 	}
 	// the live execution context is visible to the datum API (restart,
