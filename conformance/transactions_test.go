@@ -163,3 +163,55 @@ func TestSB163_TransactionInvalidatedByExternalUpdate(t *testing.T) {
 		t.Fatalf("abort transaction: %v", err)
 	}
 }
+
+// TestSB164_TxAbortLeavesNoSpecCommits — an aborted transaction cleans up
+// the spec commits its applied operations wrote: no orphaned entries on
+// the failure path (SB-164's literal 0-spec-commits-on-abort clause). The
+// update's statistics one-way check fails only at apply time, forcing a
+// real mid-apply rollback after the create already wrote its spec commit.
+func TestSB164_TxAbortLeavesNoSpecCommits(t *testing.T) {
+	repo := uniq(t) + "r"
+	mustRepo(t, repo)
+	// the spec repository is shared across the daemon's lifetime (and may
+	// not exist yet), so the assertion is the delta: the aborted
+	// transaction writes no spec commits (SB-164's 0-on-abort clause)
+	specCount := func() int {
+		ch, err := c.CommitHistory("spec", "master")
+		if err != nil {
+			return 0 // no head yet: zero commits
+		}
+		return len(ch)
+	}
+	specBefore := specCount()
+	tx, err := c.StartTransaction()
+	if err != nil {
+		t.Fatalf("start transaction: %v", err)
+	}
+	pa := uniq(t) + "a"
+	on := client.Pipeline{Name: pa, Transform: copyTransform(repo),
+		Input: &client.Input{Repo: repo, Glob: "/*"}, EnableStats: true}
+	if err := c.CreatePipelineTx(on, tx); err != nil {
+		t.Fatalf("stage create: %v", err)
+	}
+	off := on
+	off.Update = true
+	off.EnableStats = false
+	if err := c.CreatePipelineTx(off, tx); err != nil {
+		t.Fatalf("stage update: %v", err)
+	}
+
+	// the update's stats one-way check fails at apply time, after the
+	// create's spec commit was written: the transaction aborts
+	wantErr(t, c.FinishTransaction(tx), "statistics cannot be disabled")
+
+	// the aborted pipeline does not exist…
+	if _, err := c.InspectPipeline(pa); err == nil {
+		t.Fatalf("aborted pipeline %q still exists", pa)
+	}
+	// …and the spec repository gained no commits (the rollback deleted
+	// the create's spec commit — no orphans on the failure path)
+	specAfter := specCount()
+	if specAfter != specBefore {
+		t.Fatalf("spec commits after abort = %d, want %d (unchanged)", specAfter, specBefore)
+	}
+}

@@ -2251,31 +2251,39 @@ func (d *daemon) deleteCommit(ref string) error {
 		repo, branch, newHead string
 	}
 	var fixes []headFix
-	repos, _ := d.store.listRepos()
-	for _, r := range repos {
-		refsDir := filepath.Join(d.store.repoDir(r.Name), "refs")
-		entries, err := os.ReadDir(refsDir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			head := d.store.headCommit(r.Name, e.Name())
-			if head == "" || !deleted[head] {
+	// every repo directory — including the internal "spec" definition
+	// repository, which listRepos hides (SB-127): a deleted spec commit
+	// must not leave a stale branch head (SB-164 abort cleanup)
+	repoDirs, err := os.ReadDir(d.store.dir)
+	if err == nil {
+		for _, rd := range repoDirs {
+			if !rd.IsDir() || strings.HasPrefix(rd.Name(), ".") {
 				continue
 			}
-			newHead := ""
-			for cur := head; ; {
-				cm, err := d.store.loadCommit(r.Name, cur)
-				if err != nil || cm.ParentID == "" {
-					break
-				}
-				cur = cm.ParentID
-				if !deleted[cur] {
-					newHead = cur
-					break
-				}
+			refsDir := filepath.Join(d.store.repoDir(rd.Name()), "refs")
+			entries, err := os.ReadDir(refsDir)
+			if err != nil {
+				continue
 			}
-			fixes = append(fixes, headFix{repo: r.Name, branch: e.Name(), newHead: newHead})
+			for _, e := range entries {
+				head := d.store.headCommit(rd.Name(), e.Name())
+				if head == "" || !deleted[head] {
+					continue
+				}
+				newHead := ""
+				for cur := head; ; {
+					cm, err := d.store.loadCommit(rd.Name(), cur)
+					if err != nil || cm.ParentID == "" {
+						break
+					}
+					cur = cm.ParentID
+					if !deleted[cur] {
+						newHead = cur
+						break
+					}
+				}
+				fixes = append(fixes, headFix{repo: rd.Name(), branch: e.Name(), newHead: newHead})
+			}
 		}
 	}
 	// repair surviving commits: a removed parent is relinked to the

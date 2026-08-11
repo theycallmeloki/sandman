@@ -60,6 +60,10 @@ type txOp struct {
 	Kind     string          `json:"kind"` // create | update
 	Spec     client.Pipeline `json:"spec"`
 	Baseline int             `json:"baseline,omitempty"`
+	// SpecCommit is the spec-repository commit the op wrote when it
+	// applied; the rollback deletes it so an aborted transaction leaves
+	// no orphaned spec commits (SB-164).
+	SpecCommit string `json:"specCommit,omitempty"`
 }
 
 func (d *daemon) loadTxOps(id string) ([]txOp, error) {
@@ -236,11 +240,13 @@ func (d *daemon) finishTransaction(id string) error {
 	for _, op := range ops {
 		switch op.Kind {
 		case "create":
-			if _, err := d.applyCreate(op.Spec); err != nil {
+			rec, err := d.applyCreate(op.Spec)
+			if err != nil {
 				d.txAbortHolds(final)
 				d.rollbackTx(applied)
 				return fmt.Errorf("apply transaction: %v", err)
 			}
+			op.SpecCommit = rec.SpecCommit
 		case "update":
 			rec, err := d.loadPipeline(op.Spec.Name)
 			if err != nil {
@@ -250,11 +256,13 @@ func (d *daemon) finishTransaction(id string) error {
 			}
 			// in-flight old-version work must not race the new head job
 			d.cancelPipelineJobs(op.Spec.Name)
-			if _, err := d.applyUpdate(rec, op.Spec); err != nil {
+			nrec, err := d.applyUpdate(rec, op.Spec)
+			if err != nil {
 				d.txAbortHolds(final)
 				d.rollbackTx(applied)
 				return fmt.Errorf("apply transaction: %v", err)
 			}
+			op.SpecCommit = nrec.SpecCommit
 		}
 		applied = append(applied, op)
 	}
@@ -291,6 +299,12 @@ func (d *daemon) rollbackTx(applied []txOp) {
 			if b, err := os.ReadFile(d.versionPath(op.Spec.Name, op.Baseline)); err == nil {
 				os.WriteFile(d.pipelinePath(op.Spec.Name), b, 0o644)
 			}
+		}
+		// an aborted transaction leaves no spec commits behind (SB-164):
+		// the applied op's definition commit is deleted with its pipeline
+		// — no orphaned entries on the failure path
+		if op.SpecCommit != "" {
+			d.deleteCommit(op.SpecCommit)
 		}
 	}
 }
