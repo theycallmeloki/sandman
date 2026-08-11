@@ -186,7 +186,7 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 		Name: pipe,
 		Transform: &client.Transform{
 			Image: "alpine",
-			Cmd:   []string{"sh", "-c", "sleep 20"},
+			Cmd:   []string{"sh", "-c", "sleep 40"},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
 		Parallelism: &client.Parallelism{Constant: 2},

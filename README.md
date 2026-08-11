@@ -229,6 +229,10 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Provisioning failures** — a pipeline whose execution environment cannot
+  be provisioned (a nonexistent image — obviously invalid or
+  plausible-but-absent) converges on the crashed state with a recorded
+  reason instead of hanging (SB-091)
 - **Delimited uploads** — `PutFileSplit` uploads data split into records
   at a delimiter, each stored at `path/<i>`; with a header, the first
   chunk is replicated into every record's file. Appending under the same
