@@ -72,6 +72,13 @@ type daemon struct {
 	syncIdx uint64
 	cpuBusy atomic.Uint64 // host cpu busy percent * 1000, sampled each tick
 
+	// runner is the execution backend (D-23 R-1): the container backend by
+	// default; -runner process selects the local-process backend.
+	runner Runner
+	// stateChanged broadcasts control-plane state transitions (job
+	// records, commit finishes, pipeline states) to the server-side
+	// blocking waits (D-23 R-5).
+	stateChanged notifier
 	// authToken is the daemon's configured credential; when non-empty the
 	// management endpoints that require authentication check the request
 	// header against it (SB-154).
@@ -156,12 +163,17 @@ func cmdDaemon(args []string) {
 	name := fs.String("name", sanitizeName(hostname()), "advertised instance name")
 	state := fs.String("state", DefaultState, "state directory")
 	authToken := fs.String("authToken", os.Getenv("SANDBOX_TOKEN"), "credential for the authenticated management endpoints (empty = auth disabled)")
+	runner := fs.String("runner", "container", "execution backend: container (default) or process (D-23)")
 	fs.Parse(args)
 
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
-	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), authToken: *authToken, hosts: newHostRegistry(30 * time.Second)}
+	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), authToken: *authToken, hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}}
+	d.store.onFinish = func() { d.stateChanged.signal() }
+	if *runner == "process" {
+		d.runner = processRunner{}
+	}
 	if err := d.reg.loadStatic(); err != nil {
 		log.Printf("peers file: %v", err)
 	}

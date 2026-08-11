@@ -79,6 +79,12 @@ func (c *Client) SetToken(token string) { c.token = token }
 func (c *Client) Base() string { return c.base }
 
 func (c *Client) do(method, p string, in, out any) error {
+	return c.doClient(c.hc, method, p, in, out)
+}
+
+// doClient is do with a specific HTTP client (a long-poll needs a client
+// timeout that outlives the server's own deadline, D-23 R-5).
+func (c *Client) doClient(hc *http.Client, method, p string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -95,7 +101,7 @@ func (c *Client) do(method, p string, in, out any) error {
 	if c.token != "" {
 		req.Header.Set("X-Sandbox-Token", c.token)
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}
@@ -966,71 +972,38 @@ func (c *Client) FlushSet(commitIDs []string, timeout time.Duration) ([]Job, err
 	return c.flushSet(commitIDs, timeout)
 }
 
+// flushSet blocks on the server-side flush (D-23 R-5): the daemon runs
+// the flush loop — downstream closure terminal and stable — and the
+// client waits on the long-poll response. A server timeout returns the
+// jobs seen so far with a timeout error, preserving the flush contract.
 func (c *Client) flushSet(commitIDs []string, timeout time.Duration) ([]Job, error) {
-	deadline := time.Now().Add(timeout)
-	var repos []string
-	branches := map[string]string{}
-	for {
-		jobs, err := c.ListJobs()
-		if err != nil {
-			return jobs, err
-		}
-		relevant := latestPerPipeline(downstreamJobsSet(jobs, commitIDs))
-		if allTerminal(relevant) {
-			time.Sleep(250 * time.Millisecond)
-			jobs2, err := c.ListJobs()
-			if err != nil {
-				return jobs, err
-			}
-			relevant2 := latestPerPipeline(downstreamJobsSet(jobs2, commitIDs))
-			if sameJobSet(relevant, relevant2) && allTerminal(relevant2) {
-				return relevant2, nil
-			}
-			continue
-		}
-		if len(relevant) == 0 {
-			if len(repos) == 0 {
-				for _, id := range commitIDs {
-					if cm, err := c.InspectCommit(id); err == nil {
-						repos = append(repos, cm.Repo)
-						branches[cm.Repo] = cm.Branch
-					}
-				}
-			}
-			settled := len(repos) > 0
-			for _, r := range repos {
-				if !c.consumersSettled(r, branches[r]) {
-					settled = false
-					break
-				}
-			}
-			if settled {
-				time.Sleep(250 * time.Millisecond)
-				jobs2, err := c.ListJobs()
-				if err != nil {
-					return jobs, err
-				}
-				relevant2 := latestPerPipeline(downstreamJobsSet(jobs2, commitIDs))
-				if len(relevant2) == 0 {
-					still := true
-					for _, r := range repos {
-						if !c.consumersSettled(r, branches[r]) {
-							still = false
-							break
-						}
-					}
-					if still {
-						return nil, nil
-					}
-				}
-				continue
-			}
-		}
-		if time.Now().After(deadline) {
-			return relevant, fmt.Errorf("flush timeout: %d job(s) not terminal", len(relevant))
-		}
-		time.Sleep(250 * time.Millisecond)
+	var out struct {
+		Jobs     []Job `json:"jobs"`
+		TimedOut bool  `json:"timedOut"`
 	}
+	// the server returns at its own deadline; the HTTP client must
+	// outlive it by a margin, or the request is cut mid-flush
+	hc := &http.Client{Timeout: timeout + 30*time.Second}
+	err := c.doClient(hc, "POST", "/api/v1/flush", map[string]any{
+		"commits": commitIDs,
+		"timeout": timeout.String(),
+	}, &out)
+	if err != nil {
+		return out.Jobs, err
+	}
+	if out.TimedOut {
+		return out.Jobs, fmt.Errorf("flush timeout: %d job(s) not terminal", len(out.Jobs))
+	}
+	return out.Jobs, nil
+}
+
+// WaitJob blocks until the job reaches a terminal state (D-23 R-5): the
+// server long-polls its own state broadcasts, so the client makes one
+// request. A timeout returns the job's current state with an error.
+func (c *Client) WaitJob(jobID string, timeout time.Duration) (Job, error) {
+	var j Job
+	err := c.do("GET", "/api/v1/jobs/"+url.PathEscape(jobID)+"/wait?timeout="+url.QueryEscape(timeout.String()), nil, &j)
+	return j, err
 }
 
 // consumersSettled reports whether every pipeline consuming the repo is
@@ -1063,7 +1036,7 @@ func (c *Client) consumersSettled(repo, branch string) bool {
 	return true
 }
 
-func allTerminal(jobs []Job) bool {
+func AllTerminal(jobs []Job) bool {
 	if len(jobs) == 0 {
 		return false
 	}
@@ -1075,7 +1048,7 @@ func allTerminal(jobs []Job) bool {
 	return true
 }
 
-func sameJobSet(a, b []Job) bool {
+func SameJobSet(a, b []Job) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -1095,58 +1068,47 @@ func sameJobSet(a, b []Job) bool {
 // input commits include it, then every job consuming those jobs' output
 // commits, transitively.
 func downstreamJobs(jobs []Job, commitID string) []Job {
-	return downstreamJobsSet(jobs, []string{commitID})
+	return DownstreamJobsSet(jobs, []string{commitID})
 }
 
-// downstreamJobsSet is downstreamJobs for a set of input commits: a job is
+// DownstreamJobsSet is downstreamJobs for a set of input commits: a job is
 // relevant when its input set includes every commit in the set (a cross
 // pipeline's pairing), then every consumer of those jobs' outputs,
 // transitively.
-func downstreamJobsSet(jobs []Job, commitIDs []string) []Job {
-	set := map[string]bool{}
-	for _, id := range commitIDs {
-		set[id] = true
-	}
-	if len(set) == 0 {
+func DownstreamJobsSet(jobs []Job, commitIDs []string) []Job {
+	if len(commitIDs) == 0 {
 		return nil
 	}
-	seen := map[string]bool{}
-	var out []Job
-	queue := []string{}
-	// direct matches: input set includes every commit in the set. A job
-	// whose input set matches but has no output commit yet (queued, or a
-	// zero-datum job that settles without producing) is still the commit's
-	// job: the flush must wait for it.
-	for _, j := range jobs {
-		got := map[string]bool{}
-		for _, ic := range j.InputCommits {
-			if set[ic] {
-				got[ic] = true
-			}
-		}
-		if len(got) == len(set) {
-			seen[j.ID] = true
-			out = append(out, j)
-			if j.OutputCommit != "" {
-				queue = append(queue, j.OutputCommit)
-			}
-			if j.StatsCommit != "" {
-				queue = append(queue, j.StatsCommit)
-			}
-		}
+	// reference flush semantics: the set's downstream is the INTERSECTION
+	// of each commit's downstream closure — a job is reported only if it
+	// is downstream of every flushed commit (SB-056 wave 1: B's output is
+	// downstream of A only, so it is excluded; C's pairing and D are
+	// downstream of both). A single closure seeded by jobs whose inputs
+	// contain every commit is wrong when the set spans a DAG: the pairing
+	// job's inputs reference the upstream OUTPUT commit (B-out), not A's
+	// raw commit, so no direct match exists to seed the walk.
+	type closure struct {
+		set map[string]bool
+		ord []string
 	}
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
+	byID := map[string]Job{}
+	for _, j := range jobs {
+		byID[j.ID] = j
+	}
+	cl := make([]closure, len(commitIDs))
+	for i, id := range commitIDs {
+		c := closure{set: map[string]bool{}}
+		seen := map[string]bool{}
+		var queue []string
 		for _, j := range jobs {
-			if seen[j.ID] || j.OutputCommit == "" {
-				continue
-			}
 			for _, ic := range j.InputCommits {
 				if ic == id {
 					seen[j.ID] = true
-					out = append(out, j)
-					queue = append(queue, j.OutputCommit)
+					c.set[j.ID] = true
+					c.ord = append(c.ord, j.ID)
+					if j.OutputCommit != "" {
+						queue = append(queue, j.OutputCommit)
+					}
 					if j.StatsCommit != "" {
 						queue = append(queue, j.StatsCommit)
 					}
@@ -1154,15 +1116,52 @@ func downstreamJobsSet(jobs []Job, commitIDs []string) []Job {
 				}
 			}
 		}
+		for len(queue) > 0 {
+			head := queue[0]
+			queue = queue[1:]
+			for _, j := range jobs {
+				if seen[j.ID] || j.OutputCommit == "" {
+					continue
+				}
+				for _, ic := range j.InputCommits {
+					if ic == head {
+						seen[j.ID] = true
+						c.set[j.ID] = true
+						c.ord = append(c.ord, j.ID)
+						queue = append(queue, j.OutputCommit)
+						if j.StatsCommit != "" {
+							queue = append(queue, j.StatsCommit)
+						}
+						break
+					}
+				}
+			}
+		}
+		cl[i] = c
+	}
+	// intersect in first-closure order
+	first := cl[0]
+	var out []Job
+	for _, id := range first.ord {
+		ok := true
+		for _, c := range cl[1:] {
+			if !c.set[id] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, byID[id])
+		}
 	}
 	return out
 }
 
-// latestPerPipeline keeps only the newest job of each pipeline (Started is
+// LatestPerPipeline keeps only the newest job of each pipeline (Started is
 // RFC3339, so byte order is time order) — e.g. after a pipeline was deleted
 // and recreated, flushing a shared input commit reports the fresh
 // incarnation's job (SB-024).
-func latestPerPipeline(jobs []Job) []Job {
+func LatestPerPipeline(jobs []Job) []Job {
 	best := map[string]Job{}
 	var order []string
 	for _, j := range jobs {

@@ -38,6 +38,9 @@ import (
 type apiStore struct {
 	dir string
 	mu  sync.RWMutex
+	// onFinish, when set, is called after every commit finish — the
+	// daemon's state-change broadcast for the blocking waits (D-23 R-5).
+	onFinish func()
 }
 
 // fileEntry is one file written in a commit (legacy supersede model,
@@ -755,6 +758,9 @@ func (s *apiStore) finishCommit(commitID, description string, empty bool) (clien
 	}
 	if err := s.setHead(rec.Repo, rec.Branch, rec.ID); err != nil {
 		return client.Commit{}, err
+	}
+	if s.onFinish != nil {
+		s.onFinish()
 	}
 	return rec.commit(), nil
 }

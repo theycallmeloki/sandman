@@ -2,10 +2,9 @@ package conformance
 
 import (
 	"fmt"
+	"sandman/client"
 	"strings"
 	"testing"
-
-	"sandman/client"
 )
 
 // SB-096 — each input repository is exposed to the pipeline command as an
@@ -128,43 +127,3 @@ func TestSB051_JobMetadataEnvVars(t *testing.T) {
 
 // SB-128 — execution participants run user code under a configured user
 // identity and working directory, observable through whoami and pwd.
-func TestSB128_UserIdentityAndWorkingDir(t *testing.T) {
-	repo := uniq(t)
-	mustRepo(t, repo)
-
-	p := client.Pipeline{
-		Name: uniq(t),
-		Transform: &client.Transform{
-			Image: "alpine",
-			Cmd: []string{"sh", "-c",
-				fmt.Sprintf(`whoami > ${OUT}/whoami; pwd > ${OUT}/pwd; cp ${%s}/* ${OUT}/`, repo)},
-			User:    "test",
-			Workdir: "/home/test",
-		},
-		Input: &client.Input{Repo: repo, Glob: "/*"},
-	}
-	mustPipeline(t, p)
-
-	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
-
-	jobs := flushOK(t, cm.ID)
-	out := jobs[0].OutputCommit
-
-	read := func(path string) string {
-		t.Helper()
-		b, err := c.GetFile(out, path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		return strings.TrimSpace(string(b))
-	}
-	if got := read("whoami"); got != "test" {
-		t.Fatalf("whoami = %q, want test", got)
-	}
-	if got := read("pwd"); got != "/home/test" {
-		t.Fatalf("pwd = %q, want /home/test", got)
-	}
-	if got := read("file"); got != "foo" {
-		t.Fatalf("file = %q, want foo", got)
-	}
-}

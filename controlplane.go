@@ -8,7 +8,6 @@ package main
 // pipeline's output repo, and records success/failure.
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -287,6 +286,15 @@ func materializeInputDefaults(in *client.Input) {
 // input normalization helpers.
 func inputSides(in *client.Input) []client.Input { return client.InputSides(in) }
 func inputBranch(s client.Input) string          { return client.InputBranch(s) }
+
+// sideKey is the resolve-loop key for a repo side: its declared name, else
+// its repo (matching the resolve func's key derivation).
+func sideKey(s client.Input) string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Repo
+}
 
 func (d *daemon) createPipeline(p client.Pipeline) error {
 	if err := validatePipelineSpec(p); err != nil {
@@ -775,7 +783,13 @@ func (d *daemon) savePipeline(rec *pipelineRec) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(d.pipelinePath(rec.Pipeline.Name), b, 0o644)
+	if err := os.WriteFile(d.pipelinePath(rec.Pipeline.Name), b, 0o644); err != nil {
+		return err
+	}
+	// a pipeline state change can settle an empty flush (consumers
+	// settled): wake the blocking waits (D-23 R-5)
+	d.stateChanged.signal()
+	return nil
 }
 
 // hasJob reports whether the pipeline already ran a job for the commit.
@@ -1039,7 +1053,26 @@ func (d *daemon) saveJob(rec *jobRec) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(d.jobDir(rec.ID), "job.json"), b, 0o644)
+	// atomic write: a concurrent reader (the trigger dedup's mustListJobs,
+	// flushes, listings) must see the record complete or not at all — a
+	// plain WriteFile lets a racing read decode a half-written record and
+	// silently drop the job, which makes the duplicate-pairing guard miss
+	// (SB-056/SB-019: two triggers for the same input set)
+	dir := d.jobDir(rec.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp := filepath.Join(dir, "job.json.tmp")
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, "job.json")); err != nil {
+		return err
+	}
+	// every job-record change can advance a flush (a new job, a datum
+	// state, a terminal transition): wake the blocking waits (D-23 R-5)
+	d.stateChanged.signal()
+	return nil
 }
 
 func (d *daemon) listJobs() ([]client.Job, error) {
@@ -1353,8 +1386,7 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		}
 		id := newJobID(d.name)
 		jr := newJobRec(*rec, heads, id)
-		os.MkdirAll(d.jobDir(id), 0o755) // saveJob does not create the dir
-		d.saveJob(jr)
+		d.saveJob(jr) // creates the job dir atomically
 		triggerMu.Unlock()
 		d.spawnJob(rec, heads, propagated, id, jr)
 	}
@@ -1377,6 +1409,40 @@ func (d *daemon) hasRunningJobWithInputs(pipeline string, heads []client.Commit)
 	}
 	for _, j := range d.mustListJobs() {
 		if j.Pipeline != pipeline || j.State != "running" {
+			continue
+		}
+		if len(j.InputCommits) != len(set) {
+			continue
+		}
+		all := true
+		for _, ic := range j.InputCommits {
+			if !set[ic] {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// hasJobWithExactInputs reports whether the pipeline already has any job —
+// in any state, including terminal — consuming exactly this input set,
+// other than the excluded job itself. The lone job uses it to decide
+// whether a late head's pairing is a sibling's work (the sibling may
+// already have settled, so state is not a filter); the exclusion keeps a
+// job from matching itself.
+func (d *daemon) hasJobWithExactInputs(pipeline string, inputIDs []string, excludeID string) bool {
+	set := map[string]bool{}
+	for _, id := range inputIDs {
+		if id != "" {
+			set[id] = true
+		}
+	}
+	for _, j := range d.mustListJobs() {
+		if j.ID == excludeID || j.Pipeline != pipeline {
 			continue
 		}
 		if len(j.InputCommits) != len(set) {
@@ -1752,24 +1818,6 @@ func (d *daemon) recordProvenance(commitID string, inputs []string) {
 	}
 }
 
-// isProvisioningError reports whether a failed docker run never started the// container — an environment problem, not a user-code failure.
-func isProvisioningError(tail string) bool {
-	for _, marker := range []string{
-		"invalid reference format",
-		"Unable to find image",
-		"pull access denied",
-		"No such image",
-		"failed to resolve reference",
-		"manifest unknown",
-		"image not found",
-	} {
-		if strings.Contains(tail, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 // cancelJob kills a running job and waits for it to settle as KILLED. A
 // terminal job cancels to a no-op. The kill retries: a job can be cancelled
 // the instant it appears, before its container exists (docker run still
@@ -1814,7 +1862,7 @@ func (d *daemon) cancelJob(id string) error {
 			}
 			all := true
 			for _, n := range names {
-				if exec.Command("docker", "kill", n).Run() != nil {
+				if d.runner.Kill(n) != nil {
 					all = false
 				}
 			}
@@ -2289,6 +2337,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			covered[h.Repo+"/"+h.Branch] = true
 		}
 	}
+	resolvedHead := map[string]client.Commit{} // side key → head picked up while queued
 	var resolve func(s client.Input, key string)
 	resolve = func(s client.Input, key string) {
 		if key == "" {
@@ -2307,6 +2356,14 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 					views[key] = v
 					seenInput[h.ID] = true
 					rec.InputCommits = append(rec.InputCommits, h.ID)
+					// a side whose spawn-time pairing was empty can pick
+					// up the head that finished while the job was queued:
+					// the record grows to the full pairing, and the datum
+					// loop below must enumerate it too — otherwise the
+					// record claims a pairing the job never executed and
+					// the trigger dedup suppresses the real job (SB-019:
+					// D's wave-1 commit lost)
+					resolvedHead[key] = h
 				}
 			}
 		case len(s.Union) > 0:
@@ -2321,6 +2378,37 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 	resolve(*in, "")
 	d.saveJob(rec)
+	// A late head picked up while queued must not duplicate a pairing a
+	// sibling job already covers: the lone side job and the pairing job
+	// race — whichever runs first claims the pairing, the other settles as
+	// the lone job with no output (SB-056: the lone C job for E1 must not
+	// produce a second wave-1 output after the B1×E1 pairing job spawned;
+	// SB-019: when no sibling exists the lone job grows into the pairing
+	// itself and the trigger's dedup suppresses the duplicate). The check
+	// runs under the trigger mutex, so it cannot interleave with the
+	// trigger's own dedup+save.
+	if len(resolvedHead) > 0 {
+		triggerMu.Lock()
+		dup := d.hasJobWithExactInputs(rec.Pipeline, rec.InputCommits, rec.ID)
+		triggerMu.Unlock()
+		if dup {
+			late := map[string]bool{}
+			for key, h := range resolvedHead {
+				late[h.ID] = true
+				delete(views, key)
+			}
+			var keep []string
+			for _, id := range rec.InputCommits {
+				if !late[id] {
+					keep = append(keep, id)
+				}
+			}
+			rec.InputCommits = keep
+			resolvedHead = map[string]client.Commit{}
+			d.saveJob(rec)
+		}
+	}
+	d.saveJob(rec)
 	for i, s := range sides {
 		if len(s.Union) > 0 {
 			// a union member of a cross contributes its own merged datums
@@ -2332,10 +2420,16 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			sideLists[i] = us
 			continue
 		}
-		if i >= len(heads) || heads[i].ID == "" {
+		head := client.Commit{}
+		if i < len(heads) && heads[i].ID != "" {
+			head = heads[i]
+		} else if h, ok := resolvedHead[sideKey(s)]; ok {
+			head = h // the side's head finished while the job was queued
+		}
+		if head.ID == "" {
 			continue
 		}
-		view, err := d.store.resolveViewByID(heads[i].ID)
+		view, err := d.store.resolveViewByID(head.ID)
 		if err != nil {
 			fail("materialize input: " + err.Error())
 			return
@@ -2373,10 +2467,16 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// (SB-060); cross jobs filter by their sides' files.
 	var logDatums []datumRef
 	for i := range sides {
-		if i >= len(heads) || heads[i].ID == "" {
+		head := client.Commit{}
+		if i < len(heads) && heads[i].ID != "" {
+			head = heads[i]
+		} else if h, ok := resolvedHead[sideKey(sides[i])]; ok {
+			head = h
+		}
+		if head.ID == "" {
 			continue
 		}
-		if vd, err := d.store.viewDatums(heads[i].ID); err == nil {
+		if vd, err := d.store.viewDatums(head.ID); err == nil {
 			logDatums = append(logDatums, vd...)
 		}
 	}
@@ -2625,92 +2725,55 @@ func copyDir(src, dst string) int {
 // returns its exit code plus a tail of combined stderr/stdout for failure
 // reporting. capture, when non-nil, also receives the full combined output
 // for the log store (timestamped, line-split). inName is the input's
-// runDatumContainer runs one command (the primary or the error handler)
-// in a throwaway container under an explicit name, with the datum's
-// per-side mounts and output directory. Returns the exit code and the
-// output tail. Shared by the control plane's own executor and a remote
-// execution host's worker (SB-167): nodeName is the host identity the
-// container is labelled with (the daemon's name, or the worker's host
-// name when the datum runs remotely).
+// datumSpec describes one command run through the execution-backend seam
+// (D-23): the transform's image, argv, env, mounts, resources, identity,
+// and stdin, plus the PathMap translating the execution-internal paths
+// (/sandman/out, /sandman/in/<side>, /sandman/view/<side>, /tmp) to the
+// staging directories the process backend runs against directly.
+func datumSpec(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) JobSpec {
+	pathMap := map[string]string{"/sandman/out": outDir}
+	for i := 0; i+1 < len(mounts); i += 2 {
+		if !strings.HasPrefix(mounts[i], "-v") {
+			continue
+		}
+		host, rest, ok := strings.Cut(mounts[i+1], ":")
+		if !ok {
+			continue
+		}
+		container, _, _ := strings.Cut(rest, ":") // drop a ":ro"/":rw" mode
+		pathMap[container] = host
+	}
+	return JobSpec{
+		Image:            tr.Image,
+		NodeName:         nodeName,
+		Name:             cname,
+		Cmd:              argv,
+		Stdin:            stdin,
+		Env:              env,
+		Mounts:           mounts,
+		OutDir:           outDir,
+		Capture:          capture,
+		Workdir:          tr.Workdir,
+		User:             tr.User,
+		ResourceLimits:   tr.ResourceLimits,
+		ResourceRequests: tr.ResourceRequests,
+		PathMap:          pathMap,
+	}
+}
+
+// runSpec executes one command on the daemon's execution backend (the
+// control plane's executor; the worker's executor is runDatumContainer).
+func (d *daemon) runSpec(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
+	res := d.runner.Run(datumSpec(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin))
+	return res.Code, res.Tail
+}
+
+// runDatumContainer runs one command through the container backend — the
+// remote execution host's worker executor (SB-167): nodeName is the host
+// identity the container is labelled with.
 func runDatumContainer(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
-	image := tr.Image
-	if image == "" {
-		image = "alpine"
-	}
-	args := []string{"run", "--rm", "--name", cname,
-		"--label", "sandman.node=" + nodeName,
-		"-v", outDir + ":/sandman/out",
-	}
-	// resource requests and limits are applied to the execution
-	// environment (SB-067/068/069/070). Sandbox deviation: docker
-	// expresses a CPU request only as an allocation, so a CPU request
-	// without a limit sets the container's CPU allocation; an
-	// ephemeral-storage (disk) request is recorded but not enforceable
-	// on docker's default driver.
-	if tr.ResourceLimits != nil {
-		if tr.ResourceLimits.Memory != "" {
-			args = append(args, "--memory", tr.ResourceLimits.Memory)
-		}
-		if tr.ResourceLimits.CPU > 0 {
-			args = append(args, "--cpus", fmt.Sprintf("%g", tr.ResourceLimits.CPU))
-		}
-	}
-	if tr.ResourceRequests != nil {
-		if tr.ResourceRequests.Memory != "" {
-			args = append(args, "--memory-reservation", tr.ResourceRequests.Memory)
-		}
-		if tr.ResourceRequests.CPU > 0 && (tr.ResourceLimits == nil || tr.ResourceLimits.CPU == 0) {
-			args = append(args, "--cpus", fmt.Sprintf("%g", tr.ResourceRequests.CPU))
-		}
-	}
-	args = append(args, mounts...)
-	for _, e := range env {
-		args = append(args, "-e", e)
-	}
-	if len(stdin) > 0 {
-		args = append(args, "-i")
-	}
-	workdir := tr.Workdir
-	if workdir == "" {
-		workdir = "/sandman/out"
-	}
-	args = append(args, "-w", workdir)
-
-	if tr.User != "" {
-		// Run user code as the configured identity: create the user and
-		// working directory in-container, then su to it. Needs a
-		// busybox-style image (alpine): adduser + su are provided.
-		inner := "cd " + shQuote(workdir) + " && exec " + joinSh(argv)
-		script := fmt.Sprintf("adduser -D %s 2>/dev/null; mkdir -p %s; chown -R %s %s 2>/dev/null; chown %s /sandman/out 2>/dev/null; su %s -c %s",
-			shQuote(tr.User), shQuote(workdir), shQuote(tr.User), shQuote(workdir), shQuote(tr.User), shQuote(tr.User), shQuote(inner))
-		argv = []string{"sh", "-c", script}
-	}
-
-	cmd := exec.Command("docker", append(append(args, image), argv...)...)
-	if len(stdin) > 0 {
-		cmd.Stdin = strings.NewReader(strings.Join(stdin, "\n") + "\n")
-	}
-	var buf bytes.Buffer
-	w := io.Writer(&buf)
-	if capture != nil {
-		w = io.MultiWriter(&buf, capture)
-	}
-	cmd.Stdout = w
-	cmd.Stderr = w
-	runErr := cmd.Run()
-	code := 0
-	if runErr != nil {
-		if ee, ok := runErr.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		} else {
-			code = 1
-		}
-	}
-	tail := buf.String()
-	if len(tail) > 2000 {
-		tail = tail[len(tail)-2000:]
-	}
-	return code, tail
+	res := containerRunner{}.Run(datumSpec(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin))
+	return res.Code, res.Tail
 }
 
 // shQuote single-quotes s for /bin/sh (busybox included).

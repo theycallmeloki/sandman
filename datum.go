@@ -31,7 +31,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -823,7 +822,13 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 			}
 		}
 		if strings.HasPrefix(target, "/tmp/") {
-			return filepath.Join(jx.tmpDir, filepath.FromSlash(strings.TrimPrefix(target, "/tmp/")))
+			// the container backend: /tmp/... = the job's tmp mount. The
+			// process backend's /tmp is the host's — a target the
+			// transform wrote there is already a real path and must not
+			// be remapped (its prefix would otherwise mangle it).
+			if _, err := os.Stat(target); err != nil {
+				return filepath.Join(jx.tmpDir, filepath.FromSlash(strings.TrimPrefix(target, "/tmp/")))
+			}
 		}
 		return ""
 	}
@@ -838,7 +843,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		if dur, err := time.ParseDuration(tr.DatumTimeout); err == nil {
 			time.AfterFunc(dur, func() {
 				timedOut.Store(true)
-				exec.Command("docker", "kill", cname).Run()
+				d.runner.Kill(cname)
 			})
 		}
 	}
@@ -855,7 +860,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 			}
 			return code, ""
 		}
-		return runDatumContainer(jx.pl.Pipeline.Transform, d.name, cname, env, mounts, outDir, capture, argv, stdin)
+		return d.runSpec(jx.pl.Pipeline.Transform, d.name, cname, env, mounts, outDir, capture, argv, stdin)
 	}
 
 	var code int
@@ -882,7 +887,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	if len(tr.ErrCmd) > 0 || len(tr.ErrStdin) > 0 {
 		ecname := cname + "-err"
 		jx.registerContainer(ecname)
-		ecode, etail := runDatumContainer(jx.pl.Pipeline.Transform, d.name, ecname, env, mounts, outDir, capture, tr.ErrCmd, tr.ErrStdin)
+		ecode, etail := d.runSpec(jx.pl.Pipeline.Transform, d.name, ecname, env, mounts, outDir, capture, tr.ErrCmd, tr.ErrStdin)
 		jx.unregisterContainer(ecname)
 		if ecode == 0 {
 			files, err := d.storeOutput(outDir, link)
@@ -1488,7 +1493,7 @@ func (d *daemon) restartDatum(jobID, datumID string) error {
 	// pick-up, before docker run creates it): retry the kill until it
 	// lands (SB-064)
 	for i := 0; i < 50; i++ { // ~10s
-		if exec.Command("docker", "kill", cname).Run() == nil {
+		if d.runner.Kill(cname) == nil {
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)

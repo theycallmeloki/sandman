@@ -11,10 +11,9 @@ package conformance
 
 import (
 	"fmt"
+	"sandman/client"
 	"testing"
 	"time"
-
-	"sandman/client"
 )
 
 // standbyTransform is the standard copy transform (per SB-001).
@@ -229,41 +228,5 @@ func TestSB050_StopStandbyPipeline(t *testing.T) {
 	}
 	pollFor(t, "standby again after restart", 30*time.Second, func() bool {
 		return standbyState(t, pipe) == "standby"
-	})
-}
-
-func TestSB158_StandbyLifecycle(t *testing.T) {
-	// D-09: no degraded/crashing standby state in Sandman — partial
-	// capacity surfaces as failure or crashed; the extracted contract is
-	// the lifecycle: idle in standby, wake on input, rest after the work.
-	repo := uniq(t) + "r"
-	pipe := uniq(t) + "p"
-	mustRepo(t, repo)
-	mustPipeline(t, client.Pipeline{Name: pipe, Standby: true, Transform: standbyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}})
-	pollFor(t, "idle in standby", 30*time.Second, func() bool {
-		return standbyState(t, pipe) == "standby"
-	})
-
-	// input activates: the running state is observable while the job runs
-	cm := commitFiles(t, repo, "", map[string]string{"file": "foo\n"})
-	pollFor(t, "running while the job runs", 30*time.Second, func() bool {
-		return standbyState(t, pipe) == "running"
-	})
-	flushOK(t, cm.ID)
-	pollFor(t, "resting in standby again", 30*time.Second, func() bool {
-		return standbyState(t, pipe) == "standby"
-	})
-
-	// a provisioning failure degrades to crashed (SB-043), never to a
-	// standby-resting state — the D-09 mapping of partial capacity
-	bad := uniq(t) + "bad"
-	mustPipeline(t, client.Pipeline{Name: bad, Standby: true,
-		Transform: &client.Transform{Image: "INVALID_IMAGE_REF", Cmd: []string{"true"}},
-		Input:     &client.Input{Repo: repo, Glob: "/*"}})
-	cm2 := commitFiles(t, repo, "", map[string]string{"file": "bar\n"})
-	_ = cm2
-	pollFor(t, "pipeline "+bad+" crashed", 60*time.Second, func() bool {
-		p, err := c.InspectPipeline(bad)
-		return err == nil && p.State == "crashed"
 	})
 }

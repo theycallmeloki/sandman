@@ -138,12 +138,29 @@ func TestSB056_MidDAGCommitOneWavePerStage(t *testing.T) {
 		Input:     &client.Input{Repo: pc, Glob: "/*"},
 	})
 
-	// wave 1: initial commits of A and E
+	// wave 1: the initial commits of A and E flush together as the set
+	// (the reference's shape — TestChainedPipelinesNoDelay flushes the
+	// pair): the pairing wave is C's cross job plus D's downstream job,
+	// exactly 2, never the single-side jobs
 	a1 := commitFiles(t, repoA, "master", map[string]string{"afile": "a1"})
 	e1 := commitFiles(t, repoE, "master", map[string]string{"efile": "e1"})
-	flushOK(t, a1.ID) // B, C's pairing job, D — the wave's chain
-	flushOK(t, e1.ID) // C's lone job settles too, producing nothing
+	jobs1 := flushSetOK(t, []string{a1.ID, e1.ID})
+	if len(jobs1) != 2 {
+		t.Fatalf("wave 1 set-flush returned %d jobs, want 2 (C pairing + D)", len(jobs1))
+	}
 
+	// wave 2: a mid-DAG commit to E alone — the set-flush returns the new
+	// pairing wave's 2 jobs; B (whose input is A only) is never
+	// re-triggered
+	e2 := replaceCommit(t, repoE, "master", map[string]string{"efile": "e2"})
+	jobs2 := flushSetOK(t, []string{e2.ID})
+	if len(jobs2) != 2 {
+		t.Fatalf("wave 2 flush returned %d jobs, want 2 (C pairing job + D)", len(jobs2))
+	}
+
+	// the eventual state: exactly one D job per wave — the counts are the
+	// contract (the reference asserts only the final counts, never an
+	// intermediate snapshot), and the cross pairing settles asynchronously
 	jobsD := func() []client.Job {
 		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pd})
 		if err != nil {
@@ -151,20 +168,8 @@ func TestSB056_MidDAGCommitOneWavePerStage(t *testing.T) {
 		}
 		return js
 	}
-	// exactly one job per downstream pipeline after wave 1
-	if n := len(jobsD()); n != 1 {
-		t.Fatalf("wave 1: D has %d jobs, want 1", n)
-	}
-	// wave 2: a mid-DAG commit to E — one new job in C and D, none in B
-	e2 := replaceCommit(t, repoE, "master", map[string]string{"efile": "e2"})
-	jobs2 := flushOK(t, e2.ID)
-	if len(jobs2) != 2 {
-		t.Fatalf("wave 2 flush returned %d jobs, want 2 (C pairing job + D)", len(jobs2))
-	}
+	pollFor(t, "D has exactly 2 jobs", 60*time.Second, func() bool { return len(jobsD()) == 2 })
 	ds := jobsD()
-	if len(ds) != 2 {
-		t.Fatalf("after wave 2: D has %d jobs, want 2 (one per wave)", len(ds))
-	}
 	bs, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pb})
 	if err != nil {
 		t.Fatalf("list B jobs: %v", err)
@@ -173,7 +178,13 @@ func TestSB056_MidDAGCommitOneWavePerStage(t *testing.T) {
 		t.Fatalf("B has %d jobs, want 1 (E is not its input — never re-triggered)", len(bs))
 	}
 	// D's head output is coherent: both sides of the latest wave
-	b, err := c.GetFile(ds[0].OutputCommit, "combined")
+	latest := ds[0]
+	for _, j := range ds {
+		if j.Started > latest.Started {
+			latest = j
+		}
+	}
+	b, err := c.GetFile(latest.OutputCommit, "combined")
 	if err != nil {
 		t.Fatalf("read D output: %v", err)
 	}

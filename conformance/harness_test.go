@@ -76,7 +76,10 @@ func TestMain(m *testing.M) {
 }
 
 func startDaemon(state string) {
-	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(daemonPort), "-state", state, "-authToken", conformanceToken)
+	// the matrix runs on the process backend (D-23 R-3): deterministic,
+	// no container runtime required; the container-facing subset spins
+	// its own container daemon (container_test.go)
+	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(daemonPort), "-state", state, "-authToken", conformanceToken, "-runner", "process")
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -84,6 +87,15 @@ func startDaemon(state string) {
 		os.Exit(1)
 	}
 	daemonCmd = cmd
+}
+
+// dockerAvailable reports whether the container runtime is present (the
+// container-facing subset runs only when it is; D-23 R-4).
+func dockerAvailable() bool {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return false
+	}
+	return exec.Command("docker", "version").Run() == nil
 }
 
 // restartDaemon kills the daemon and starts a fresh one on the same port
