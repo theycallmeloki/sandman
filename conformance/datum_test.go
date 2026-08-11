@@ -373,3 +373,41 @@ func TestSB166_ReprocessEveryJob(t *testing.T) {
 		}
 	}
 }
+
+// TestD13_ChangedTransformDoesNotReprocessUnchangedDatums — the dedup
+// cache is keyed per pipeline by the datum's content hash, independent of
+// the transform (D-13 isolating clause): changing the transform does NOT
+// reprocess unchanged datums. A same-content commit after an update is
+// skipped — the wave settles with no output commit. Reprocess is the
+// explicit override (SB-166).
+func TestD13_ChangedTransformDoesNotReprocessUnchangedDatums(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	pipe := uniq(t)
+	tr := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cp ${" + repo + "}/file ${OUT}/file"}}
+	in := &client.Input{Repo: repo, Glob: "/*"}
+	mustPipeline(t, client.Pipeline{Name: pipe, Transform: tr, Input: in})
+
+	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "same\n"})
+	if jobs := flushOK(t, cm1.ID); len(jobs) != 1 {
+		t.Fatalf("first wave = %d jobs, want 1", len(jobs))
+	}
+
+	// change the transform (same pipeline, update flag); the update must
+	// not invalidate the dedup memory for unchanged content
+	mustPipeline(t, client.Pipeline{
+		Name: pipe, Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cp -r ${" + repo + "}/* ${OUT}/"}}, Input: in, Update: true,
+	})
+
+	// a new commit that does NOT touch "file": that datum's content is
+	// byte-identical (append semantics: accumulated from cm1), so it is
+	// skipped even under the new transform; the new datum runs
+	cm2 := commitFiles(t, repo, "master", map[string]string{"file2": "x\n"})
+	jobs := flushOK(t, cm2.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("second wave = %d jobs, want 1", len(jobs))
+	}
+	if jobs[0].Skipped != 1 || jobs[0].Processed != 1 {
+		t.Fatalf("wave after transform change: skipped=%d processed=%d, want 1/1 — the unchanged datum must be skipped (dedup is content-based, transform-independent), the new datum processed", jobs[0].Skipped, jobs[0].Processed)
+	}
+}
