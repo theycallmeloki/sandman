@@ -253,6 +253,47 @@ func validatePipelineSpec(p client.Pipeline) error {
 	return nil
 }
 
+// validateService checks a service pipeline's declaration (SB-100/168):
+// a service is one long-lived process (parallelism 1), always on (no
+// standby), mutually exclusive with spouts, and serves a real input.
+func validateService(p client.Pipeline) error {
+	if p.Service == nil {
+		return nil
+	}
+	if p.Spout != nil {
+		return fmt.Errorf("a pipeline cannot be both a service and a spout")
+	}
+	if p.Standby {
+		return fmt.Errorf("a service pipeline cannot be standby")
+	}
+	if p.Service.InternalPort <= 0 || p.Service.ExternalPort <= 0 {
+		return fmt.Errorf("a service pipeline must declare internal and external ports")
+	}
+	if p.Parallelism != nil && p.Parallelism.Constant > 1 {
+		return fmt.Errorf("a service pipeline runs one long-lived process (parallelism 1)")
+	}
+	return nil
+}
+
+// externalPortTaken reports whether another live pipeline already declares
+// the external port — two services cannot share the control-plane host's
+// bound port (SB-100).
+func (d *daemon) externalPortTaken(port int, except string) bool {
+	pipes, err := d.listPipelinesFiltered(nil, "", false)
+	if err != nil {
+		return false
+	}
+	for _, p := range pipes {
+		if p.Name == except || p.Service == nil {
+			continue
+		}
+		if p.Service.ExternalPort == port {
+			return true
+		}
+	}
+	return false
+}
+
 // (self-reference before repo existence, so a pipeline never mistakes its
 // own future output repo for a missing input).
 // materializeInputDefaults fills an input's implicit defaults into the
@@ -300,6 +341,9 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	if err := validatePipelineSpec(p); err != nil {
 		return err
 	}
+	if err := validateService(p); err != nil {
+		return err
+	}
 	if err := validateSpout(p); err != nil {
 		return err
 	}
@@ -311,6 +355,9 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		}
 	} else if _, err := os.Stat(d.store.repoDir(p.Input.Repo)); err != nil {
 		return fmt.Errorf("input repo %q not found", p.Input.Repo)
+	}
+	if p.Service != nil && d.externalPortTaken(p.Service.ExternalPort, p.Name) {
+		return fmt.Errorf("external port %d is already declared by another service pipeline", p.Service.ExternalPort)
 	}
 	// materialize the input's implicit defaults into the stored spec so
 	// extraction echoes them (SB-151): every side's name defaults to its
@@ -340,6 +387,12 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		// a spout's job is its own: a background run committing each
 		// data-bearing cycle (SB-139)
 		d.spawnSpoutJob(rec, false)
+		return nil
+	}
+	if p.Service != nil {
+		// a service's job is its own: one long-lived process serving the
+		// input, never a datum run (SB-100)
+		d.spawnServiceJob(rec)
 		return nil
 	}
 	d.scheduleHeadJob(rec)
@@ -603,6 +656,12 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 		d.spawnSpoutJob(rec, p.Reprocess)
 		return nil
 	}
+	if p.Service != nil {
+		// the update killed the old service process; the new declaration
+		// serves the current input head (SB-100)
+		d.spawnServiceJob(rec)
+		return nil
+	}
 	d.scheduleHeadJob(rec)
 	d.standbyIdle(rec)
 	return nil
@@ -765,6 +824,12 @@ func (d *daemon) startPipeline(name string) error {
 	rec.StoppedAt = ""
 	if err := d.savePipeline(rec); err != nil {
 		return err
+	}
+	if rec.Pipeline.Service != nil {
+		// a stopped service was cancelled; starting it brings the long-
+		// lived process back up serving the current input head (SB-100)
+		d.spawnServiceJob(rec)
+		return nil
 	}
 	chain := d.store.chainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt)
 	if len(chain) == 0 {
@@ -938,6 +1003,7 @@ func (rec *pipelineRec) info() client.PipelineInfo {
 		Reprocess:    rec.Pipeline.Reprocess,
 		EnableStats:  rec.Pipeline.EnableStats,
 		Spout:        rec.Pipeline.Spout,
+		Service:      rec.Pipeline.Service,
 		Placement:    rec.Pipeline.Placement,
 	}
 }
@@ -1349,6 +1415,11 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		if rec.Stopped {
 			continue // stopped pipelines ignore new commits (SB-048)
 		}
+		if rec.Pipeline.Service != nil {
+			// a service is never triggered per commit: its single
+			// long-lived job refreshes its served input itself (SB-100)
+			continue
+		}
 		if !pipelineConsumes(rec.Pipeline.Input, cm.Repo, cm.Branch) {
 			continue
 		}
@@ -1390,6 +1461,11 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		triggerMu.Unlock()
 		d.spawnJob(rec, heads, propagated, id, jr)
 	}
+	// a finished commit always wakes the blocking waits, even when no
+	// job spawned (a service pipeline consumes the commit by refreshing
+	// its served input; an empty flush re-checks its closure): services
+	// and flushes advance on the signal
+	d.stateChanged.signal()
 }
 
 // triggerMu serializes the duplicate check and the job record's creation

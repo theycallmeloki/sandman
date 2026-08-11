@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -111,6 +112,43 @@ func cmdWorker(args []string) {
 			return
 		}
 		writeJSON(w, runExec(*name, req))
+	})
+	// remote service support (SB-168): the control plane asks the worker
+	// to keep a service container alive serving a materialized input
+	// directory; the control-plane host proxies its external port to
+	// host:internal, so clients never need this worker's address.
+	mux.HandleFunc("POST /service", func(w http.ResponseWriter, r *http.Request) {
+		var req serviceStartRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := runRemoteService(req); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]string{"ok": "true"})
+	})
+	mux.HandleFunc("POST /service/refresh", func(w http.ResponseWriter, r *http.Request) {
+		var req serviceRefreshRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if err := refreshRemoteService(req); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]string{"ok": "true"})
+	})
+	mux.HandleFunc("DELETE /service", func(w http.ResponseWriter, r *http.Request) {
+		var req serviceStopRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		stopRemoteService(req.Name)
+		writeJSON(w, map[string]string{"ok": "true"})
 	})
 	server := &http.Server{Handler: mux}
 	go server.Serve(ln)
@@ -303,4 +341,143 @@ func (d *daemon) execOnHost(h *execHost, req execRequest) (code, errCode int, ta
 		return 0, 0, "", false, nil, errors.New(res.Error)
 	}
 	return res.PrimaryCode, res.ErrCode, res.Tail, res.TimedOut, res.Outputs, nil
+}
+
+// ---- remote services (SB-168) ----
+
+// serviceStartRequest asks a worker to keep one service container alive
+// serving the shipped input files.
+type serviceStartRequest struct {
+	Name         string     `json:"name"`
+	Image        string     `json:"image,omitempty"`
+	Cmd          []string   `json:"cmd,omitempty"`
+	Stdin        []string   `json:"stdin,omitempty"`
+	Env          []string   `json:"env"`
+	InternalPort int        `json:"internalPort"`
+	Files        []shipFile `json:"files,omitempty"`
+}
+
+// serviceRefreshRequest replaces a running service's served input files.
+type serviceRefreshRequest struct {
+	Name  string     `json:"name"`
+	Files []shipFile `json:"files,omitempty"`
+}
+
+type serviceStopRequest struct {
+	Name string `json:"name"`
+}
+
+// workerService tracks one container the worker keeps alive: the host
+// directory the container serves.
+type workerService struct {
+	dir string
+}
+
+var (
+	workerServicesMu sync.Mutex
+	workerServices   = map[string]*workerService{}
+)
+
+// runRemoteService starts a detached service container: the input files
+// are materialized into a host directory mounted at /sandman/in, and the
+// internal port is published on the worker's host address so the control
+// plane can proxy to it.
+func runRemoteService(req serviceStartRequest) error {
+	dir, err := os.MkdirTemp("", "sandman-svc-*")
+	if err != nil {
+		return err
+	}
+	if err := writeShippedFiles(dir, req.Files); err != nil {
+		os.RemoveAll(dir)
+		return err
+	}
+	outDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		os.RemoveAll(dir)
+		return err
+	}
+	image := req.Image
+	if image == "" {
+		image = "alpine"
+	}
+	args := []string{"run", "-d", "--name", req.Name,
+		"-p", fmt.Sprintf("%d:%d", req.InternalPort, req.InternalPort),
+		"-v", dir + ":/sandman/in",
+		"-v", outDir + ":/sandman/out",
+	}
+	for _, e := range req.Env {
+		args = append(args, "-e", e)
+	}
+	if len(req.Stdin) > 0 {
+		args = append(args, "-i")
+	}
+	args = append(args, "-w", "/sandman/out", image)
+	args = append(args, req.Cmd...)
+	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+		os.RemoveAll(dir)
+		if isProvisioningError(string(out)) {
+			return fmt.Errorf("provisioning failed: %s", strings.TrimSpace(string(out)))
+		}
+		return fmt.Errorf("docker run: %s", strings.TrimSpace(string(out)))
+	}
+	workerServicesMu.Lock()
+	workerServices[req.Name] = &workerService{dir: dir}
+	workerServicesMu.Unlock()
+	return nil
+}
+
+// refreshRemoteService replaces the running service's served input with
+// the shipped files: the container's mount reflects them immediately, so
+// the service serves the new revision without a restart (SB-100 clause 5).
+func refreshRemoteService(req serviceRefreshRequest) error {
+	workerServicesMu.Lock()
+	svc, ok := workerServices[req.Name]
+	workerServicesMu.Unlock()
+	if !ok {
+		return fmt.Errorf("no service %q on this host", req.Name)
+	}
+	// clear the served directory's CONTENTS, never the directory itself:
+	// svc.dir is the container's bind-mount root, and replacing the
+	// directory inode would orphan the mount (the container keeps serving
+	// the deleted tree — SB-100 clause 5 refresh must reach it)
+	entries, err := os.ReadDir(svc.dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(svc.dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return writeShippedFiles(svc.dir, req.Files)
+}
+
+// stopRemoteService removes the service container and its materialized
+// input; the control plane's proxy then fails to connect and the service
+// is gone.
+func stopRemoteService(name string) {
+	workerServicesMu.Lock()
+	svc, ok := workerServices[name]
+	delete(workerServices, name)
+	workerServicesMu.Unlock()
+	if !ok {
+		return
+	}
+	exec.Command("docker", "rm", "-f", name).Run()
+	os.RemoveAll(svc.dir)
+}
+
+// writeShippedFiles materializes shipped files under dir (paths are
+// slash-relative).
+func writeShippedFiles(dir string, files []shipFile) error {
+	for _, f := range files {
+		dst := filepath.Join(dir, filepath.FromSlash(f.Path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, f.Data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }

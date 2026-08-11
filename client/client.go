@@ -353,6 +353,35 @@ func (c *Client) GetFile(commitID, p string) ([]byte, error) {
 	return c.doRaw("GET", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p), nil)
 }
 
+// ServiceInfo is a service pipeline's running record (SB-100 clause 4):
+// the declared ports and the endpoint's annotations — the user's own plus
+// the system's identifying pipelineName annotation.
+type ServiceInfo struct {
+	Pipeline    string            `json:"pipeline"`
+	Internal    int               `json:"internalPort"`
+	External    int               `json:"externalPort"`
+	Annotations map[string]string `json:"annotations"`
+}
+
+// InspectService returns a service pipeline's record (SB-100).
+func (c *Client) InspectService(pipeline string) (ServiceInfo, error) {
+	var out ServiceInfo
+	return out, c.do("GET", "/api/v1/services/"+url.PathEscape(pipeline), nil, &out)
+}
+
+// ListServices lists every service pipeline's record.
+func (c *Client) ListServices() ([]ServiceInfo, error) {
+	var out []ServiceInfo
+	return out, c.do("GET", "/api/v1/services", nil, &out)
+}
+
+// ServiceProxy fetches a path through the control plane's per-pipeline
+// service proxy (SB-100 clause 3): the request is forwarded to the
+// service's own endpoint, so the response is identical to the direct one.
+func (c *Client) ServiceProxy(pipeline, p string) ([]byte, error) {
+	return c.doRaw("GET", "/api/v1/services/"+url.PathEscape(pipeline)+"/"+url.PathEscape(p), nil)
+}
+
 func (c *Client) ListFiles(commitID string) ([]FileInfo, error) {
 	var out []FileInfo
 	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(commitID)+"/files", nil, &out)
@@ -602,6 +631,22 @@ type Pipeline struct {
 	// declare an input, its transform runs in the background, and the
 	// daemon commits each data-bearing cycle to the output branch.
 	Spout *Spout `json:"spout,omitempty"`
+	// Service, when set, makes the pipeline a service (SB-100): instead
+	// of settling after processing a revision, one long-running process
+	// serves the pipeline's input over HTTP, and new input revisions are
+	// served automatically without redeploying. InternalPort is where the
+	// user's process listens inside the execution environment;
+	// ExternalPort is bound on the control-plane host and proxied to the
+	// process wherever it runs (SB-168). Annotations are preserved on the
+	// service record alongside the system's own pipelineName annotation.
+	Service *Service `json:"service,omitempty"`
+}
+
+// Service is a service pipeline's declaration (SB-100/168).
+type Service struct {
+	InternalPort int               `json:"internalPort"`
+	ExternalPort int               `json:"externalPort"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
 }
 
 // Spout is a spout pipeline's options (SB-139): Overwrite replaces the
@@ -636,6 +681,7 @@ type PipelineInfo struct {
 	Reprocess    bool           `json:"reprocess,omitempty"`
 	EnableStats  bool           `json:"enableStats,omitempty"`
 	Spout        *Spout         `json:"spout,omitempty"`
+	Service      *Service       `json:"service,omitempty"`
 	Placement    string         `json:"placement,omitempty"`
 	JobCounts    map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
 }
