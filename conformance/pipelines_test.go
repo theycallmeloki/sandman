@@ -184,6 +184,9 @@ func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
 		{"input named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Name: "out", Repo: repo, Glob: "/*"}}, `input cannot be named "out"`},
 		{"input repo named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Repo: "out", Glob: "/*"}}, `input cannot be named "out"`},
 		{"nonexistent repo", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Name: "in", Repo: "does-not-exist", Glob: "/*"}}, "not found"},
+		// clause 11a: a cron input missing its name (SB-089's derived
+		// repository needs the name)
+		{"cron missing name", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Cron: "@every 1m"}}, "input must specify a name"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,4 +253,25 @@ func TestSB173_MixedParallelismRejected(t *testing.T) {
 		},
 	})
 	wantErr(t, err, "parallelism")
+}
+
+// SB-159 clause 10 — a plain cross (not cross-of-union) whose members
+// expose the same name is rejected: two branches sharing a namespace are
+// ambiguous, and the record demands the rejection (its message is
+// "name was used more than once"; Sandman's signal is the cross
+// namespace check, SB-078 clauses 5/6).
+func TestSB159_CrossDuplicateNamesRejected(t *testing.T) {
+	ra := uniq(t) + "a"
+	rb := uniq(t) + "b"
+	mustRepo(t, ra)
+	mustRepo(t, rb)
+	err := c.CreatePipeline(client.Pipeline{
+		Name:      uniq(t),
+		Transform: copyTransform("x"),
+		Input: &client.Input{Cross: []client.Input{
+			{Name: "branch", Repo: ra, Glob: "/*"},
+			{Name: "branch", Repo: rb, Glob: "/*"},
+		}},
+	})
+	wantErr(t, err, "distinct namespaces")
 }

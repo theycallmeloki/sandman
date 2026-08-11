@@ -177,6 +177,9 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 		if s.Cron != "" {
 			// a cron input needs no repo or glob; its repository is
 			// derived from the pipeline and the input's name (SB-089)
+			if s.Name == "" {
+				return fmt.Errorf("input must specify a name")
+			}
 			if !shIdent.MatchString(s.Name) {
 				return fmt.Errorf("input name %q is not a valid environment variable name", s.Name)
 			}
