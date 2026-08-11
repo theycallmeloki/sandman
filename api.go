@@ -607,10 +607,84 @@ func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
 // ---- files ----
 
 func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
+	q := r.URL.Query()
+	// fetch=URL: ingest a remote file (SB-088) — the URL's body becomes
+	// the file's content
+	if u := q.Get("fetch"); u != "" {
+		resp, err := http.Get(u)
+		if err != nil {
+			return fmt.Errorf("fetch %s: %v", u, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("fetch %s: status %d", u, resp.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<30))
+		if err != nil {
+			return fmt.Errorf("read fetch: %v", err)
+		}
+		if err := d.store.putFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+			return err
+		}
+		writeJSON(w, map[string]string{"ok": "true"})
+		return nil
+	}
 	defer r.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<30))
 	if err != nil {
 		return fmt.Errorf("read body: %v", err)
+	}
+	// split=1&delimiter=X[&header=1]: split the upload into records at
+	// the delimiter; with a header, the first chunk is the header and is
+	// replicated into every record's file, each stored at path/<i>
+	// (SB-137/138 — same-header appends leave earlier records' identity
+	// unchanged, so they are skipped by the dedup)
+	if q.Get("split") == "1" {
+		delim := q.Get("delimiter")
+		header := q.Get("header") == "1"
+		chunks := strings.Split(string(data), delim)
+		start := 0
+		if header {
+			start = 1
+		}
+		records := chunks[start:]
+		prefix := r.PathValue("path") + "/"
+		base := 0
+		var firstHeader string
+		if view, err := d.store.resolveViewByID(r.PathValue("id")); err == nil {
+			for p := range view {
+				if strings.HasPrefix(p, prefix) {
+					base++
+				}
+			}
+		}
+		// a changed header re-identifies every record: the new records
+		// replace the old at their names, so all are reprocessed (SB-138)
+		changed := false
+		if header && base > 0 {
+			if first, err := d.store.getFile(r.PathValue("id"), prefix+"0"); err == nil {
+				firstHeader = string(first)
+				if i := strings.IndexByte(firstHeader, '\n'); i >= 0 {
+					firstHeader = firstHeader[:i]
+				}
+				changed = firstHeader != chunks[0]
+			}
+		}
+		off := 0
+		if !changed {
+			off = base // same header: new records continue after the old
+		}
+		for i, rec := range records {
+			content := rec
+			if header {
+				content = chunks[0] + delim + content
+			}
+			if err := d.store.putFile(r.PathValue("id"), prefix+strconv.Itoa(off+i), []byte(content)); err != nil {
+				return err
+			}
+		}
+		writeJSON(w, map[string]string{"ok": "true"})
+		return nil
 	}
 	if err := d.store.putFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 		return err

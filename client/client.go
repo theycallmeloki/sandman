@@ -299,6 +299,26 @@ func (c *Client) PutFile(commitID, p string, data []byte) error {
 	return err
 }
 
+// PutFileSplit uploads data split into records at delimiter (SB-137/138):
+// each record is stored at p/<index>. With header, the first chunk is the
+// header and is replicated into every record's file — appending records
+// under the same header leaves earlier records' identity unchanged, so
+// the dedup skips them; a changed header re-identifies every record.
+func (c *Client) PutFileSplit(commitID, p string, data []byte, delimiter string, header bool) error {
+	q := "?split=1&delimiter=" + url.QueryEscape(delimiter)
+	if header {
+		q += "&header=1"
+	}
+	_, err := c.doRaw("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+q, data)
+	return err
+}
+
+// PutFileURL fetches a file from an HTTP URL and stores it in the commit
+// (SB-088).
+func (c *Client) PutFileURL(commitID, p, u string) error {
+	return c.do("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+"?fetch="+url.QueryEscape(u), nil, nil)
+}
+
 // DeleteFile tombstones a path in an open commit: the path is removed from
 // the branch's view at this revision (SB-007).
 func (c *Client) DeleteFile(commitID, p string) error {

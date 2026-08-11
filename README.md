@@ -229,6 +229,14 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Delimited uploads** — `PutFileSplit` uploads data split into records
+  at a delimiter, each stored at `path/<i>`; with a header, the first
+  chunk is replicated into every record's file. Appending under the same
+  header continues the numbering, so earlier records keep their identity
+  and the dedup skips them; a changed header re-identifies every record
+  and replaces them, so all are reprocessed (SB-137/138). `PutFileURL`
+  ingests a file from an HTTP URL into a commit, and pipelines defined
+  from JSON specs drive multi-stage DAGs (SB-088)
 - **Spout pipelines** — a pipeline with no input whose transform runs in
   the background; the daemon watches its output directory and commits
   each data-bearing cycle to the output branch (files accumulate across
