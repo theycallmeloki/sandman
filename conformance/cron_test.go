@@ -138,6 +138,51 @@ func TestSB089_CronInputs(t *testing.T) {
 		}
 	})
 
+	t.Run("overwrite with scheduled and manual ticks", func(t *testing.T) {
+		// SB-089 clause 5 (RunCronOverwrite): with overwrite mode and a
+		// per-minute schedule, a scheduled tick followed by three manual
+		// triggers yields four commits, each containing exactly one file —
+		// scheduled ticks keep working alongside manual triggers and the
+		// manual triggers do not corrupt the schedule.
+		pipe := uniq(t)
+		mustPipeline(t, client.Pipeline{
+			Name: pipe,
+			Transform: &client.Transform{
+				Image: "alpine",
+				Cmd:   []string{"sh", "-c", "cp -r ${cron}/* ${OUT}/"},
+			},
+			Input: &client.Input{Name: "cron", Cron: "@every 1m", Overwrite: true},
+		})
+		// the first scheduled tick (per-minute schedule fires within the
+		// wait window)
+		waitCronTicks(t, pipe+"-cron", 1, 90*time.Second)
+		// three manual triggers, spaced out of the same wall-clock second
+		for i := 0; i < 3; i++ {
+			if err := c.TriggerCron(pipe); err != nil {
+				t.Fatalf("trigger %d: %v", i, err)
+			}
+			time.Sleep(2 * time.Second)
+		}
+		// exactly four commits — one scheduled + three manual — and every
+		// commit holds exactly one file (overwrite replaced, never
+		// accumulated)
+		var commits []client.Commit
+		pollFor(t, "four cron commits", 60*time.Second, func() bool {
+			var err error
+			commits, err = c.CommitHistory(pipe+"-cron", "master")
+			return err == nil && len(commits) == 4
+		})
+		for _, cm := range commits {
+			fs, err := c.ListFiles(cm.ID)
+			if err != nil {
+				t.Fatalf("list tick %s: %v", cm.ID, err)
+			}
+			if len(fs) != 1 {
+				t.Fatalf("tick commit %s has %d files, want exactly 1 (overwrite)", cm.ID, len(fs))
+			}
+		}
+	})
+
 	t.Run("manual triggers create ticks", func(t *testing.T) {
 		pipe, down := uniq(t), uniq(t)
 		mustPipeline(t, client.Pipeline{
