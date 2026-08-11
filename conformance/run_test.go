@@ -269,6 +269,55 @@ func TestSB010_RunPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("run with provenance from upstream while cron mid-cycle", func(t *testing.T) {
+		// SB-010 clause 8 / RunPipelineDeduplicateSpecBranch: a pipeline
+		// crossing a cron input with a transitive upstream output can be
+		// run with provenance from the upstream commit while the cron is
+		// mid-cycle (no tick yet); the run completes without error — the
+		// cron side contributes no data.
+		repo := uniq(t)
+		mustRepo(t, repo)
+		up, pipe := uniq(t), uniq(t)
+		mustPipeline(t, client.Pipeline{
+			Name:      up,
+			Transform: &client.Transform{Image: "alpine"},
+			Input:     &client.Input{Repo: repo, Glob: "/*"},
+		})
+		mustPipeline(t, client.Pipeline{
+			Name: pipe,
+			Transform: &client.Transform{
+				Image: "alpine",
+				Cmd:   []string{"sh", "-c", "cat ${u}/* ${c}/* > ${OUT}/out"},
+			},
+			Input: &client.Input{Cross: []client.Input{
+				{Name: "u", Repo: up, Glob: "/*"},
+				{Name: "c", Cron: "@every 1h"},
+			}},
+		})
+
+		cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
+		flushOK(t, cm.ID)
+		uhead, err := c.HeadCommit(up, "master")
+		if err != nil {
+			t.Fatalf("upstream head: %v", err)
+		}
+
+		// the cron has not ticked (per-hour schedule); the run pins the
+		// upstream commit as provenance and completes
+		j, err := c.RunPipeline(pipe, []string{uhead.ID}, "")
+		if err != nil {
+			t.Fatalf("run with upstream provenance: %v", err)
+		}
+		waitTerminal(t, j.ID)
+		fin, err := c.InspectJob(j.ID)
+		if err != nil {
+			t.Fatalf("inspect run: %v", err)
+		}
+		if fin.State != "success" {
+			t.Fatalf("run state = %s, want success (reason %q)", fin.State, fin.Reason)
+		}
+	})
+
 	t.Run("run with statistics", func(t *testing.T) {
 		repo := uniq(t)
 		mustRepo(t, repo)
