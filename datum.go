@@ -154,14 +154,29 @@ func (d *daemon) unionBranchPaths(views map[string]map[string]fileEntry, branch 
 			}
 		}
 	default:
-		for p := range views[branch.Name] {
+		v, ok := views[unionBranchKey(branch)]
+		if !ok {
+			v = views[branch.Name]
+		}
+		for p := range v {
 			if globMatches(branch.Glob, p) {
-				e := views[branch.Name][p]
+				e := v[p]
 				out[p] = append(out[p], fileRef{Path: p, Hash: e.SHA, Size: e.Size})
 			}
 		}
 	}
 	return out
+}
+
+// unionBranchKey names the view key of one union branch: the branch's
+// name (or repo) plus its branch, so two branches of one repo stay
+// distinct in the views (SB-141).
+func unionBranchKey(b client.Input) string {
+	n := b.Name
+	if n == "" {
+		n = b.Repo
+	}
+	return n + "@" + client.InputBranch(b)
 }
 
 // datumState is the durable per-datum record (the dedup table).
@@ -314,6 +329,27 @@ func crossDatums(sideLists [][]datumSide) []datum {
 func datumHash(views map[string]map[string]fileEntry, dt datum) string {
 	h := sha256.New()
 	for _, sd := range dt.Sides {
+		if sd.Merge != nil {
+			// a union side combined into a cross/join datum: the merged
+			// copies carry the content (the branches' views live under
+			// branch keys, not the union's name, SB-141)
+			paths := make([]string, 0, len(sd.Merge))
+			for p := range sd.Merge {
+				paths = append(paths, p)
+			}
+			sort.Strings(paths)
+			for _, p := range paths {
+				for _, r := range sd.Merge[p] {
+					h.Write([]byte(sd.Name))
+					h.Write([]byte{0})
+					h.Write([]byte(p))
+					h.Write([]byte{0})
+					h.Write([]byte(r.Hash))
+					h.Write([]byte{0})
+				}
+			}
+			continue
+		}
 		for _, f := range sd.Files {
 			h.Write([]byte(sd.Name))
 			h.Write([]byte{0})

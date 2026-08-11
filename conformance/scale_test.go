@@ -7,6 +7,8 @@ package conformance
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -186,7 +188,10 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 		Name: pipe,
 		Transform: &client.Transform{
 			Image: "alpine",
-			Cmd:   []string{"sh", "-c", "sleep 40"},
+			// the datums wait on a shared release file (the job's /tmp
+			// mount), so the both-running window is unbounded — a fixed
+			// sleep could be missed under full-suite docker load
+			Cmd: []string{"sh", "-c", "while [ ! -f /tmp/sandman-release ]; do sleep 1; done; cp -r ${" + repo + "}/* ${OUT}/"},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
 		Parallelism: &client.Parallelism{Constant: 2},
@@ -236,7 +241,12 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 		return false
 	})
 
-	// the job still completes with exactly one output commit
+	// release the datums: both finish and the job completes with exactly
+	// one output commit
+	release := filepath.Join(daemonStateDir, "jobs", job.ID, "tmp", "sandman-release")
+	if err := os.WriteFile(release, []byte("go"), 0o644); err != nil {
+		t.Fatalf("release the job: %v", err)
+	}
 	jobs, err := c.Flush(cm.ID, 120*time.Second)
 	if err != nil {
 		t.Fatalf("flush after restart: %v", err)

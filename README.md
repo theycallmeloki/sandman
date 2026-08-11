@@ -229,6 +229,25 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Union composition** — a union input may nest crosses and other
+  unions, exposed under its namespace with same-path files merged by
+  concatenation in branch order; a union inside a cross resolves its
+  branches' heads independently (two branches of one repo stay distinct)
+  and the cross's other legs resolve to their branch heads at job-creation
+  time (SB-077/078/141)
+- **Config extraction** — inspecting a pipeline echoes every user-settable
+  field (transform, parallelism, chunk spec, queue size, autoscaling,
+  standby, output branch, reprocess, stats, spout, description) with the
+  input's name/branch defaults materialized, deep-equal to the creation
+  request; request flags (update) are not echoed, and an unsupported
+  execution framework (e.g. TFJob) is rejected at creation naming it
+  (SB-151)
+- **Resource enforcement** — resource requests and limits declared on a
+  pipeline (memory, CPU, disk) are applied to the environment that
+  executes its jobs: memory limits become docker `--memory`, requests
+  `--memory-reservation`, CPU `--cpus` (a CPU request maps to the
+  allocation; a disk request is recorded but not enforceable on docker's
+  default driver). No declared resources → none injected (SB-067–070)
 - **Provisioning failures** — a pipeline whose execution environment cannot
   be provisioned (a nonexistent image — obviously invalid or
   plausible-but-absent) converges on the crashed state with a recorded

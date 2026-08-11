@@ -218,11 +218,41 @@ func validatePipelineSpec(p client.Pipeline) error {
 	if p.Parallelism != nil && p.Parallelism.Constant != 0 && p.Parallelism.Coefficient != 0 {
 		return fmt.Errorf("cannot specify both a constant and a coefficient of parallelism")
 	}
+	if p.Framework != "" {
+		return fmt.Errorf("pipeline framework %q is not supported", p.Framework)
+	}
 	return nil
 }
 
 // (self-reference before repo existence, so a pipeline never mistakes its
 // own future output repo for a missing input).
+// materializeInputDefaults fills an input's implicit defaults into the
+// stored spec so extraction echoes them (SB-151): every side's name
+// defaults to its repo and its branch to "master".
+func materializeInputDefaults(in *client.Input) {
+	if in == nil {
+		return
+	}
+	if in.Name == "" {
+		in.Name = in.Repo
+	}
+	if in.Branch == "" {
+		in.Branch = "master"
+	}
+	for i := range in.Cross {
+		materializeInputDefaults(&in.Cross[i])
+	}
+	for i := range in.Join {
+		materializeInputDefaults(&in.Join[i])
+	}
+	for i := range in.Group {
+		materializeInputDefaults(&in.Group[i])
+	}
+	for i := range in.Union {
+		materializeInputDefaults(&in.Union[i])
+	}
+}
+
 // inputSides / inputBranch are the server's aliases for the client's
 // input normalization helpers.
 func inputSides(in *client.Input) []client.Input { return client.InputSides(in) }
@@ -244,6 +274,10 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	} else if _, err := os.Stat(d.store.repoDir(p.Input.Repo)); err != nil {
 		return fmt.Errorf("input repo %q not found", p.Input.Repo)
 	}
+	// materialize the input's implicit defaults into the stored spec so
+	// extraction echoes them (SB-151): every side's name defaults to its
+	// repo and its branch to master
+	materializeInputDefaults(p.Input)
 
 	// update (or create) branching. A corrupt record is an incomplete
 	// pipeline: not updatable, not silently recreated (SB-144).
@@ -387,7 +421,12 @@ func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, i
 	if id == "" {
 		id = newJobID(d.name)
 	}
-	go d.runJob(*rec, heads, id, propagated, pre)
+	// the running handle is registered before the goroutine starts, so a
+	// cancel arriving the instant the job spawns can always find it — a
+	// not-yet-scheduled goroutine would otherwise escape the cancel and
+	// run the old version indefinitely (SB-045)
+	rj := registerRunning(id, rec.Pipeline.Name)
+	go d.runJob(*rec, heads, id, propagated, pre, rj)
 	return id
 }
 
@@ -832,14 +871,23 @@ func (d *daemon) listPipelinesFiltered(history *int, name string, allowIncomplet
 
 func (rec *pipelineRec) info() client.PipelineInfo {
 	return client.PipelineInfo{
-		Name:        rec.Pipeline.Name,
-		State:       rec.State,
-		Reason:      rec.Reason,
-		Description: rec.Pipeline.Description,
-		Stopped:     rec.Stopped,
-		Version:     rec.Version,
-		Transform:   rec.Pipeline.Transform,
-		Input:       rec.Pipeline.Input,
+		Name:         rec.Pipeline.Name,
+		State:        rec.State,
+		Reason:       rec.Reason,
+		Description:  rec.Pipeline.Description,
+		Stopped:      rec.Stopped,
+		Version:      rec.Version,
+		Transform:    rec.Pipeline.Transform,
+		Input:        rec.Pipeline.Input,
+		Parallelism:  rec.Pipeline.Parallelism,
+		ChunkSpec:    rec.Pipeline.ChunkSpec,
+		MaxQueueSize: rec.Pipeline.MaxQueueSize,
+		Autoscaling:  rec.Pipeline.Autoscaling,
+		Standby:      rec.Pipeline.Standby,
+		OutputBranch: rec.Pipeline.OutputBranch,
+		Reprocess:    rec.Pipeline.Reprocess,
+		EnableStats:  rec.Pipeline.EnableStats,
+		Spout:        rec.Pipeline.Spout,
 	}
 }
 
@@ -1642,13 +1690,17 @@ func isProvisioningError(tail string) bool {
 // the instant it appears, before its container exists (docker run still
 // starting), and a single kill would be silently lost.
 func (d *daemon) cancelJob(id string) error {
-	if _, err := d.inspectJob(id); err != nil {
-		return err
-	}
+	// the live running handle is the authority — a cancel must not abort
+	// on a transiently unreadable job record (a concurrent save can race
+	// the read; the job then escapes the cancel and runs the old version
+	// indefinitely, SB-045)
 	jobsMu.Lock()
 	rj, ok := running[id]
 	jobsMu.Unlock()
 	if !ok {
+		if _, err := d.inspectJob(id); err != nil {
+			return err
+		}
 		return nil // already terminal
 	}
 	rj.cancelled.Store(true)
@@ -2031,7 +2083,7 @@ func outputBranch(pl pipelineRec) string {
 	return pl.Pipeline.OutputBranch
 }
 
-func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated string, pre *jobRec) {
+func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated string, pre *jobRec, rj *runningJob) {
 	sides := inputSides(pl.Pipeline.Input)
 	for i := range sides {
 		if sides[i].Name == "" {
@@ -2043,7 +2095,6 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return
 	}
-	rj := registerRunning(id, pl.Pipeline.Name)
 	defer unregisterRunning(id, rj)
 	// a standby pipeline returns to standby once its work settles; the
 	// defer covers every terminal path (success, failure, killed)
@@ -2105,45 +2156,65 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	views := map[string]map[string]fileEntry{}
 	sideLists := make([][]datumSide, len(sides))
 	in := pl.Pipeline.Input
-	if len(in.Union) > 0 {
-		// a union's branches may themselves be crosses or nested unions:
-		// resolve every consumed repo's head into the views (SB-078
-		// clauses 2/3), and record the full input set on the job so the
-		// flush can find it
-		var resolve func(in *client.Input)
-		resolve = func(in *client.Input) {
-			for _, s := range inputSides(in) {
-				if s.Repo != "" {
-					if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished {
-						if v, err := d.store.resolveViewByID(h.ID); err == nil {
-							views[s.Name] = v
-						}
-					}
-				} else if len(s.Cross) > 0 || len(s.Union) > 0 {
-					resolve(&s)
-				}
-			}
+	// Resolve every consumed repo's head into the views: union branches
+	// nested anywhere — including inside a cross — contribute their own
+	// branches' heads, keyed by branch so two branches of one repo stay
+	// distinct (SB-141). Sides already covered by the pairing heads are
+	// left to the loop below — a manual run pins the job to specific
+	// commits, and the current head must not leak into the recorded
+	// input set (SB-010). The full resolved input set is recorded on the
+	// job so the flush can find it (SB-078).
+	seenInput := map[string]bool{}
+	covered := map[string]bool{} // repo/branch covered by the pairing heads
+	for _, h := range heads {
+		if h.ID != "" {
+			seenInput[h.ID] = true
+			covered[h.Repo+"/"+h.Branch] = true
 		}
-		resolve(pl.Pipeline.Input)
-		seen := map[string]bool{}
-		rec.InputCommits = nil
-		var collect func(in *client.Input)
-		collect = func(in *client.Input) {
-			for _, s := range inputSides(in) {
-				if s.Repo != "" {
-					if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished && !seen[h.ID] {
-						seen[h.ID] = true
-						rec.InputCommits = append(rec.InputCommits, h.ID)
-					}
-				} else if len(s.Cross) > 0 || len(s.Union) > 0 {
-					collect(&s)
-				}
-			}
-		}
-		collect(pl.Pipeline.Input)
-		d.saveJob(rec)
 	}
+	var resolve func(s client.Input, key string)
+	resolve = func(s client.Input, key string) {
+		if key == "" {
+			key = s.Name
+			if key == "" {
+				key = s.Repo
+			}
+		}
+		switch {
+		case s.Repo != "":
+			if covered[s.Repo+"/"+inputBranch(s)] {
+				return
+			}
+			if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished && !seenInput[h.ID] {
+				if v, err := d.store.resolveViewByID(h.ID); err == nil {
+					views[key] = v
+					seenInput[h.ID] = true
+					rec.InputCommits = append(rec.InputCommits, h.ID)
+				}
+			}
+		case len(s.Union) > 0:
+			for _, b := range s.Union {
+				resolve(b, unionBranchKey(b))
+			}
+		case len(s.Cross) > 0:
+			for i := range s.Cross {
+				resolve(s.Cross[i], "")
+			}
+		}
+	}
+	resolve(*in, "")
+	d.saveJob(rec)
 	for i, s := range sides {
+		if len(s.Union) > 0 {
+			// a union member of a cross contributes its own merged datums
+			// even though it has no single head commit (SB-141)
+			var us []datumSide
+			for _, dt := range d.unionDatums(views, &s) {
+				us = append(us, dt.Sides[0])
+			}
+			sideLists[i] = us
+			continue
+		}
 		if i >= len(heads) || heads[i].ID == "" {
 			continue
 		}
@@ -2445,6 +2516,28 @@ func (d *daemon) runDatumContainer(pl pipelineRec, cname string, env []string, m
 	args := []string{"run", "--rm", "--name", cname,
 		"--label", "sandman.node=" + d.name,
 		"-v", outDir + ":/sandman/out",
+	}
+	// resource requests and limits are applied to the execution
+	// environment (SB-067/068/069/070). Sandbox deviation: docker
+	// expresses a CPU request only as an allocation, so a CPU request
+	// without a limit sets the container's CPU allocation; an
+	// ephemeral-storage (disk) request is recorded but not enforceable
+	// on docker's default driver.
+	if tr.ResourceLimits != nil {
+		if tr.ResourceLimits.Memory != "" {
+			args = append(args, "--memory", tr.ResourceLimits.Memory)
+		}
+		if tr.ResourceLimits.CPU > 0 {
+			args = append(args, "--cpus", fmt.Sprintf("%g", tr.ResourceLimits.CPU))
+		}
+	}
+	if tr.ResourceRequests != nil {
+		if tr.ResourceRequests.Memory != "" {
+			args = append(args, "--memory-reservation", tr.ResourceRequests.Memory)
+		}
+		if tr.ResourceRequests.CPU > 0 && (tr.ResourceLimits == nil || tr.ResourceLimits.CPU == 0) {
+			args = append(args, "--cpus", fmt.Sprintf("%g", tr.ResourceRequests.CPU))
+		}
 	}
 	args = append(args, mounts...)
 	for _, e := range env {

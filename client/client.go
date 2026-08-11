@@ -367,6 +367,27 @@ type Transform struct {
 	DatumTries       int               `json:"datumTries,omitempty"`
 	DatumTimeout     string            `json:"datumTimeout,omitempty"`
 	JobTimeout       string            `json:"jobTimeout,omitempty"`
+	// ResourceRequests and ResourceLimits declare the execution
+	// environment's resources (SB-067/068/069/070): Memory as a size
+	// string ("100M"), CPU as a fractional core count, Disk as a size
+	// string. Sandbox deviation: docker expresses a CPU request only as
+	// an allocation, and a disk request is recorded but not enforceable
+	// on docker's default driver.
+	ResourceRequests *ResourceRequests `json:"resourceRequests,omitempty"`
+	ResourceLimits   *ResourceLimits   `json:"resourceLimits,omitempty"`
+}
+
+// ResourceRequests are the pipeline's requested resources (SB-067).
+type ResourceRequests struct {
+	Memory string  `json:"memory,omitempty"`
+	CPU    float64 `json:"cpu,omitempty"`
+	Disk   string  `json:"disk,omitempty"`
+}
+
+// ResourceLimits are the pipeline's hard resource limits (SB-068).
+type ResourceLimits struct {
+	Memory string  `json:"memory,omitempty"`
+	CPU    float64 `json:"cpu,omitempty"`
 }
 
 // Input is a file-scoped (PFS) input: files of the repo matched by Glob.
@@ -522,6 +543,10 @@ type Pipeline struct {
 	Update      bool `json:"update,omitempty"`
 	Reprocess   bool `json:"reprocess,omitempty"`
 	EnableStats bool `json:"enableStats,omitempty"`
+	// Framework names an execution framework; sandman supports none, so
+	// any non-empty value is rejected at creation naming the framework
+	// (SB-151).
+	Framework string `json:"framework,omitempty"`
 	// Spout, when set, makes the pipeline a spout (SB-139): it must not
 	// declare an input, its transform runs in the background, and the
 	// daemon commits each data-bearing cycle to the output branch.
@@ -543,15 +568,24 @@ type Spout struct {
 // Transform and Input are populated in full inspections; the other fields
 // are the current version's state.
 type PipelineInfo struct {
-	Name        string         `json:"name"`
-	State       string         `json:"state"`
-	Reason      string         `json:"reason,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Stopped     bool           `json:"stopped"`
-	Version     int            `json:"version,omitempty"`
-	Transform   *Transform     `json:"transform,omitempty"`
-	Input       *Input         `json:"input,omitempty"`
-	JobCounts   map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
+	Name         string         `json:"name"`
+	State        string         `json:"state"`
+	Reason       string         `json:"reason,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Stopped      bool           `json:"stopped"`
+	Version      int            `json:"version,omitempty"`
+	Transform    *Transform     `json:"transform,omitempty"`
+	Input        *Input         `json:"input,omitempty"`
+	Parallelism  *Parallelism   `json:"parallelism,omitempty"`
+	ChunkSpec    *ChunkSpec     `json:"chunkSpec,omitempty"`
+	MaxQueueSize int            `json:"maxQueueSize,omitempty"`
+	Autoscaling  bool           `json:"autoscaling,omitempty"`
+	Standby      bool           `json:"standby,omitempty"`
+	OutputBranch string         `json:"outputBranch,omitempty"`
+	Reprocess    bool           `json:"reprocess,omitempty"`
+	EnableStats  bool           `json:"enableStats,omitempty"`
+	Spout        *Spout         `json:"spout,omitempty"`
+	JobCounts    map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
 }
 
 func (c *Client) CreatePipeline(p Pipeline) error {
