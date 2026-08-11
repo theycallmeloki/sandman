@@ -420,6 +420,15 @@ type Transform struct {
 	DatumTries       int               `json:"datumTries,omitempty"`
 	DatumTimeout     string            `json:"datumTimeout,omitempty"`
 	JobTimeout       string            `json:"jobTimeout,omitempty"`
+	// PodSpec is a full execution-environment customization document
+	// (SB-072): a JSON object {"env": {...}, "volumes": {...},
+	// "workdir": ...} applied to every execution participant. PodPatch is
+	// a JSON modification list (RFC 6902 operations) applied to the
+	// document after the spec. Both are validated as JSON at creation;
+	// malformed customization fails pipeline creation (SB-072 clause 1,
+	// SB-152).
+	PodSpec  string `json:"podSpec,omitempty"`
+	PodPatch string `json:"podPatch,omitempty"`
 	// ResourceRequests and ResourceLimits declare the execution
 	// environment's resources (SB-067/068/069/070): Memory as a size
 	// string ("100M"), CPU as a fractional core count, Disk as a size

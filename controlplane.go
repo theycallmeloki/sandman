@@ -250,6 +250,13 @@ func validatePipelineSpec(p client.Pipeline) error {
 	if p.Framework != "" {
 		return fmt.Errorf("pipeline framework %q is not supported", p.Framework)
 	}
+	if p.Transform != nil {
+		// malformed execution-environment customization fails pipeline
+		// creation, before any execution (SB-072 clause 1, SB-152)
+		if _, err := parseCustomization(p.Transform); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2622,6 +2629,30 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, views: views,
 		viewDirs: map[string]string{}, dedup: dedup, rj: rj, host: placedHost}
 	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
+	// apply the pipeline's execution-environment customization
+	// (SB-072/152): the document's env vars join the job environment and
+	// its volumes become mounts at /sandman/volumes/<name> — an
+	// emptyDir volume is a fresh per-job directory
+	if custom, err := parseCustomization(pl.Pipeline.Transform); err != nil {
+		// validated at creation; reaching here is a provisioning failure
+		fail("customization: " + err.Error())
+		d.finishOutput(pl, outCommit, "", true)
+		return
+	} else if custom != nil {
+		for k, v := range custom.Env {
+			if !reservedEnv[k] {
+				jx.extraEnv = append(jx.extraEnv, k+"="+v)
+			}
+		}
+		for name, vol := range custom.Volumes {
+			host := vol.HostPath
+			if vol.EmptyDir {
+				host = filepath.Join(d.jobDir(id), "volumes", name)
+				os.MkdirAll(host, 0o755)
+			}
+			jx.extraMounts = append(jx.extraMounts, "-v", host+":/sandman/volumes/"+name)
+		}
+	}
 	// the live execution context is visible to the datum API (restart,
 	// SB-064) while the job runs
 	d.liveJobs.Store(id, jx)

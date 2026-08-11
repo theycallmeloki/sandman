@@ -436,6 +436,12 @@ type jobExec struct {
 	env    []string                        // job-scoped environment; the input dir vars are per datum
 	rj     *runningJob
 
+	// customization: the pipeline's pod-spec/pod-patch application
+	// (SB-072/152) — extra environment variables and volume mounts
+	// carried into every datum run.
+	extraEnv    []string
+	extraMounts []string
+
 	// viewDirs are the sides' materialized full views, mounted read-only
 	// into every container at /sandman/view/<name> alongside the datum's
 	// own files: a datum may read data outside its own datum set (SB-166).
@@ -749,7 +755,8 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	}
 	// materialize each side's files into its own input directory
 	var mounts []string
-	env := append([]string{}, jx.env...)
+	env := append(append([]string{}, jx.env...), jx.extraEnv...)
+	mounts = append(mounts, jx.extraMounts...)
 	jx.tmpOnce.Do(func() {
 		jx.tmpDir = filepath.Join(d.jobDir(jx.id), "tmp")
 		os.MkdirAll(jx.tmpDir, 0o755)
