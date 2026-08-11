@@ -39,8 +39,8 @@ func logsEchoTransform(inName string) *client.Transform {
 // pipeline and one flushed job: empty-query, nonexistent targets, by
 // pipeline, by job, datum errors, path/hash equivalence, nonexistent file.
 // SB-059 shares it: the record is the same contract with the pipeline's
-// statistics flag disabled, and the flag is unasserted upstream (sandman
-// has no statistics flag; the datum engine is deferred, D-13).
+// statistics flag disabled — this run disables EnableStats for parity with
+// that record (the flag itself is asserted by the SB-041/SB-139 suites).
 func assertLogCore(t *testing.T, pipe string, cm1 client.Commit, job1 client.Job) {
 	t.Helper()
 
