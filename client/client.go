@@ -640,6 +640,19 @@ type Pipeline struct {
 	// process wherever it runs (SB-168). Annotations are preserved on the
 	// service record alongside the system's own pipelineName annotation.
 	Service *Service `json:"service,omitempty"`
+	// Egress, when set, copies the job's finished output to an external
+	// destination after the output commit succeeds; a failed egress write
+	// fails the job with an egress-related reason even though the output
+	// commit itself succeeded (SB-013).
+	Egress *Egress `json:"egress,omitempty"`
+}
+
+// Egress is a pipeline's external output destination (SB-013, D-17).
+// URL names the destination; file:// destinations copy the output files
+// into the target directory, and any other scheme is refused at egress
+// time, failing the job.
+type Egress struct {
+	URL string `json:"url"`
 }
 
 // Service is a service pipeline's declaration (SB-100/168).
@@ -682,6 +695,7 @@ type PipelineInfo struct {
 	EnableStats  bool           `json:"enableStats,omitempty"`
 	Spout        *Spout         `json:"spout,omitempty"`
 	Service      *Service       `json:"service,omitempty"`
+	Egress       *Egress        `json:"egress,omitempty"`
 	Placement    string         `json:"placement,omitempty"`
 	JobCounts    map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
 }

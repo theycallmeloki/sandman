@@ -1004,6 +1004,7 @@ func (rec *pipelineRec) info() client.PipelineInfo {
 		EnableStats:  rec.Pipeline.EnableStats,
 		Spout:        rec.Pipeline.Spout,
 		Service:      rec.Pipeline.Service,
+		Egress:       rec.Pipeline.Egress,
 		Placement:    rec.Pipeline.Placement,
 	}
 }
@@ -2738,6 +2739,20 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	if pl.Pipeline.EnableStats {
 		if statsID := d.writeStatsCommit(pl, dedup, datums); statsID != "" {
 			rec.StatsCommit = statsID
+		}
+	}
+	// the egress step runs after the output commit succeeds: a failure to
+	// write the external destination fails the job with an egress-related
+	// reason — output success alone does not make the job successful
+	// (SB-013)
+	if pl.Pipeline.Egress != nil {
+		if err := d.runEgress(pl, fin); err != nil {
+			rec.State = "failure"
+			rec.Reason = "egress: " + err.Error()
+			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+			d.saveJob(rec)
+			d.saveDedup(pl.Pipeline.Name, dedup)
+			return
 		}
 	}
 	rec.State = "success"
