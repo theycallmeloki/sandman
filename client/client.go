@@ -543,6 +543,13 @@ type Pipeline struct {
 	Update      bool `json:"update,omitempty"`
 	Reprocess   bool `json:"reprocess,omitempty"`
 	EnableStats bool `json:"enableStats,omitempty"`
+	// Placement names the placement label a host must bear for this
+	// pipeline's jobs to run: work is scheduled onto a registered
+	// execution host bearing the label, and the pipeline never names a
+	// specific host address (SB-167). Empty means unconstrained — the
+	// control plane's own executor runs the jobs (SB-169: unplaceable
+	// work surfaces as the crashed pipeline state until a host returns).
+	Placement string `json:"placement,omitempty"`
 	// Framework names an execution framework; sandman supports none, so
 	// any non-empty value is rejected at creation naming the framework
 	// (SB-151).
@@ -585,6 +592,7 @@ type PipelineInfo struct {
 	Reprocess    bool           `json:"reprocess,omitempty"`
 	EnableStats  bool           `json:"enableStats,omitempty"`
 	Spout        *Spout         `json:"spout,omitempty"`
+	Placement    string         `json:"placement,omitempty"`
 	JobCounts    map[string]int `json:"jobCounts,omitempty"` // jobs per terminal state (SB-029)
 }
 

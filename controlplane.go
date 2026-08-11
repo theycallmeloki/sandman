@@ -888,6 +888,7 @@ func (rec *pipelineRec) info() client.PipelineInfo {
 		Reprocess:    rec.Pipeline.Reprocess,
 		EnableStats:  rec.Pipeline.EnableStats,
 		Spout:        rec.Pipeline.Spout,
+		Placement:    rec.Pipeline.Placement,
 	}
 }
 
@@ -1497,6 +1498,17 @@ func (d *daemon) markPipelineCrashed(name, reason string) {
 	if rec, err := d.loadPipeline(name); err == nil && !rec.Stopped {
 		rec.State = "crashed"
 		rec.Reason = reason
+		d.savePipeline(rec)
+	}
+}
+
+// markPipelineRunning clears the placement-outage crash once a host bearing
+// the pipeline's label has registered: the crashed state was only the
+// unplaced outage, and placement has become possible again (SB-169).
+func (d *daemon) markPipelineRunning(name string) {
+	if rec, err := d.loadPipeline(name); err == nil && rec.State == "crashed" {
+		rec.State = "running"
+		rec.Reason = ""
 		d.savePipeline(rec)
 	}
 }
@@ -2148,6 +2160,37 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		d.saveJob(rec)
 	}
 
+	// Placement (SB-167/169): a pipeline may require its work to run on a
+	// host bearing a placement label. Until such a host has registered,
+	// the job waits — its record was saved at trigger time, so the pending
+	// work is durable — and the pipeline surfaces the outage as the
+	// crashed state instead of hanging silently (SB-169 clause 1). When a
+	// host bearing the label registers, the wait re-places automatically
+	// and the pipeline recovers (SB-169 clause 2): the same job, the same
+	// input revision, exactly one output commit. A cancel while unplaced
+	// settles the job killed like any other in-flight cancel (SB-058).
+	var placedHost *execHost
+	if pl.Pipeline.Placement != "" {
+		for {
+			if h, ok := d.hosts.pick(pl.Pipeline.Placement); ok {
+				placedHost = &h
+				break
+			}
+			d.markPipelineCrashed(pl.Pipeline.Name,
+				fmt.Sprintf("no execution host bearing placement label %q", pl.Pipeline.Placement))
+			select {
+			case <-rj.cancelCh:
+				rec.State = "killed"
+				rec.Reason = "job cancelled"
+				rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+				d.saveJob(rec)
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		d.markPipelineRunning(pl.Pipeline.Name)
+	}
+
 	// Resolve each side's input revision and enumerate its datums; the
 	// job's datum set depends on the input kind: a cross takes the
 	// cartesian product (SB-063), a join pairs files by their join key
@@ -2323,7 +2366,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 
 	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, views: views,
-		viewDirs: map[string]string{}, dedup: dedup, rj: rj}
+		viewDirs: map[string]string{}, dedup: dedup, rj: rj, host: placedHost}
 	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
 	// the live execution context is visible to the datum API (restart,
 	// SB-064) while the job runs
@@ -2506,15 +2549,17 @@ func copyDir(src, dst string) int {
 // runDatumContainer runs one command (the primary or the error handler)
 // in a throwaway container under an explicit name, with the datum's
 // per-side mounts and output directory. Returns the exit code and the
-// output tail.
-func (d *daemon) runDatumContainer(pl pipelineRec, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
-	tr := pl.Pipeline.Transform
+// output tail. Shared by the control plane's own executor and a remote
+// execution host's worker (SB-167): nodeName is the host identity the
+// container is labelled with (the daemon's name, or the worker's host
+// name when the datum runs remotely).
+func runDatumContainer(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
 	image := tr.Image
 	if image == "" {
 		image = "alpine"
 	}
 	args := []string{"run", "--rm", "--name", cname,
-		"--label", "sandman.node=" + d.name,
+		"--label", "sandman.node=" + nodeName,
 		"-v", outDir + ":/sandman/out",
 	}
 	// resource requests and limits are applied to the execution

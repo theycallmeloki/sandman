@@ -1,0 +1,306 @@
+package main
+
+// The execution-host worker (SB-167/169). One binary, busybox-style: the
+// same sandman that runs the control plane also runs `sandman worker`, a
+// host-side execution participant. A worker joins the cluster using
+// configuration set at host setup time — the control plane's address and
+// the join token — and registers itself with its placement labels and its
+// own exec endpoint; the pipeline definition never names the host. The
+// control plane pushes datum executions to the endpoint; the worker
+// materializes the datum, runs the container, and returns the output
+// files for the control plane to store into the output commit.
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"sandman/client"
+)
+
+// execRequest is the wire contract between the control plane and a worker
+// for one datum attempt: the datum's per-side input files, the transform's
+// command(s), and the execution parameters (SB-167). Resources follow the
+// same mapping as a local run: memory limit → --memory, memory request →
+// --memory-reservation, CPU (limit, or request when no limit) → --cpus.
+type execRequest struct {
+	JobID             string     `json:"jobID"`
+	Index             int        `json:"index"`
+	Attempt           int        `json:"attempt"`
+	Cname             string     `json:"cname"`
+	Image             string     `json:"image,omitempty"`
+	Cmd               []string   `json:"cmd,omitempty"`
+	Stdin             []string   `json:"stdin,omitempty"`
+	ErrCmd            []string   `json:"errCmd,omitempty"`
+	ErrStdin          []string   `json:"errStdin,omitempty"`
+	Env               []string   `json:"env"`
+	Sides             []execSide `json:"sides"`
+	Memory            string     `json:"memory,omitempty"`
+	MemoryReservation string     `json:"memoryReservation,omitempty"`
+	CPU               float64    `json:"cpu,omitempty"`
+	DatumTimeout      string     `json:"datumTimeout,omitempty"`
+	AcceptReturnCode  int        `json:"acceptReturnCode,omitempty"`
+	User              string     `json:"user,omitempty"`
+	Workdir           string     `json:"workdir,omitempty"`
+}
+
+// execSide is one input side's files for the attempt, shipped as content.
+type execSide struct {
+	Name  string     `json:"name"`
+	Files []shipFile `json:"files,omitempty"`
+}
+
+// shipFile is one file's content crossing the wire (JSON []byte carries
+// base64).
+type shipFile struct {
+	Path string `json:"path"`
+	Data []byte `json:"data"`
+}
+
+// execResult is the worker's reply: the primary and error-handler exit
+// codes, the output tail, whether the datum timeout killed the run, and
+// the produced output files. Error carries a scan/host failure when the
+// attempt could not be produced at all.
+type execResult struct {
+	PrimaryCode int        `json:"primaryCode"`
+	ErrCode     int        `json:"errCode,omitempty"`
+	Tail        string     `json:"tail,omitempty"`
+	TimedOut    bool       `json:"timedOut,omitempty"`
+	Outputs     []shipFile `json:"outputs,omitempty"`
+	Error       string     `json:"error,omitempty"`
+}
+
+// cmdWorker runs the host-side execution participant: register with the
+// control plane, heartbeat, and serve the exec endpoint.
+func cmdWorker(args []string) {
+	fs := flag.NewFlagSet("worker", flag.ExitOnError)
+	name := fs.String("name", "", "host name (required)")
+	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (required)")
+	token := fs.String("token", "", "join token the control plane authenticates with")
+	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
+	var labels strSliceFlag
+	fs.Var(&labels, "label", "placement label this host bears (repeatable)")
+	fs.Parse(args)
+	if *name == "" || *control == "" {
+		fmt.Fprintln(os.Stderr, "sandman worker: -name and -control are required")
+		os.Exit(2)
+	}
+
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sandman worker: listen: %v\n", err)
+		os.Exit(1)
+	}
+	addr := ln.Addr().String()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /exec", func(w http.ResponseWriter, r *http.Request) {
+		var req execRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, runExec(*name, req))
+	})
+	server := &http.Server{Handler: mux}
+	go server.Serve(ln)
+	fmt.Fprintf(os.Stderr, "sandman worker %s: exec endpoint %s, labels %v\n", *name, addr, labels)
+
+	// register, then heartbeat every few seconds: the control plane's
+	// host TTL expires a worker that stops reporting, so a vanished host
+	// stops receiving work on its own.
+	for {
+		if err := registerHost(*control, *token, *name, addr, labels); err != nil {
+			fmt.Fprintf(os.Stderr, "sandman worker %s: register: %v\n", *name, err)
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+type strSliceFlag []string
+
+func (s *strSliceFlag) String() string { return strings.Join(*s, ",") }
+func (s *strSliceFlag) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
+// registerHost joins (or refreshes) the worker in the control plane's
+// host registry.
+func registerHost(control, token, name, addr string, labels []string) error {
+	body, err := json.Marshal(map[string]any{"name": name, "addr": addr, "labels": labels})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", strings.TrimRight(control, "/")+"/api/v1/hosts", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sandbox-Token", token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// runExec executes one datum attempt on the worker: materialize the
+// shipped files, run the primary command (and, when it fails, the
+// error-handling command in the same output directory), scan the output,
+// and return the produced files. Mirrors the control plane's local
+// attempt semantics (SB-012 recovery, SB-113 datum timeout, SB-017 output
+// scan) so a placed job's result is identical to a locally run one.
+func runExec(nodeName string, req execRequest) execResult {
+	dir, err := os.MkdirTemp("", "sandman-worker-*")
+	if err != nil {
+		return execResult{Error: err.Error()}
+	}
+	defer os.RemoveAll(dir)
+	outDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return execResult{Error: err.Error()}
+	}
+	tmpDir := filepath.Join(dir, "tmp")
+	os.MkdirAll(tmpDir, 0o755)
+	env := append([]string{}, req.Env...)
+	env = append(env, "HOSTNAME="+nodeName) // the host's identity, visible to the transform
+	mounts := []string{"-v", tmpDir + ":/tmp"}
+	sideDirs := map[string]string{}
+	for _, sd := range req.Sides {
+		inDir := filepath.Join(dir, "in", sd.Name)
+		if err := os.MkdirAll(inDir, 0o755); err != nil {
+			return execResult{Error: err.Error()}
+		}
+		for _, f := range sd.Files {
+			dst := filepath.Join(inDir, filepath.FromSlash(f.Path))
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return execResult{Error: err.Error()}
+			}
+			if err := os.WriteFile(dst, f.Data, 0o644); err != nil {
+				return execResult{Error: err.Error()}
+			}
+		}
+		env = append(env, sd.Name+"=/sandman/in/"+sd.Name)
+		mounts = append(mounts, "-v", inDir+":/sandman/in/"+sd.Name+":ro")
+		sideDirs[sd.Name] = inDir
+	}
+	tr := &client.Transform{Image: req.Image, User: req.User, Workdir: req.Workdir}
+	if req.Memory != "" || req.CPU > 0 {
+		tr.ResourceLimits = &client.ResourceLimits{Memory: req.Memory, CPU: req.CPU}
+	}
+	if req.MemoryReservation != "" {
+		tr.ResourceRequests = &client.ResourceRequests{Memory: req.MemoryReservation}
+	}
+	cname := req.Cname
+	var timedOut atomic.Bool
+	if req.DatumTimeout != "" {
+		if dur, err := time.ParseDuration(req.DatumTimeout); err == nil {
+			time.AfterFunc(dur, func() {
+				timedOut.Store(true)
+				exec.Command("docker", "kill", cname).Run()
+			})
+		}
+	}
+	run := func(cname string, argv, stdin []string) (int, string) {
+		if len(argv) == 0 && len(stdin) == 0 {
+			// default entry point: copy every side's files to OUT
+			code := 0
+			for _, sd := range req.Sides {
+				if c := copyDir(filepath.Join(dir, "in", sd.Name), outDir); c != 0 {
+					code = c
+				}
+			}
+			return code, ""
+		}
+		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, nil, argv, stdin)
+	}
+	primaryCode, tail := run(cname, req.Cmd, req.Stdin)
+	var errCode int
+	if primaryCode != 0 && (len(req.ErrCmd) > 0 || len(req.ErrStdin) > 0) {
+		ec, et := run(cname+"-err", req.ErrCmd, req.ErrStdin)
+		errCode, tail = ec, tail+et
+	}
+	accepted := req.AcceptReturnCode != 0 && primaryCode == req.AcceptReturnCode
+	if primaryCode == 0 || accepted || errCode == 0 {
+		// symlink resolution for the output scan: /sandman/in/<side> maps
+		// to this worker's materialized side dirs, /tmp to its temp dir;
+		// the full-side view (/sandman/view) is not shipped to remote
+		// hosts, so links into it resolve nowhere (SB-054).
+		link := func(target string) string {
+			for _, prefix := range []string{"/sandman/in/", "/sandman/view/"} {
+				if strings.HasPrefix(target, prefix) {
+					rest := strings.TrimPrefix(target, prefix)
+					name, file, hasFile := strings.Cut(rest, "/")
+					base := sideDirs[name]
+					if base == "" {
+						return ""
+					}
+					if !hasFile {
+						return base // the whole side (a directory symlink)
+					}
+					return filepath.Join(base, filepath.FromSlash(file))
+				}
+			}
+			if strings.HasPrefix(target, "/tmp/") {
+				return filepath.Join(tmpDir, filepath.FromSlash(strings.TrimPrefix(target, "/tmp/")))
+			}
+			return ""
+		}
+		var outputs []shipFile
+		if err := walkFiles(outDir, link, func(rel string, data []byte) error {
+			outputs = append(outputs, shipFile{Path: rel, Data: data})
+			return nil
+		}); err != nil {
+			return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load(), Error: "scan output: " + err.Error()}
+		}
+		if len(tail) > 2000 {
+			tail = tail[len(tail)-2000:]
+		}
+		return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load(), Outputs: outputs}
+	}
+	if len(tail) > 2000 {
+		tail = tail[len(tail)-2000:]
+	}
+	return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load()}
+}
+
+// execOnHost pushes one datum attempt to a worker and decodes the result.
+func (d *daemon) execOnHost(h *execHost, req execRequest) (code, errCode int, tail string, timedOut bool, outputs []shipFile, err error) {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return 0, 0, "", false, nil, err
+	}
+	resp, err := http.Post("http://"+h.Addr+"/exec", "application/json", bytes.NewReader(b))
+	if err != nil {
+		return 0, 0, "", false, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return 0, 0, "", false, nil, fmt.Errorf("host %s: status %d: %s", h.Name, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var res execResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return 0, 0, "", false, nil, err
+	}
+	if res.Error != "" {
+		return 0, 0, "", false, nil, errors.New(res.Error)
+	}
+	return res.PrimaryCode, res.ErrCode, res.Tail, res.TimedOut, res.Outputs, nil
+}

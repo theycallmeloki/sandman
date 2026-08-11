@@ -90,6 +90,11 @@ type daemon struct {
 	// liveJobs maps running job ids to their execution contexts for the
 	// datum API (restart, SB-064).
 	liveJobs sync.Map
+
+	// hosts is the registered execution-host fleet, scheduled on by
+	// placement label (SB-167/169). Ephemeral: workers re-register on a
+	// heartbeat, so no durable state is needed.
+	hosts *hostRegistry
 }
 
 // cpuSample is one /proc/stat reading for host-wide cpu utilization.
@@ -156,7 +161,7 @@ func cmdDaemon(args []string) {
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
-	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), authToken: *authToken}
+	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), authToken: *authToken, hosts: newHostRegistry(30 * time.Second)}
 	if err := d.reg.loadStatic(); err != nil {
 		log.Printf("peers file: %v", err)
 	}

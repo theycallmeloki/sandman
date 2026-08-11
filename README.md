@@ -248,6 +248,16 @@ revisions, and jobs that run them.
   `--memory-reservation`, CPU `--cpus` (a CPU request maps to the
   allocation; a disk request is recorded but not enforceable on docker's
   default driver). No declared resources → none injected (SB-067–070)
+- **Placement** — a pipeline may require a placement label; its jobs run
+  on an execution host that registered that label with the control plane.
+  A host joins with configuration set at host setup time (`sandman worker
+  -control <url> -token <token> -label <label>`), and the pipeline
+  definition never names a host address. Work that no registered host can
+  take surfaces as the pipeline's crashed state instead of hanging; when
+  a host bearing the label registers, the pending job re-places on its
+  own and completes — one output commit, same result as a local run
+  (SB-167/169; the execution host's identity is visible to the transform
+  as `HOSTNAME`)
 - **Provisioning failures** — a pipeline whose execution environment cannot
   be provisioned (a nonexistent image — obviously invalid or
   plausible-but-absent) converges on the crashed state with a recorded

@@ -23,6 +23,8 @@ func main() {
 	switch args[0] {
 	case "daemon":
 		cmdDaemon(args[1:])
+	case "worker":
+		cmdWorker(args[1:])
 	case "run":
 		cmdRun(args[1:])
 	case "nodes":
@@ -51,6 +53,7 @@ usage: sandman <verb> [flags]
 
 verbs:
   daemon              run the node side (advertises via mDNS, serves jobs)
+  worker              run an execution host (joins the control plane, executes placed work)
   run <node> -- <image> <cmd...>   stream a job to a node (ssh-like)
   nodes               list the fleet (mDNS browse + registry files)
   stats               poll every node, emit fleet state as JSONL

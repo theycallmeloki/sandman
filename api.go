@@ -104,6 +104,9 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/secrets", hErr(d.listSecretsH))
 	mux.HandleFunc("GET /api/v1/secrets/{name}", hErr(d.inspectSecretH))
 	mux.HandleFunc("DELETE /api/v1/secrets/{name}", hErr(d.deleteSecretH))
+	mux.HandleFunc("POST /api/v1/hosts", hErr(d.registerHostH))
+	mux.HandleFunc("GET /api/v1/hosts", hErr(d.listHostsH))
+	mux.HandleFunc("DELETE /api/v1/hosts/{name}", hErr(d.deleteHostH))
 	mux.HandleFunc("GET /api/v1/metrics", hErr(d.metricsH))
 	mux.HandleFunc("POST /api/v1/gc", hErr(d.collectGarbageH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
@@ -600,6 +603,50 @@ func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	os.Remove(d.secretPath(r.PathValue("name"))) // idempotent in effect (SB-153)
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// ---- execution hosts (SB-167/169) ----
+
+// registerHostH is the join endpoint an execution host calls at setup and
+// on its heartbeat: the worker reports its name, its exec endpoint, and
+// the placement labels it bears. The control plane schedules labeled
+// pipelines onto registered hosts; a pipeline definition never names a
+// host address (SB-167).
+func (d *daemon) registerHostH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.requireAuth(r); err != nil {
+		return err
+	}
+	var body struct {
+		Name   string   `json:"name"`
+		Addr   string   `json:"addr"`
+		Labels []string `json:"labels"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		return fmt.Errorf("invalid request body")
+	}
+	if body.Name == "" || body.Addr == "" {
+		return fmt.Errorf("host registration needs a name and an address")
+	}
+	h := d.hosts.register(body.Name, body.Addr, body.Labels)
+	writeJSON(w, h)
+	return nil
+}
+
+func (d *daemon) listHostsH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.requireAuth(r); err != nil {
+		return err
+	}
+	writeJSON(w, d.hosts.list())
+	return nil
+}
+
+func (d *daemon) deleteHostH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.requireAuth(r); err != nil {
+		return err
+	}
+	d.hosts.drop(r.PathValue("name"))
 	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }

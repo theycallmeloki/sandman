@@ -417,6 +417,12 @@ type jobExec struct {
 	viewMu   sync.Mutex
 	viewDirs map[string]string
 
+	// host is the execution host the job was placed on (SB-167): non-nil
+	// only for a pipeline with a placement label, in which case every
+	// datum attempt is shipped to that host's exec endpoint instead of
+	// running on the control plane.
+	host *execHost
+
 	// tmpDir is the job's temp directory, mounted at the container's /tmp:
 	// temp files a transform creates are host-readable, so symlinks to
 	// them resolve in the output scan (SB-054).
@@ -698,6 +704,14 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 // produced files (nil for a failed attempt — its partial output is
 // discarded).
 func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, started time.Time, worker int) (outcome, reason string, files []fileRef) {
+	// A placed job (SB-167) executes each attempt on its execution host:
+	// the datum's files and the transform are shipped there, the host
+	// runs the container and returns the produced files, and the control
+	// plane stores them into the output commit exactly as a local run's
+	// would be.
+	if jx.host != nil {
+		return d.runRemoteAttempt(jx, dt, index, attempt, started, worker)
+	}
 	// per-attempt staging, keyed by the datum's index so concurrent and
 	// repeated datums never share a directory
 	dir := filepath.Join(d.jobDir(jx.id), "datum", fmt.Sprintf("%d-%d", index, attempt))
@@ -721,27 +735,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 			return "failed", err.Error(), nil
 		}
 		for _, f := range sd.Files {
-			// a union side's file is the concatenation of its branch
-			// copies (SB-077/078)
-			if refs, ok := sd.Merge[f]; ok {
-				var buf []byte
-				for _, r := range refs {
-					b, err := d.store.readBlob(r.Hash)
-					if err != nil {
-						return "failed", "materialize input: " + err.Error(), nil
-					}
-					buf = append(buf, b...)
-				}
-				dst := filepath.Join(inDir, filepath.FromSlash(f))
-				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-					return "failed", err.Error(), nil
-				}
-				if err := os.WriteFile(dst, buf, 0o644); err != nil {
-					return "failed", err.Error(), nil
-				}
-				continue
-			}
-			data, err := d.store.readBlob(jx.views[sd.Name][f].SHA)
+			data, err := d.sideFileData(jx, sd, f)
 			if err != nil {
 				return "failed", "materialize input: " + err.Error(), nil
 			}
@@ -832,7 +826,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 			}
 			return code, ""
 		}
-		return d.runDatumContainer(jx.pl, cname, env, mounts, outDir, capture, argv, stdin)
+		return runDatumContainer(jx.pl.Pipeline.Transform, d.name, cname, env, mounts, outDir, capture, argv, stdin)
 	}
 
 	var code int
@@ -859,7 +853,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	if len(tr.ErrCmd) > 0 || len(tr.ErrStdin) > 0 {
 		ecname := cname + "-err"
 		jx.registerContainer(ecname)
-		ecode, etail := d.runDatumContainer(jx.pl, ecname, env, mounts, outDir, capture, tr.ErrCmd, tr.ErrStdin)
+		ecode, etail := runDatumContainer(jx.pl.Pipeline.Transform, d.name, ecname, env, mounts, outDir, capture, tr.ErrCmd, tr.ErrStdin)
 		jx.unregisterContainer(ecname)
 		if ecode == 0 {
 			files, err := d.storeOutput(outDir, link)
@@ -879,6 +873,113 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		if r := strings.TrimSpace(tail); len(r) > 2000 {
 			r = r[len(r)-2000:]
 		}
+		reason += ": " + strings.TrimSpace(tail)
+	}
+	return "failed", reason, nil
+}
+
+// sideFileData reads one side file's content: a union side's file is the
+// concatenation of its branch copies (SB-077/078), any other file is its
+// single content blob. Shared by the local materialization and the
+// remote-execution shipping (SB-167).
+func (d *daemon) sideFileData(jx *jobExec, sd datumSide, f string) ([]byte, error) {
+	if refs, ok := sd.Merge[f]; ok {
+		var buf []byte
+		for _, r := range refs {
+			b, err := d.store.readBlob(r.Hash)
+			if err != nil {
+				return nil, err
+			}
+			buf = append(buf, b...)
+		}
+		return buf, nil
+	}
+	return d.store.readBlob(jx.views[sd.Name][f].SHA)
+}
+
+// runRemoteAttempt executes one datum attempt on the job's execution host
+// (SB-167): the datum's per-side files and the transform are shipped to
+// the host, which materializes them, runs the container (primary, then
+// the error-handling command on failure, SB-012), and returns the
+// produced files. The control plane stores the returned files as blobs —
+// the output commit is assembled exactly as for a locally executed datum,
+// so the job's result is indistinguishable by content.
+func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, started time.Time, worker int) (outcome, reason string, files []fileRef) {
+	tr := jx.pl.Pipeline.Transform
+	req := execRequest{
+		JobID:            jx.id,
+		Index:            index,
+		Attempt:          attempt,
+		Cname:            fmt.Sprintf("sandman-%s-%d-%d", jx.id, index, attempt),
+		Image:            tr.Image,
+		Cmd:              tr.Cmd,
+		Stdin:            tr.Stdin,
+		ErrCmd:           tr.ErrCmd,
+		ErrStdin:         tr.ErrStdin,
+		Env:              append([]string{}, jx.env...),
+		DatumTimeout:     tr.DatumTimeout,
+		AcceptReturnCode: tr.AcceptReturnCode,
+		User:             tr.User,
+		Workdir:          tr.Workdir,
+	}
+	if tr.ResourceLimits != nil {
+		req.Memory = tr.ResourceLimits.Memory
+		req.CPU = tr.ResourceLimits.CPU
+	}
+	if tr.ResourceRequests != nil {
+		req.MemoryReservation = tr.ResourceRequests.Memory
+		if tr.ResourceRequests.CPU > 0 && req.CPU == 0 {
+			// docker expresses a CPU request only as an allocation; a
+			// request without a limit sets it (SB-068, sandbox deviation)
+			req.CPU = tr.ResourceRequests.CPU
+		}
+	}
+	for _, sd := range dt.Sides {
+		side := execSide{Name: sd.Name}
+		for _, f := range sd.Files {
+			data, err := d.sideFileData(jx, sd, f)
+			if err != nil {
+				return "failed", "materialize input: " + err.Error(), nil
+			}
+			side.Files = append(side.Files, shipFile{Path: f, Data: data})
+		}
+		req.Sides = append(req.Sides, side)
+		req.Env = append(req.Env, sd.Name+"=/sandman/in/"+sd.Name)
+	}
+
+	code, errCode, tail, timedOut, outputs, err := d.execOnHost(jx.host, req)
+	if err != nil {
+		// the host is unreachable or the attempt could not be produced:
+		// an environment problem, not a user-code failure — the pipeline
+		// surfaces the crash (SB-091, and SB-169's visible-failure state)
+		d.markPipelineCrashed(jx.pl.Pipeline.Name, "execution host "+jx.host.Name+": "+err.Error())
+		return "failed", "execution host: " + err.Error(), nil
+	}
+	accepted := tr.AcceptReturnCode != 0 && code == tr.AcceptReturnCode
+	if code == 0 || accepted || errCode == 0 {
+		for _, f := range outputs {
+			sum := sha256.Sum256(f.Data)
+			d.store.writeBlob(f.Data)
+			files = append(files, fileRef{Path: f.Path, Hash: hex.EncodeToString(sum[:]), Size: uint64(len(f.Data))})
+		}
+		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+		if code != 0 && errCode == 0 {
+			return "recovered", "", files
+		}
+		return "success", "", files
+	}
+	// the worker's container output is journaled into the job's log store
+	// like a local run's capture would be
+	if tail != "" {
+		for _, ln := range strings.Split(strings.TrimRight(tail, "\n"), "\n") {
+			d.appendLogLine(jx.id, ln)
+		}
+	}
+	reason = fmt.Sprintf("exited with status %d", code)
+	if timedOut {
+		reason = fmt.Sprintf("exceeded the %s datum timeout", tr.DatumTimeout)
+	}
+	if tail != "" {
 		reason += ": " + strings.TrimSpace(tail)
 	}
 	return "failed", reason, nil
