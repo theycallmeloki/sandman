@@ -116,6 +116,17 @@ func TestSB067_ResourceRequestsApplied(t *testing.T) {
 	if cpu != halfCPU {
 		t.Fatalf("cpu = %d, want %d (0.5)", cpu, halfCPU)
 	}
+	// the disk request is accept-and-record (D-15): docker has no portable
+	// per-container ephemeral-storage knob (the runner comment documents
+	// the deviation), so the observable contract is the round-trip
+	pi, err := c.InspectPipeline(name)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if pi.Transform == nil || pi.Transform.ResourceRequests == nil ||
+		pi.Transform.ResourceRequests.Disk != "10M" {
+		t.Fatalf("disk request round-trip = %+v, want 10M", pi.Transform)
+	}
 	flushSetOK(t, []string{cm.ID})
 }
 func TestSB068_ResourceLimitsApplied(t *testing.T) {

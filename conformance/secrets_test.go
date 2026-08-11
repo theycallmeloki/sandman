@@ -209,3 +209,54 @@ func TestSB051_SecretBindingRejectsMissing(t *testing.T) {
 		t.Fatalf("create err = %v, want missing-secret error", err)
 	}
 }
+
+// TestSB051_SecretBindingSurvivesRestart — the binding is durable state,
+// not memory (D-05): after the daemon restarts, the pipeline still
+// carries its secret mount and a new commit is processed with the secret
+// available exactly as before.
+func TestSB051_SecretBindingSurvivesRestart(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	commitFiles(t, repo, "master", map[string]string{"file": "x\n"})
+
+	secretName := uniq(t)
+	if err := c.CreateSecret(secretName, map[string]string{"foo": "restartfoo"}); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	p := client.Pipeline{
+		Name: uniq(t),
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "cat /sandman/secrets/foo > ${OUT}/mounted; echo ${SECRET_FOO} > ${OUT}/env"},
+			Secrets: []client.SecretMount{
+				{Name: secretName, Key: "foo", MountPath: "/sandman/secrets", EnvVar: "SECRET_FOO"},
+			},
+		},
+		Input: &client.Input{Repo: repo, Glob: "/"},
+	}
+	mustPipeline(t, p)
+
+	restartDaemon(t)
+
+	// the pipeline survives with its binding intact…
+	pi, err := c.InspectPipeline(p.Name)
+	if err != nil {
+		t.Fatalf("inspect after restart: %v", err)
+	}
+	if pi.Transform == nil || len(pi.Transform.Secrets) != 1 ||
+		pi.Transform.Secrets[0].Name != secretName {
+		t.Fatalf("binding after restart = %+v, want the secret mount", pi.Transform)
+	}
+	// …and a fresh commit is processed with the secret mounted
+	cm := commitFiles(t, repo, "master", map[string]string{"file2": "y\n"})
+	jobs := flushOK(t, cm.ID)
+	for _, f := range []string{"mounted", "env"} {
+		b, err := c.GetFile(jobs[0].OutputCommit, f)
+		if err != nil {
+			t.Fatalf("read %s after restart: %v", f, err)
+		}
+		if got := strings.TrimRight(string(b), "\n"); got != "restartfoo" {
+			t.Fatalf("%s after restart = %q, want %q", f, got, "restartfoo")
+		}
+	}
+}
