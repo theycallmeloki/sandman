@@ -275,3 +275,31 @@ func TestSB159_CrossDuplicateNamesRejected(t *testing.T) {
 	})
 	wantErr(t, err, "distinct namespaces")
 }
+
+// D-03 — a pipeline name is a state-dir path component and the output
+// repo's name: names that could escape the pipelines directory ("..",
+// separators, leading dots) are rejected at creation, not silently
+// written outside the state dir.
+func TestD03_PipelineNamePathEscapeRejected(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	for _, name := range []string{"..", ".", "../x", "a/b", "a\\b", ".hidden"} {
+		err := c.CreatePipeline(client.Pipeline{
+			Name:      name,
+			Transform: copyTransform(repo),
+			Input:     &client.Input{Repo: repo, Glob: "/*"},
+		})
+		if err == nil {
+			t.Fatalf("pipeline name %q accepted, want rejection", name)
+		}
+	}
+	// the update path validates the same way
+	err := c.CreatePipeline(client.Pipeline{
+		Name:      uniq(t),
+		Transform: copyTransform(repo),
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
+	})
+	if err != nil {
+		t.Fatalf("valid pipeline: %v", err)
+	}
+}

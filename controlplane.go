@@ -237,6 +237,12 @@ func validatePipelineSpec(p client.Pipeline) error {
 	if p.Name == "" {
 		return fmt.Errorf("pipeline must specify a name")
 	}
+	if !validName(p.Name) {
+		// a pipeline name is a state-dir path component (pipelines/<name>,
+		// versions/, spout markers) and the output repo's name: a name with
+		// a separator or ".." would escape the pipelines directory (D-03)
+		return fmt.Errorf("invalid pipeline name %q", p.Name)
+	}
 	if p.Transform == nil {
 		return fmt.Errorf("pipeline must specify a transform")
 	}

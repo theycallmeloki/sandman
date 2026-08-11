@@ -208,6 +208,67 @@ func TestSB010_RunPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("empty upstream output still processes downstream union", func(t *testing.T) {
+		// SB-010 clause 9 / RunPipelineEmptyUpstream: a downstream union
+		// pipeline succeeds when its upstream produced an EMPTY output
+		// (the upstream cross had data on only one side), and after the
+		// second branch lands the union combines: branch input + upstream
+		// output = "data A\ndata A\ndata B\n".
+		repo := uniq(t)
+		mustRepo(t, repo)
+		up, down := uniq(t), uniq(t)
+		mustPipeline(t, client.Pipeline{
+			Name: up,
+			Transform: &client.Transform{
+				Image: "alpine",
+				Cmd:   []string{"sh", "-c", "cat ${a}/file ${b}/file > ${OUT}/file"},
+			},
+			Input: &client.Input{Cross: []client.Input{
+				{Name: "a", Repo: repo, Glob: "/*", Branch: "branchA"},
+				{Name: "b", Repo: repo, Glob: "/*", Branch: "branchB"},
+			}},
+		})
+		mustPipeline(t, client.Pipeline{
+			Name: down,
+			Transform: &client.Transform{
+				Image: "alpine",
+				Cmd:   []string{"sh", "-c", "cp ${u}/file ${OUT}/file"},
+			},
+			Input: &client.Input{Name: "u", Union: []client.Input{
+				{Name: "a", Repo: repo, Glob: "/*", Branch: "branchA"},
+				{Name: "up", Repo: up, Glob: "/*"},
+			}},
+		})
+
+		// wave 1: only branchA has data — the upstream cross has nothing
+		// to process (empty output), yet the downstream union still
+		// succeeds on its direct branch input
+		a1 := commitFiles(t, repo, "branchA", map[string]string{"file": "data A\n"})
+		flushOK(t, a1.ID)
+		latest := func() string {
+			j := latestJob(t, down)
+			if j.OutputCommit == "" {
+				t.Fatalf("downstream job %s has no output commit", j.ID)
+			}
+			b, err := c.GetFile(j.OutputCommit, "file")
+			if err != nil {
+				t.Fatalf("read downstream output: %v", err)
+			}
+			return string(b)
+		}
+		if got := latest(); got != "data A\n" {
+			t.Fatalf("wave-1 downstream output = %q, want %q", got, "data A\n")
+		}
+
+		// wave 2: branchB lands — the upstream produces its cross output
+		// and the union combines branch input + upstream output
+		b1 := commitFiles(t, repo, "branchB", map[string]string{"file": "data B\n"})
+		flushOK(t, b1.ID)
+		if got := latest(); got != "data A\ndata A\ndata B\n" {
+			t.Fatalf("wave-2 downstream output = %q, want %q", got, "data A\ndata A\ndata B\n")
+		}
+	})
+
 	t.Run("run with statistics", func(t *testing.T) {
 		repo := uniq(t)
 		mustRepo(t, repo)
