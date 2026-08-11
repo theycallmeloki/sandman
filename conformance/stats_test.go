@@ -397,7 +397,7 @@ func TestSB085_SkippedEdgeCase(t *testing.T) {
 	}
 	flushOK(t, del.ID)
 
-	cm3 := commitFiles(t, repo, "master", files) // re-adds file-0 with identical content
+	cm3 := replaceCommit(t, repo, "master", map[string]string{"file-0": "0"}) // re-adds file-0 with identical content
 	jobs3 := flushOK(t, cm3.ID)
 	all, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
 	if err != nil || len(all) != 3 {

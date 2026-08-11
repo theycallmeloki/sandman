@@ -50,7 +50,7 @@ func TestSB008_MultipleInputsFromTheSameBranch(t *testing.T) {
 		t.Fatalf("commit 1 output = %q, want %q", got, "foo\nfoo\n")
 	}
 
-	cm2 := commitFiles(t, repo, "master", map[string]string{"dirA/file": "bar\n"})
+	cm2 := replaceCommit(t, repo, "master", map[string]string{"dirA/file": "bar\n"})
 	jobs = flushOK(t, cm2.ID)
 	if len(jobs) != 1 {
 		t.Fatalf("commit 2: %d jobs, want 1", len(jobs))
@@ -63,7 +63,7 @@ func TestSB008_MultipleInputsFromTheSameBranch(t *testing.T) {
 		t.Fatalf("commit 2 output = %q: dirA's new content must lead, dirB's latest must follow", got)
 	}
 
-	cm3 := commitFiles(t, repo, "master", map[string]string{"dirB/file": "buzz\n"})
+	cm3 := replaceCommit(t, repo, "master", map[string]string{"dirB/file": "buzz\n"})
 	jobs = flushOK(t, cm3.ID)
 	if len(jobs) != 1 {
 		t.Fatalf("commit 3: %d jobs, want 1", len(jobs))

@@ -80,7 +80,7 @@ func (d *daemon) commitDelta(cm client.Commit) int64 {
 	if err != nil {
 		return 0
 	}
-	var parent map[string]fileEntry
+	var parent map[string]viewEntry
 	if cm.ParentID != "" {
 		parent, _ = d.store.resolveViewByID(cm.ParentID)
 	}
@@ -88,9 +88,13 @@ func (d *daemon) commitDelta(cm client.Commit) int64 {
 	for p, f := range view {
 		pf, ok := parent[p]
 		if !ok {
-			delta += int64(f.Size)
-		} else if pf.SHA != f.SHA && f.Size > pf.Size {
-			delta += int64(f.Size - pf.Size)
+			delta += int64(f.size())
+		} else {
+			fh, _ := f.hash(d.store)
+			ph, _ := pf.hash(d.store)
+			if fh != ph && f.size() > pf.size() {
+				delta += int64(f.size() - pf.size())
+			}
 		}
 	}
 	return delta
@@ -152,8 +156,8 @@ func (d *daemon) fireOnce(pipeline, branch string, in client.Input, cm client.Co
 		return
 	}
 	for p, f := range snapshot {
-		if b, err := d.store.readBlob(f.SHA); err == nil {
-			d.store.putFile(acc.ID, p, b)
+		if b, err := f.bytes(d.store); err == nil {
+			d.store.overwriteFile(acc.ID, p, b)
 		}
 	}
 	if fin, err := d.store.finishCommit(acc.ID, "", false); err == nil {

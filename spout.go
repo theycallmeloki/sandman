@@ -173,7 +173,7 @@ func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo
 	}
 	for _, p := range sortedStringKeys(changed) {
 		if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
-			d.store.putFile(cm.ID, p, data)
+			d.store.overwriteFile(cm.ID, p, data)
 		}
 	}
 	if fin, err := d.store.finishCommit(cm.ID, "", false); err == nil {

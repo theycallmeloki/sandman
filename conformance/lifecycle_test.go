@@ -46,7 +46,7 @@ func TestSB053_HeadOnlyOneOutputCommit(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})
-	head := commitFiles(t, repo, "master", map[string]string{"file": "foo\nbar\n"})
+	head := overwriteCommit(t, repo, "master", map[string]string{"file": "foo\nbar\n"})
 
 	name := uniq(t)
 	p := client.Pipeline{Name: name, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}}

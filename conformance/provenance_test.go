@@ -162,6 +162,16 @@ func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list C jobs: %v", err)
 	}
+	// C's matched pairings can land after the flush returns (the cross
+	// pairing defers mismatched waves), so poll for the final job set
+	pollFor(t, "C jobs = 3", 60*time.Second, func() bool {
+		l, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pc})
+		return err == nil && len(l) == 3
+	})
+	cs, err = c.ListJobsFiltered(client.JobFilter{Pipeline: pc})
+	if err != nil {
+		t.Fatalf("list C jobs: %v", err)
+	}
 	var committed int
 	for _, j := range cs {
 		if j.OutputCommit != "" {
@@ -241,6 +251,10 @@ func TestSB019_DiamondProvenanceOneCommitPerStage(t *testing.T) {
 	if n := committed(pc); n != 2 {
 		t.Fatalf("C commits = %d, want 2 (one per A commit)", n)
 	}
+	// D's matched pairing (B2×C2) can land after the flush returns — the
+	// cross pairing defers mismatched waves — so poll for it rather than
+	// racing the catch-up trigger
+	pollFor(t, "D commits = 2", 60*time.Second, func() bool { return committed(pd) == 2 })
 	if n := committed(pd); n != 2 {
 		t.Fatalf("D commits = %d, want 2 (no multiplication through the diamond)", n)
 	}

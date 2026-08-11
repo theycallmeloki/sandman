@@ -131,7 +131,7 @@ func TestSB040_UpdateChangesTransform(t *testing.T) {
 	}
 
 	mustUpdate(t, name, echoTransform("bar"), in, false)
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "y"})
+	cm2 := replaceCommit(t, repo, "master", map[string]string{"file": "y"})
 	jobs2 := flushOK(t, cm2.ID)
 	got, err = c.GetFile(jobs2[0].OutputCommit, "file")
 	if err != nil || string(got) != "bar" {
@@ -262,7 +262,7 @@ func TestSB043_CrashThenUpdate(t *testing.T) {
 		info, err := c.InspectPipeline(name)
 		return err == nil && info.State == "running"
 	})
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "y"})
+	cm2 := replaceCommit(t, repo, "master", map[string]string{"file": "y"})
 	jobs := flushOK(t, cm2.ID)
 	if len(jobs) != 1 {
 		t.Fatalf("post-recovery flush: %d jobs, want 1", len(jobs))
@@ -306,8 +306,9 @@ func TestSB044_UpdateStoppedPipeline(t *testing.T) {
 		t.Fatalf("output commits while stopped+updated: %d, want 1", got)
 	}
 
-	// input written while paused is accumulated, not processed
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "foobar"})
+	// input written while paused is accumulated, not processed: "bar"
+	// appends to the existing "foo", so the head holds "foobar" (FS-2)
+	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "bar"})
 	if err := c.StartPipeline(name); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -335,7 +336,7 @@ func TestSB045_UpdateKillsInFlight(t *testing.T) {
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: sleep1000, Input: in})
 	commitFiles(t, repo, "master", map[string]string{"file": "x"})
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "y"})
+	cm2 := replaceCommit(t, repo, "master", map[string]string{"file": "y"})
 	pollFor(t, "two jobs in flight", 30*time.Second, func() bool {
 		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
 		return err == nil && len(js) == 2 && js[0].State == "running" && js[1].State == "running"

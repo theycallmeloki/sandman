@@ -309,6 +309,14 @@ func (c *Client) PutFile(commitID, p string, data []byte) error {
 	return err
 }
 
+// PutFileOverwrite writes a file replacing any content accumulated at the
+// path (FS-3): the prior content — in this commit or its ancestry — is
+// removed and the new bytes become the entire content at this revision.
+func (c *Client) PutFileOverwrite(commitID, p string, data []byte) error {
+	_, err := c.doRaw("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+"?overwrite=1", data)
+	return err
+}
+
 // PutFileSplit uploads data split into records at delimiter (SB-137/138):
 // each record is stored at p/<index>. With header, the first chunk is the
 // header and is replicated into every record's file — appending records
@@ -1192,9 +1200,14 @@ func (c *Client) ListTags() ([]TagInfo, error) {
 
 // CopyFile copies a file (or a directory subtree) from one commit into an
 // open commit at dstPath. The destination must not already exist in the
-// destination commit's view (SB-156).
-func (c *Client) CopyFile(dstCommit, dstPath, srcCommit, srcPath string) error {
-	return c.do("POST", "/api/v1/commits/"+url.PathEscape(dstCommit)+"/files/"+url.PathEscape(dstPath),
+// destination commit's view unless overwrite is set, which replaces its
+// accumulated content (SB-156, FS-3).
+func (c *Client) CopyFile(dstCommit, dstPath, srcCommit, srcPath string, overwrite bool) error {
+	q := ""
+	if overwrite {
+		q = "?overwrite=1"
+	}
+	return c.do("POST", "/api/v1/commits/"+url.PathEscape(dstCommit)+"/files/"+url.PathEscape(dstPath)+q,
 		map[string]string{"srcCommit": srcCommit, "srcPath": srcPath}, nil)
 }
 

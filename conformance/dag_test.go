@@ -5,6 +5,7 @@ package conformance
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,8 +51,8 @@ func TestSB021_FlushChainRepeated(t *testing.T) {
 		if err != nil {
 			t.Fatalf("commit %d: read last-stage file: %v", i, err)
 		}
-		if string(b) != "foo\n" {
-			t.Fatalf("commit %d: last-stage file = %q, want %q", i, string(b), "foo\n")
+		if want := strings.Repeat("foo\n", i+1); string(b) != want {
+			t.Fatalf("commit %d: last-stage file = %q, want the accumulated %q", i, string(b), want)
 		}
 	}
 }
@@ -155,7 +156,7 @@ func TestSB056_MidDAGCommitOneWavePerStage(t *testing.T) {
 		t.Fatalf("wave 1: D has %d jobs, want 1", n)
 	}
 	// wave 2: a mid-DAG commit to E — one new job in C and D, none in B
-	e2 := commitFiles(t, repoE, "master", map[string]string{"efile": "e2"})
+	e2 := replaceCommit(t, repoE, "master", map[string]string{"efile": "e2"})
 	jobs2 := flushOK(t, e2.ID)
 	if len(jobs2) != 2 {
 		t.Fatalf("wave 2 flush returned %d jobs, want 2 (C pairing job + D)", len(jobs2))

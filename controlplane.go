@@ -639,7 +639,7 @@ func (d *daemon) writeSpecCommit(name string, spec client.Pipeline, version int)
 	if err != nil {
 		return ""
 	}
-	if err := d.store.putFile(cm.ID, "spec.json", b); err != nil {
+	if err := d.store.overwriteFile(cm.ID, "spec.json", b); err != nil {
 		return ""
 	}
 	if _, err := d.store.finishCommit(cm.ID, "", false); err != nil {
@@ -2244,7 +2244,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// cartesian product (SB-063), a join pairs files by their join key
 	// (SB-074/075), a group collects files by their group key (SB-076). A
 	// side without a head contributes no datums, so the product is empty.
-	views := map[string]map[string]fileEntry{}
+	views := map[string]map[string]viewEntry{}
 	sideLists := make([][]datumSide, len(sides))
 	in := pl.Pipeline.Input
 	// Resolve every consumed repo's head into the views: union branches
@@ -2337,7 +2337,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		if len(datums[i].Sides) == 1 && datums[i].Sides[0].Merge != nil {
 			continue // a union datum already carries its merged content hash
 		}
-		datums[i].Hash = datumHash(views, datums[i])
+		datums[i].Hash = datumHash(d.store, views, datums[i])
 	}
 	for _, dt := range datums {
 		rec.DatumIDs = append(rec.DatumIDs, dt.ID)
@@ -2405,7 +2405,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			var inputFiles []fileRef
 			for _, sd := range dt.Sides {
 				for _, f := range sd.Files {
-					inputFiles = append(inputFiles, fileRef{Path: f, Hash: views[sd.Name][f].SHA, Size: views[sd.Name][f].Size})
+					e := views[sd.Name][f]
+					if h, err := e.hash(d.store); err == nil {
+						inputFiles = append(inputFiles, fileRef{Path: f, Hash: h, Size: e.size()})
+					}
 				}
 			}
 			dedup[dt.ID] = datumState{Hash: dt.Hash, InputFiles: inputFiles}

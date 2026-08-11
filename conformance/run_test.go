@@ -54,8 +54,8 @@ func TestSB010_RunPipeline(t *testing.T) {
 		}
 
 		// a run with explicit provenance processes exactly those revisions
-		a2 := commitFiles(t, repo, "branchA", map[string]string{"file": "data A2\n"})
-		b2 := commitFiles(t, repo, "branchB", map[string]string{"file": "data B2\n"})
+		a2 := replaceCommit(t, repo, "branchA", map[string]string{"file": "data A2\n"})
+		b2 := replaceCommit(t, repo, "branchB", map[string]string{"file": "data B2\n"})
 		flushOK(t, a2.ID)
 		flushOK(t, b2.ID)
 		j2, err := c.RunPipeline(pipe, []string{a1.ID, b2.ID}, "")

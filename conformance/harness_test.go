@@ -176,6 +176,53 @@ func commitFiles(t *testing.T, repo, branch string, files map[string]string) cli
 	return fin
 }
 
+// replaceCommit commits each path as a replacement: tombstoned then
+// re-written in the same commit, so the new content replaces the old
+// (FS-4 — a plain put would append to the accumulated content, FS-1/2).
+// Deleting a path that does not exist is a no-op, so new paths work too.
+func replaceCommit(t *testing.T, repo, branch string, files map[string]string) client.Commit {
+	t.Helper()
+	cm, err := c.StartCommit(repo, branch, "")
+	if err != nil {
+		t.Fatalf("start commit: %v", err)
+	}
+	for p := range files {
+		if err := c.DeleteFile(cm.ID, p); err != nil {
+			t.Fatalf("delete %s: %v", p, err)
+		}
+	}
+	for p, content := range files {
+		if err := c.PutFile(cm.ID, p, []byte(content)); err != nil {
+			t.Fatalf("put file %s: %v", p, err)
+		}
+	}
+	fin, err := c.FinishCommit(cm.ID, "", false)
+	if err != nil {
+		t.Fatalf("finish commit: %v", err)
+	}
+	return fin
+}
+
+// overwriteCommit commits files with explicit overwrite semantics (FS-3):
+// each path's accumulated content is replaced, not appended to.
+func overwriteCommit(t *testing.T, repo, branch string, files map[string]string) client.Commit {
+	t.Helper()
+	cm, err := c.StartCommit(repo, branch, "")
+	if err != nil {
+		t.Fatalf("start commit: %v", err)
+	}
+	for p, content := range files {
+		if err := c.PutFileOverwrite(cm.ID, p, []byte(content)); err != nil {
+			t.Fatalf("overwrite %s: %v", p, err)
+		}
+	}
+	fin, err := c.FinishCommit(cm.ID, "", false)
+	if err != nil {
+		t.Fatalf("finish commit: %v", err)
+	}
+	return fin
+}
+
 func mustPipeline(t *testing.T, p client.Pipeline) {
 	t.Helper()
 	if err := c.CreatePipeline(p); err != nil {

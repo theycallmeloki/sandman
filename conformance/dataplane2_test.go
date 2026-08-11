@@ -41,6 +41,8 @@ func TestSB052_HeadJobSeesAccumulatedContent(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{Name: pipe, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}})
 
+	// commit 1 writes "foo\n"; commit 2 appends "bar\n" to the same path,
+	// so the input head accumulates to "foo\nbar\n" (FS-1/FS-2)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})
 	jobs1 := flushOK(t, cm1.ID)
 	got, err := c.GetFile(jobs1[0].OutputCommit, "file")
@@ -51,7 +53,17 @@ func TestSB052_HeadJobSeesAccumulatedContent(t *testing.T) {
 		t.Fatalf("output 1 = %q, want %q", got, "foo\n")
 	}
 
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "foo\nbar\n"})
+	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "bar\n"})
+	head, err := c.HeadCommit(repo, "master")
+	if err != nil {
+		t.Fatalf("input head: %v", err)
+	}
+	if b, err := c.GetFile(head.ID, "file"); err != nil || string(b) != "foo\nbar\n" {
+		t.Fatalf("input head file = %q (err %v), want accumulated foo\\nbar\\n", string(b), err)
+	}
+	// the job processes the full head content, not a delta: the output
+	// file holds the accumulated content, not the accumulated output
+	// (the job's fresh output replaces the datum's prior output, FS-6)
 	jobs2 := flushOK(t, cm2.ID)
 	got, err = c.GetFile(jobs2[0].OutputCommit, "file")
 	if err != nil {
@@ -206,7 +218,7 @@ func TestSB155_NoPanicOnEmptyRequests(t *testing.T) {
 	check(c.PutFile("nope", "f", []byte("x")))
 	check(c.GetFile("nope", "f"))
 	check(c.ListFiles("nope"))
-	check(c.CopyFile("nope", "f", "nope", "f"))
+	check(c.CopyFile("nope", "f", "nope", "f", false))
 	check(c.FetchFile("nope", "f", false))
 	check(c.CreatePipeline(client.Pipeline{}))
 	check(c.InspectPipeline("nope"))
@@ -254,16 +266,28 @@ func TestSB156_CopyOutToInWithOverwriteProtection(t *testing.T) {
 	}
 
 	// copy the output file into the input repo at a new path
-	if err := c.CopyFile(dst.ID, "file2", srcCommit, "foo"); err != nil {
+	if err := c.CopyFile(dst.ID, "file2", srcCommit, "foo", false); err != nil {
 		t.Fatalf("copy file→file2: %v", err)
 	}
-	// copy onto an existing path (from the parent revision) is rejected
-	if err := c.CopyFile(dst.ID, "foo", srcCommit, "foo"); err == nil {
+	// copy onto an existing path (from the parent revision) without the
+	// overwrite flag is rejected
+	if err := c.CopyFile(dst.ID, "foo", srcCommit, "foo", false); err == nil {
 		t.Fatal("copy onto existing path succeeded, want error")
 	}
-	// put onto a path already written in this commit is rejected
-	if err := c.PutFile(dst.ID, "file2", []byte("x")); err == nil {
-		t.Fatal("put onto existing path succeeded, want error")
+	// a plain put onto an existing path appends to its content (FS-1/FS-2
+	// — "file2" was copied as "foo", so it becomes "foox")
+	if err := c.PutFile(dst.ID, "file2", []byte("x")); err != nil {
+		t.Fatalf("put onto existing path: %v", err)
+	}
+	if b, err := c.GetFile(dst.ID, "file2"); err != nil || string(b) != "foox" {
+		t.Fatalf("file2 after put = %q (err %v), want appended foox", string(b), err)
+	}
+	// a copy with the overwrite flag replaces the accumulated content
+	if err := c.CopyFile(dst.ID, "file2", srcCommit, "foo", true); err != nil {
+		t.Fatalf("overwrite copy: %v", err)
+	}
+	if b, err := c.GetFile(dst.ID, "file2"); err != nil || string(b) != "foo" {
+		t.Fatalf("file2 after overwrite copy = %q (err %v), want foo", string(b), err)
 	}
 
 	// new paths are writable; then copy the directory subtree
@@ -273,7 +297,7 @@ func TestSB156_CopyOutToInWithOverwriteProtection(t *testing.T) {
 	if err := c.PutFile(dst.ID, "dir/file4", []byte("bar")); err != nil {
 		t.Fatalf("put dir/file4: %v", err)
 	}
-	if err := c.CopyFile(dst.ID, "dir2", dst.ID, "dir"); err != nil {
+	if err := c.CopyFile(dst.ID, "dir2", dst.ID, "dir", false); err != nil {
 		t.Fatalf("copy dir→dir2: %v", err)
 	}
 	if _, err := c.FinishCommit(dst.ID, "", false); err != nil {

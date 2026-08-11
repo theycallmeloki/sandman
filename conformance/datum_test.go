@@ -116,8 +116,9 @@ func TestSB007_InputDataModifications(t *testing.T) {
 	}
 
 	// replacement: delete then re-add the same path in one commit counts as
-	// a content replacement, not a deletion
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "bar"})
+	// a content replacement, not an append (FS-4 — a plain put would
+	// append "bar" to "foo")
+	cm2 := replaceCommit(t, repo, "master", map[string]string{"file": "bar"})
 	jobs2 := flushOK(t, cm2.ID)
 	if len(jobs2) != 1 {
 		t.Fatalf("commit 2: %d jobs, want 1", len(jobs2))
@@ -337,7 +338,7 @@ func TestSB166_ReprocessEveryJob(t *testing.T) {
 	// so the output tracks the current value.
 	for i := 0; i < 5; i++ {
 		val := fmt.Sprintf("v%d\n", i)
-		cm := commitFiles(t, trigger, "master", map[string]string{"value": val, "trigger-1": "x"})
+		cm := overwriteCommit(t, trigger, "master", map[string]string{"value": val, "trigger-1": "x"})
 		jobs := flushOK(t, cm.ID)
 		if len(jobs) != 1 {
 			t.Fatalf("iteration %d: %d jobs, want 1", i, len(jobs))
@@ -357,7 +358,7 @@ func TestSB166_ReprocessEveryJob(t *testing.T) {
 		for j := 1; j <= i; j++ {
 			files[fmt.Sprintf("trigger-%d", j)] = "x"
 		}
-		cm := commitFiles(t, trigger, "master", files)
+		cm := overwriteCommit(t, trigger, "master", files)
 		jobs := flushOK(t, cm.ID)
 		if len(jobs) != 1 {
 			t.Fatalf("append iteration %d: %d jobs, want 1", i, len(jobs))

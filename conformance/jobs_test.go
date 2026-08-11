@@ -228,7 +228,7 @@ func TestSB122_CancelRunningJob(t *testing.T) {
 	})
 
 	// the pipeline is still healthy: a quick commit processes normally
-	cm2 := commitFiles(t, repo, "master", map[string]string{"job/sleep": "1", "job/data": "second"})
+	cm2 := replaceCommit(t, repo, "master", map[string]string{"job/sleep": "1", "job/data": "second"})
 	jobs := flushOK(t, cm2.ID)
 	if len(jobs) != 1 {
 		t.Fatalf("post-cancel flush: %d jobs, want 1", len(jobs))

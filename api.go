@@ -462,8 +462,10 @@ func (d *daemon) collectGarbage() error {
 	}
 	referenced := map[string]bool{}
 	for _, cm := range d.allCommitRecs() {
-		for _, f := range cm.Files {
-			referenced[f.SHA] = true
+		for _, op := range cm.Ops {
+			if op.SHA != "" {
+				referenced[op.SHA] = true
+			}
 		}
 	}
 	// tags hold a reference to their blob (SB-150)
@@ -722,8 +724,10 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 				}
 			}
 		}
-		// a changed header re-identifies every record: the new records
-		// replace the old at their names, so all are reprocessed (SB-138)
+		// a changed header re-identifies every record: the existing record
+		// paths are overwritten with the new header + their existing record
+		// content (FS-7 — the header swaps everywhere without changing the
+		// record count or numbering), so all are reprocessed (SB-138)
 		changed := false
 		if header && base > 0 {
 			if first, err := d.store.getFile(r.PathValue("id"), prefix+"0"); err == nil {
@@ -734,10 +738,28 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 				changed = firstHeader != chunks[0]
 			}
 		}
-		off := 0
-		if !changed {
-			off = base // same header: new records continue after the old
+		if changed {
+			// swap the header into every existing record, keeping its path
+			// (record content after the first delimiter); the upload's own
+			// records only supply extra records beyond the existing count
+			for i := 0; i < base; i++ {
+				stored, err := d.store.getFile(r.PathValue("id"), prefix+strconv.Itoa(i))
+				if err != nil {
+					return err
+				}
+				rec := string(stored)
+				if j := strings.Index(rec, delim); j >= 0 {
+					rec = rec[j+len(delim):]
+				}
+				if err := d.store.overwriteFile(r.PathValue("id"), prefix+strconv.Itoa(i), []byte(chunks[0]+delim+rec)); err != nil {
+					return err
+				}
+			}
+			records = records[min(base, len(records)):]
 		}
+		// new records continue the numbering after the existing records,
+		// whether or not the header changed (FS-7)
+		off := base
 		for i, rec := range records {
 			content := rec
 			if header {
@@ -746,6 +768,13 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 			if err := d.store.putFile(r.PathValue("id"), prefix+strconv.Itoa(off+i), []byte(content)); err != nil {
 				return err
 			}
+		}
+		writeJSON(w, map[string]string{"ok": "true"})
+		return nil
+	}
+	if q.Get("overwrite") == "1" {
+		if err := d.store.overwriteFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+			return err
 		}
 		writeJSON(w, map[string]string{"ok": "true"})
 		return nil
@@ -800,7 +829,11 @@ func (d *daemon) fileHistory(commitID, path string, limit int) ([]client.FileInf
 	var out []client.FileInfo
 	for cur := rec; cur != nil; {
 		if f, ok := d.store.resolveView(cur)[path]; ok {
-			out = append(out, client.FileInfo{Path: path, Size: f.Size, Hash: f.SHA})
+			h, err := f.hash(d.store)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, client.FileInfo{Path: path, Size: f.size(), Hash: h})
 			if limit >= 0 && len(out) >= limit {
 				break
 			}
@@ -825,7 +858,8 @@ func (d *daemon) copyFileH(w http.ResponseWriter, r *http.Request) error {
 	if err := decodeBody(r, &body); err != nil {
 		return fmt.Errorf("invalid request body")
 	}
-	if err := d.store.copyFile(r.PathValue("id"), r.PathValue("path"), body.SrcCommit, body.SrcPath); err != nil {
+	overwrite := r.URL.Query().Get("overwrite") == "1"
+	if err := d.store.copyFile(r.PathValue("id"), r.PathValue("path"), body.SrcCommit, body.SrcPath, overwrite); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})

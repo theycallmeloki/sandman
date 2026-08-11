@@ -177,7 +177,7 @@ func TestSB125_DeleteHeadSupersedesInflightJob(t *testing.T) {
 	}
 
 	// the pipeline remains fully operational
-	c3 := commitFiles(t, repo, "master", map[string]string{"file": "three", "sleep": "1"})
+	c3 := replaceCommit(t, repo, "master", map[string]string{"file": "three", "sleep": "1"})
 	j3 := flushOK(t, c3.ID)
 	if len(j3) != 1 {
 		t.Fatalf("post-deletion flush = %d jobs, want 1", len(j3))

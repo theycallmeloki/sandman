@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -41,11 +40,84 @@ type apiStore struct {
 	mu  sync.RWMutex
 }
 
-// fileEntry is one file written in a commit.
+// fileEntry is one file written in a commit (legacy supersede model,
+// decoded only for pre-append records).
 type fileEntry struct {
 	Path string `json:"path"`
 	SHA  string `json:"sha"` // hex sha256 of the content
 	Size uint64 `json:"size"`
+}
+
+// fileOp is one write operation in a commit, in write order: an append
+// (FS-1), an overwrite that replaces accumulated content (FS-3), or a
+// delete tombstone (FS-4). Order within the commit is load-bearing — a
+// delete then a write leaves only the write; a write then a delete leaves
+// nothing (FS-4 edges).
+type fileOp struct {
+	Path      string `json:"path"`
+	SHA       string `json:"sha"` // hex sha256 of the written bytes ("" for a delete)
+	Size      uint64 `json:"size"`
+	Overwrite bool   `json:"overwrite,omitempty"` // replace accumulated content (FS-3)
+	Delete    bool   `json:"delete,omitempty"`    // tombstone (FS-4)
+}
+
+// viewPart is one contribution to a path's accumulated content in the
+// resolved view: an append contributes its bytes, an overwrite resets the
+// accumulation and starts a new one (FS-2/FS-3).
+type viewPart struct {
+	SHA       string
+	Size      uint64
+	Overwrite bool
+}
+
+// viewEntry is a path's accumulated content in a resolved view. Content
+// is resolved lazily (bytes/hash on demand): the view itself only records
+// the ordered contributions, so path-only consumers (globs, sizes) never
+// pay for concatenation.
+type viewEntry struct {
+	parts []viewPart
+}
+
+// size is the accumulated byte count: an overwrite resets the sum, an
+// append adds to it (zero-byte parts are no-ops either way, FS-8).
+func (e viewEntry) size() uint64 {
+	var n uint64
+	for _, p := range e.parts {
+		if p.Overwrite {
+			n = p.Size
+		} else {
+			n += p.Size
+		}
+	}
+	return n
+}
+
+// bytes concatenates the accumulated content in order, resetting the
+// buffer at each overwrite contribution.
+func (e viewEntry) bytes(s *apiStore) ([]byte, error) {
+	var buf []byte
+	for _, p := range e.parts {
+		b, err := s.readBlob(p.SHA)
+		if err != nil {
+			return nil, err
+		}
+		if p.Overwrite {
+			buf = buf[:0]
+		}
+		buf = append(buf, b...)
+	}
+	return buf, nil
+}
+
+// hash is the hex sha256 of the accumulated content — the path's content
+// identity at this revision (datum dedup keys, SB-054 hash equality).
+func (e viewEntry) hash(s *apiStore) (string, error) {
+	b, err := e.bytes(s)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // commitRec is the persisted form of a commit.
@@ -58,20 +130,21 @@ type commitRec struct {
 	Started     bool   `json:"started"`
 	// CreatedAt is the commit's creation time (UTC RFC3339Nano), the
 	// ordering key for schedules like cron ticks (SB-089/133).
-	CreatedAt string      `json:"createdAt,omitempty"`
-	Finished  bool        `json:"finished"`
-	Empty     bool        `json:"empty"`
-	Files     []fileEntry `json:"files,omitempty"`
+	CreatedAt string   `json:"createdAt,omitempty"`
+	Finished  bool     `json:"finished"`
+	Empty     bool     `json:"empty"`
+	Ops       []fileOp `json:"ops,omitempty"`
 	// Provenance is the revision's derivation: the source commits it
 	// consumes, transitively. A spout commit records its pipeline's
 	// specification commit (the epoch it belongs to, SB-140); a job's
 	// output commit records its input commits and their own provenance.
 	// Inspect exposes it so epochs and subvenance are observable.
 	Provenance []string `json:"provenance,omitempty"`
-	// Deleted are tombstoned paths: files removed from the branch at this
-	// revision (SB-007). A deletion wins over every ancestor's file; a
-	// later re-add wins over the tombstone.
-	Deleted []string `json:"deleted,omitempty"`
+	// Files/Deleted are the legacy supersede-model fields, decoded only
+	// for records written before the append model (loadCommit converts
+	// them to ops; new records never set them).
+	Files   []fileEntry `json:"files,omitempty"`
+	Deleted []string    `json:"deleted,omitempty"`
 }
 
 const defaultBranch = "master"
@@ -118,6 +191,10 @@ func (s *apiStore) objectPath(sha string) string {
 	return filepath.Join(s.dir, ".objects", sha[:2], sha[2:])
 }
 
+// loadCommit reads a commit record, converting the legacy supersede
+// model (Files + Deleted) to the ordered-ops model on the way in: old
+// records wrote child-wins, which the op model expresses as overwrites
+// with the deletions applied first (matching the old resolveView order).
 func (s *apiStore) loadCommit(repo, id string) (*commitRec, error) {
 	b, err := os.ReadFile(s.commitPath(repo, id))
 	if err != nil {
@@ -126,6 +203,16 @@ func (s *apiStore) loadCommit(repo, id string) (*commitRec, error) {
 	var rec commitRec
 	if err := json.Unmarshal(b, &rec); err != nil {
 		return nil, err
+	}
+	if len(rec.Ops) == 0 && (len(rec.Files) > 0 || len(rec.Deleted) > 0) {
+		for _, d := range rec.Deleted {
+			rec.Ops = append(rec.Ops, fileOp{Path: d, Delete: true})
+		}
+		for _, f := range rec.Files {
+			rec.Ops = append(rec.Ops, fileOp{Path: f.Path, SHA: f.SHA, Size: f.Size, Overwrite: true})
+		}
+		rec.Files = nil
+		rec.Deleted = nil
 	}
 	return &rec, nil
 }
@@ -237,7 +324,7 @@ func (s *apiStore) inspectRepo(name string) (client.Repo, error) {
 	if headID := s.primaryHead(name); headID != "" {
 		if rec, err := s.loadCommit(name, headID); err == nil {
 			for _, f := range s.resolveView(rec) {
-				r.SizeBytes += f.Size
+				r.SizeBytes += f.size()
 			}
 		}
 	}
@@ -339,9 +426,10 @@ func (s *apiStore) startCommit(repo, branch, description string) (client.Commit,
 	return rec.commit(), nil
 }
 
-// putFile writes one file into an open commit. A path already written in
-// this commit is rejected (SB-156); rewriting a path from a parent commit
-// is legal (new revisions supersede old content).
+// putFile writes one file into an open commit as an append (FS-1): a
+// path already holding content — in this commit or its ancestry — grows
+// by the new bytes at this revision. Replacing content is an explicit
+// overwrite (overwriteFile, FS-3) or a delete-then-write (FS-4).
 func (s *apiStore) putFile(commitID, p string, data []byte) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
@@ -355,23 +443,44 @@ func (s *apiStore) putFile(commitID, p string, data []byte) error {
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
-	for _, f := range rec.Files {
-		if f.Path == p {
-			return fmt.Errorf("path %q already exists in commit %q", p, commitID)
-		}
+	sha, err := s.writeBlob(data)
+	if err != nil {
+		return err
+	}
+	rec.Ops = append(rec.Ops, fileOp{Path: p, SHA: sha, Size: uint64(len(data))})
+	return s.saveCommit(rec)
+}
+
+// overwriteFile writes one file into an open commit replacing any
+// accumulated content at the path (FS-3): the path's prior content — in
+// this commit or its ancestry — is removed and the new bytes become the
+// entire content at this revision.
+func (s *apiStore) overwriteFile(commitID, p string, data []byte) error {
+	if !validPath(p) {
+		return fmt.Errorf("invalid file path %q", p)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, err := s.loadCommitByID(commitID)
+	if err != nil {
+		return fmt.Errorf("commit %q not found", commitID)
+	}
+	if !rec.Started || rec.Finished {
+		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
 	sha, err := s.writeBlob(data)
 	if err != nil {
 		return err
 	}
-	rec.Files = append(rec.Files, fileEntry{Path: p, SHA: sha, Size: uint64(len(data))})
+	rec.Ops = append(rec.Ops, fileOp{Path: p, SHA: sha, Size: uint64(len(data)), Overwrite: true})
 	return s.saveCommit(rec)
 }
 
-// deleteFile tombstones a path in an open commit: any file written at that
-// path in this commit is dropped (a delete-then-re-add in one commit is a
-// replacement, SB-007) and the path is recorded as deleted, which
-// resolveView applies against the whole branch history.
+// deleteFile tombstones a path in an open commit (FS-4): the path is
+// removed from the branch's view at this revision, whether its content
+// came from this commit or the ancestry. Write order within the commit
+// decides conflicts — a later write recreates the path with only its own
+// content; a later delete removes it again.
 func (s *apiStore) deleteFile(commitID, p string) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
@@ -385,16 +494,7 @@ func (s *apiStore) deleteFile(commitID, p string) error {
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
-	keep := rec.Files[:0]
-	for _, f := range rec.Files {
-		if f.Path != p {
-			keep = append(keep, f)
-		}
-	}
-	rec.Files = keep
-	if !slices.Contains(rec.Deleted, p) {
-		rec.Deleted = append(rec.Deleted, p)
-	}
+	rec.Ops = append(rec.Ops, fileOp{Path: p, Delete: true})
 	return s.saveCommit(rec)
 }
 
@@ -409,7 +509,7 @@ func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
 	if err != nil {
 		return err
 	}
-	var parent map[string]fileEntry
+	var parent map[string]viewEntry
 	if rec.ParentID != "" {
 		if p, err := s.loadCommit(rec.Repo, rec.ParentID); err == nil {
 			parent = s.resolveView(p)
@@ -427,7 +527,9 @@ func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
 		}
 	}
 	sort.Strings(removed)
-	rec.Deleted = removed
+	for _, p := range removed {
+		rec.Ops = append(rec.Ops, fileOp{Path: p, Delete: true})
+	}
 	return s.saveCommit(rec)
 }
 
@@ -498,7 +600,12 @@ func walkFilesDepth(p, rel string, depth int, linkTarget func(string) string, vi
 
 // addFilesFromDir stores every file under dir into an open commit in one
 // batch — the job output uploader (a single job can produce tens of
-// thousands of files, SB-047).
+// thousands of files, SB-047). Each path is written as an overwrite: job
+// output assembly replaces a path's prior content with the job's fresh
+// output (FS-6 — a reprocessed datum's output replaces its prior output;
+// unchanged datums' paths are absent from the job's output and carry
+// forward through the ancestry). The directory holds the fully assembled
+// output, so it must not accumulate over the parent's.
 func (s *apiStore) addFilesFromDir(commitID, dir string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -509,28 +616,29 @@ func (s *apiStore) addFilesFromDir(commitID, dir string) error {
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
-	var entries []fileEntry
+	var entries []fileOp
 	walkErr := walkFiles(dir, nil, func(rel string, data []byte) error {
 		sha, err := s.writeBlob(data)
 		if err != nil {
 			return err
 		}
-		entries = append(entries, fileEntry{Path: rel, SHA: sha, Size: uint64(len(data))})
+		entries = append(entries, fileOp{Path: rel, SHA: sha, Size: uint64(len(data)), Overwrite: true})
 		return nil
 	})
 	if walkErr != nil {
 		return walkErr
 	}
-	rec.Files = append(rec.Files, entries...)
+	rec.Ops = append(rec.Ops, entries...)
 	return s.saveCommit(rec)
 }
 
 // copyFile copies a file or directory subtree from srcCommit into an open
 // dstCommit at dstPath. The destination must not exist anywhere in the
-// destination commit's view (parents included) — overwrite protection
-// (SB-156). A directory copy lands each contained file at
-// dstPath/<relative path>.
-func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string) error {
+// destination commit's view (parents included) unless overwrite is set —
+// overwrite protection (SB-156); with overwrite the copy replaces the
+// destination's accumulated content (FS-3). A directory copy lands each
+// contained file at dstPath/<relative path>.
+func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string, overwrite bool) error {
 	if !validPath(dstPath) {
 		return fmt.Errorf("invalid file path %q", dstPath)
 	}
@@ -567,14 +675,13 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string) e
 	}
 	dstView := s.resolveView(dstRec)
 	for _, m := range moves {
-		if _, exists := dstView[m.dst]; exists {
+		if _, exists := dstView[m.dst]; exists && !overwrite {
 			return fmt.Errorf("path %q already exists in commit %q", m.dst, dstCommitID)
 		}
 	}
-	var entries []fileEntry
 	for _, m := range moves {
-		f := srcView[m.src]
-		data, err := s.readBlob(f.SHA)
+		e := srcView[m.src]
+		data, err := e.bytes(s)
 		if err != nil {
 			return err
 		}
@@ -582,9 +689,12 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string) e
 		if err != nil {
 			return err
 		}
-		entries = append(entries, fileEntry{Path: m.dst, SHA: sha, Size: f.Size})
+		op := fileOp{Path: m.dst, SHA: sha, Size: e.size()}
+		if overwrite {
+			op.Overwrite = true
+		}
+		dstRec.Ops = append(dstRec.Ops, op)
 	}
-	dstRec.Files = append(dstRec.Files, entries...)
 	return s.saveCommit(dstRec)
 }
 
@@ -632,6 +742,11 @@ func (s *apiStore) finishCommit(commitID, description string, empty bool) (clien
 	}
 	if description != "" {
 		rec.Description = description
+	}
+	// a path that is both a file and a directory prefix of another path is
+	// a type conflict; finishing fails (FS-1/FS-5 edges — "x" then "x/y")
+	if conflict := s.pathConflict(rec); conflict != "" {
+		return client.Commit{}, fmt.Errorf("type conflict at path %q", conflict)
 	}
 	rec.Empty = empty
 	rec.Finished = true
@@ -706,11 +821,33 @@ func (rec *commitRec) commit() client.Commit {
 	}
 }
 
-// resolveView merges the commit's own files over its ancestors' (child
-// wins). An explicitly empty commit is a barrier: its view is nothing and
-// nothing below it merges in — a child of an empty commit shows only its
-// own files (SB-118).
-func (s *apiStore) resolveView(rec *commitRec) map[string]fileEntry {
+// pathConflict reports a path that is both a file and a directory prefix
+// of another path in the commit's resolved view — a type conflict that
+// must fail finishing (FS-1 edge: writing "x" then "x/y" in one commit;
+// FS-2: a child writing "x/y" over an inherited file "x").
+func (s *apiStore) pathConflict(rec *commitRec) string {
+	view := s.resolveView(rec)
+	paths := make([]string, 0, len(view))
+	for p := range view {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for i := 1; i < len(paths); i++ {
+		if strings.HasPrefix(paths[i], paths[i-1]+"/") {
+			return paths[i-1]
+		}
+	}
+	return ""
+}
+
+// resolveView resolves a commit's accumulated view (FS-1..FS-4): walking
+// the ancestry oldest first, each commit's write operations replay in
+// order — an append contributes its bytes to the path's accumulated
+// content, an overwrite resets it, a delete removes the path (removing
+// inherited content too). An explicitly empty commit is a barrier: its
+// view is nothing and nothing below it merges in — a child of an empty
+// commit shows only its own ops (SB-118).
+func (s *apiStore) resolveView(rec *commitRec) map[string]viewEntry {
 	var chain []*commitRec
 	for cur := rec; cur != nil && !cur.Empty; {
 		chain = append(chain, cur)
@@ -723,13 +860,19 @@ func (s *apiStore) resolveView(rec *commitRec) map[string]fileEntry {
 		}
 		cur = parent
 	}
-	view := map[string]fileEntry{}
-	for i := len(chain) - 1; i >= 0; i-- { // oldest first, so the newest wins
-		for _, d := range chain[i].Deleted {
-			delete(view, d)
-		}
-		for _, f := range chain[i].Files {
-			view[f.Path] = f
+	view := map[string]viewEntry{}
+	for i := len(chain) - 1; i >= 0; i-- { // oldest first, so the newest ops apply last
+		for _, op := range chain[i].Ops {
+			switch {
+			case op.Delete:
+				delete(view, op.Path)
+			case op.Overwrite:
+				view[op.Path] = viewEntry{parts: []viewPart{{SHA: op.SHA, Size: op.Size, Overwrite: true}}}
+			default:
+				e := view[op.Path]
+				e.parts = append(e.parts, viewPart{SHA: op.SHA, Size: op.Size})
+				view[op.Path] = e
+			}
 		}
 	}
 	return view
@@ -737,7 +880,7 @@ func (s *apiStore) resolveView(rec *commitRec) map[string]fileEntry {
 
 // resolveViewByID is resolveView for a commit id (must be called under the
 // store lock).
-func (s *apiStore) resolveViewByID(commitID string) (map[string]fileEntry, error) {
+func (s *apiStore) resolveViewByID(commitID string) (map[string]viewEntry, error) {
 	rec, err := s.loadCommitByID(commitID)
 	if err != nil {
 		return nil, err
@@ -756,7 +899,11 @@ func (s *apiStore) listFiles(commitID string) ([]client.FileInfo, error) {
 	}
 	out := make([]client.FileInfo, 0, len(view))
 	for p, f := range view {
-		out = append(out, client.FileInfo{Path: p, Size: f.Size, Hash: f.SHA})
+		h, err := f.hash(s)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, client.FileInfo{Path: p, Size: f.size(), Hash: h})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
@@ -773,7 +920,7 @@ func (s *apiStore) getFile(commitID, p string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("file %q not found", p)
 	}
-	return s.readBlob(f.SHA)
+	return f.bytes(s)
 }
 
 // materializeInput writes the full view of a commit into dir, preserving
@@ -789,9 +936,9 @@ func (s *apiStore) materializeInput(commitID, dir string) error {
 }
 
 // materializeView writes an already-resolved view into dir.
-func (s *apiStore) materializeView(view map[string]fileEntry, dir string) error {
+func (s *apiStore) materializeView(view map[string]viewEntry, dir string) error {
 	for p, f := range view {
-		data, err := s.readBlob(f.SHA)
+		data, err := f.bytes(s)
 		if err != nil {
 			return err
 		}
@@ -818,7 +965,11 @@ func (s *apiStore) viewDatums(commitID string) ([]datumRef, error) {
 	}
 	out := make([]datumRef, 0, len(view))
 	for p, f := range view {
-		out = append(out, datumRef{Path: p, Hash: f.SHA})
+		h, err := f.hash(s)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, datumRef{Path: p, Hash: h})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
