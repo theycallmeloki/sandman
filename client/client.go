@@ -502,6 +502,19 @@ type Pipeline struct {
 	Update      bool `json:"update,omitempty"`
 	Reprocess   bool `json:"reprocess,omitempty"`
 	EnableStats bool `json:"enableStats,omitempty"`
+	// Spout, when set, makes the pipeline a spout (SB-139): it must not
+	// declare an input, its transform runs in the background, and the
+	// daemon commits each data-bearing cycle to the output branch.
+	Spout *Spout `json:"spout,omitempty"`
+}
+
+// Spout is a spout pipeline's options (SB-139): Overwrite replaces the
+// committed file content each cycle instead of accumulating it, and
+// Marker names a directory whose files are committed to a separate marker
+// branch (a name with glob metacharacters is rejected).
+type Spout struct {
+	Overwrite bool   `json:"overwrite,omitempty"`
+	Marker    string `json:"marker,omitempty"`
 }
 
 // Pipeline state machine (P7): running, stopped, standby, failure, degraded,

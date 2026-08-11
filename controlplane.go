@@ -208,8 +208,12 @@ func validatePipelineSpec(p client.Pipeline) error {
 	if p.Transform == nil {
 		return fmt.Errorf("pipeline must specify a transform")
 	}
-	if err := validateInputSides(p.Input, p.Name); err != nil {
-		return err
+	if p.Spout == nil {
+		// a spout declares no input (SB-139 clause 13: it is rejected when
+		// one is given, by validateSpout)
+		if err := validateInputSides(p.Input, p.Name); err != nil {
+			return err
+		}
 	}
 	if p.Parallelism != nil && p.Parallelism.Constant != 0 && p.Parallelism.Coefficient != 0 {
 		return fmt.Errorf("cannot specify both a constant and a coefficient of parallelism")
@@ -228,7 +232,16 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	if err := validatePipelineSpec(p); err != nil {
 		return err
 	}
-	if _, err := os.Stat(d.store.repoDir(p.Input.Repo)); err != nil {
+	if err := validateSpout(p); err != nil {
+		return err
+	}
+	if p.Input == nil {
+		// a spout has no input repo to check; anything else with no input
+		// is rejected by the spec validation's "no input set"
+		if p.Spout == nil {
+			return fmt.Errorf("no input set")
+		}
+	} else if _, err := os.Stat(d.store.repoDir(p.Input.Repo)); err != nil {
 		return fmt.Errorf("input repo %q not found", p.Input.Repo)
 	}
 
@@ -250,6 +263,12 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	rec, err := d.applyCreate(p)
 	if err != nil {
 		return err
+	}
+	if p.Spout != nil {
+		// a spout's job is its own: a background run committing each
+		// data-bearing cycle (SB-139)
+		d.spawnSpoutJob(rec)
+		return nil
 	}
 	d.scheduleHeadJob(rec)
 	d.standbyIdle(rec) // a standby pipeline with no input head parks in standby
@@ -499,6 +518,12 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 	rec, err := d.applyUpdate(existing, p)
 	if err != nil {
 		return err
+	}
+	if p.Spout != nil {
+		// the update killed the old spout job; the new epoch starts fresh
+		// (SB-139 clause 7/10)
+		d.spawnSpoutJob(rec)
+		return nil
 	}
 	d.scheduleHeadJob(rec)
 	d.standbyIdle(rec)
@@ -1941,21 +1966,44 @@ func (d *daemon) deleteCommit(ref string) error {
 			fixes = append(fixes, headFix{repo: r.Name, branch: e.Name(), newHead: newHead})
 		}
 	}
-	// remove the commit records
-	for _, cm := range d.allCommitRecs() {
-		if deleted[cm.ID] {
-			os.Remove(d.store.commitPath(cm.Repo, cm.ID))
-		}
+	// repair surviving commits: a removed parent is relinked to the
+	// nearest surviving ancestor (or cleared when none exists), so the
+	// branch chain stays connected. The walk needs the removed commits'
+	// records, so the fixes are captured before they are removed.
+	type parentFix struct {
+		cm     *commitRec
+		newPar string
 	}
-	// repair surviving commits: a removed parent is cleared
+	var pfixes []parentFix
 	for _, cm := range d.allCommitRecs() {
 		if deleted[cm.ID] || cm.ParentID == "" {
 			continue
 		}
 		if deleted[cm.ParentID] {
-			cm.ParentID = ""
-			d.store.saveCommit(cm)
+			newPar := ""
+			for cur := cm.ParentID; cur != ""; {
+				if !deleted[cur] {
+					newPar = cur
+					break
+				}
+				prec, err := d.store.loadCommit(cm.Repo, cur)
+				if err != nil || prec.ParentID == "" {
+					break
+				}
+				cur = prec.ParentID
+			}
+			pfixes = append(pfixes, parentFix{cm: cm, newPar: newPar})
 		}
+	}
+	// remove the commit records, then apply the parent repairs
+	for _, cm := range d.allCommitRecs() {
+		if deleted[cm.ID] {
+			os.Remove(d.store.commitPath(cm.Repo, cm.ID))
+		}
+	}
+	for _, pf := range pfixes {
+		pf.cm.ParentID = pf.newPar
+		d.store.saveCommit(pf.cm)
 	}
 	// apply the captured head repairs
 	for _, fx := range fixes {

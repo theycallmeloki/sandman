@@ -229,6 +229,15 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Spout pipelines** — a pipeline with no input whose transform runs in
+  the background; the daemon watches its output directory and commits
+  each data-bearing cycle to the output branch (files accumulate across
+  cycles), with the marker directory's files committed to a separate
+  `markers` branch. The job settles when the transform's loop ends; a
+  stop, update, or delete kills it. Deleting the spout's head commit does
+  not stop it, downstream pipelines consume its output normally, a spout
+  with a declared input is rejected, and a marker name with glob
+  metacharacters is rejected (SB-139)
 - **Size triggers** — an input with a `Trigger` accumulates the bytes
   newly committed to its watched branch (durably — a ledger file, so an
   interruption never loses or double-counts), and every completed
