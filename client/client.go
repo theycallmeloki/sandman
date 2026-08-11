@@ -1108,8 +1108,12 @@ func (c *Client) flushSet(commitIDs []string, timeout time.Duration) ([]Job, err
 // server long-polls its own state broadcasts, so the client makes one
 // request. A timeout returns the job's current state with an error.
 func (c *Client) WaitJob(jobID string, timeout time.Duration) (Job, error) {
+	// the long-poll needs a client whose deadline outlives the server's
+	// own wait deadline (D-23 R-5): equal deadlines race and the client
+	// can time out "awaiting headers" just before the server's response
+	hc := &http.Client{Timeout: timeout + 30*time.Second}
 	var j Job
-	err := c.do("GET", "/api/v1/jobs/"+url.PathEscape(jobID)+"/wait?timeout="+url.QueryEscape(timeout.String()), nil, &j)
+	err := c.doClient(hc, "GET", "/api/v1/jobs/"+url.PathEscape(jobID)+"/wait?timeout="+url.QueryEscape(timeout.String()), nil, &j)
 	return j, err
 }
 
