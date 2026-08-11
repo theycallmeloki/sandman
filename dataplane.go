@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"sandman/client"
 )
@@ -49,15 +50,18 @@ type fileEntry struct {
 
 // commitRec is the persisted form of a commit.
 type commitRec struct {
-	ID          string      `json:"id"`
-	Repo        string      `json:"repo"`
-	Branch      string      `json:"branch"`
-	Description string      `json:"description,omitempty"`
-	ParentID    string      `json:"parentId,omitempty"`
-	Started     bool        `json:"started"`
-	Finished    bool        `json:"finished"`
-	Empty       bool        `json:"empty"`
-	Files       []fileEntry `json:"files,omitempty"`
+	ID          string `json:"id"`
+	Repo        string `json:"repo"`
+	Branch      string `json:"branch"`
+	Description string `json:"description,omitempty"`
+	ParentID    string `json:"parentId,omitempty"`
+	Started     bool   `json:"started"`
+	// CreatedAt is the commit's creation time (UTC RFC3339Nano), the
+	// ordering key for schedules like cron ticks (SB-089/133).
+	CreatedAt string      `json:"createdAt,omitempty"`
+	Finished  bool        `json:"finished"`
+	Empty     bool        `json:"empty"`
+	Files     []fileEntry `json:"files,omitempty"`
 	// Deleted are tombstoned paths: files removed from the branch at this
 	// revision (SB-007). A deletion wins over every ancestor's file; a
 	// later re-add wins over the tombstone.
@@ -321,6 +325,7 @@ func (s *apiStore) startCommit(repo, branch, description string) (client.Commit,
 		Description: description,
 		ParentID:    s.headCommit(repo, branch),
 		Started:     true,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err := s.saveCommit(rec); err != nil {
 		return client.Commit{}, err
@@ -687,6 +692,7 @@ func (rec *commitRec) commit() client.Commit {
 		Branch:      rec.Branch,
 		Description: rec.Description,
 		Started:     rec.Started,
+		CreatedAt:   rec.CreatedAt,
 		Finished:    rec.Finished,
 		Empty:       rec.Empty,
 		ParentID:    rec.ParentID,

@@ -229,6 +229,16 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Cron inputs** — an input with a schedule (`@every <duration>`) ticks
+  on its own clock: each tick commits a file named by the tick time (UTC
+  RFC3339 — a legal path) to the input's auto-created repository (named
+  after the pipeline and the input), triggering the pipeline and its
+  downstream. Overwrite mode tombstones the previous tick so the branch
+  holds exactly one tick file; crosses of cron and regular inputs run when
+  both are available. `TriggerCron` creates the tick immediately on every
+  cron input of the pipeline, and scheduled ticks keep flowing around it
+  (SB-089). Rapid spec updates never restart the ticker — the cadence
+  survives with no bursts or stalls (SB-133)
 - **Union inputs** — a union exposes its branches under one namespace and
   merges same-named files by concatenation in branch order, one datum per
   distinct path; the merge is tracked per occurrence, so removing a file

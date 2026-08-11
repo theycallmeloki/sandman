@@ -145,6 +145,18 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 		if s.Name == "out" {
 			return fmt.Errorf(`input cannot be named "out"`)
 		}
+		if s.Cron != "" {
+			// a cron input needs no repo or glob; its repository is
+			// derived from the pipeline and the input's name (SB-089)
+			if !shIdent.MatchString(s.Name) {
+				return fmt.Errorf("input name %q is not a valid environment variable name", s.Name)
+			}
+			if names[s.Name] {
+				return fmt.Errorf("input name %q is used by more than one input", s.Name)
+			}
+			names[s.Name] = true
+			continue
+		}
 		if s.Repo == "" {
 			return fmt.Errorf("input must specify a repo")
 		}
@@ -249,6 +261,10 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 // does not schedule any job; the caller decides when the pipeline runs.
 func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	p.Update = false
+	// cron inputs get their derived repositories and their schedules
+	// started (SB-089); the derivation mutates the stored spec so the
+	// cron sides carry real repos
+	d.deriveCronRepos(&p)
 	// the output repo exists from creation: downstream pipelines can be
 	// defined against it before it has any commits (SB-086's stats branch).
 	// An existing repo (a keepRepo delete followed by a recreate, SB-157)
@@ -264,6 +280,11 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 		// fails as soon as it would start (SB-149).
 		rec.State = "failure"
 		rec.Reason = "no command specified but stdin lines provided"
+	}
+	for _, s := range inputSides(p.Input) {
+		if s.Cron != "" {
+			d.startCronTicker(p.Name, s.Name, s.Cron, s.Overwrite)
+		}
 	}
 	// The spec commit is durable before the pipeline is considered created
 	// (SB-164): a failed create leaves no spec commit behind because the
@@ -494,6 +515,15 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 		// per-datum statistics are one-way: an update cannot disable them
 		// (SB-081)
 		return nil, fmt.Errorf("statistics cannot be disabled once enabled")
+	}
+	// cron inputs keep their derived repositories; the existing tickers
+	// are keyed by those repositories and are left running — an update
+	// must not restart the cron clock (SB-133)
+	d.deriveCronRepos(&p)
+	for _, s := range inputSides(p.Input) {
+		if s.Cron != "" {
+			d.startCronTicker(p.Name, s.Name, s.Cron, s.Overwrite)
+		}
 	}
 	v := existing.Version + 1
 	rec := pipelineRec{
@@ -810,6 +840,7 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 	// cancel in-flight work and wait for it to settle, then remove the job
 	// records (SB-026/027: no orphaned job listings)
 	d.cancelPipelineJobs(name)
+	d.stopCronTickers(name) // a deleted pipeline's schedule stops (SB-089)
 	for _, j := range d.mustListJobs() {
 		if j.Pipeline == name {
 			os.RemoveAll(d.jobDir(j.ID))

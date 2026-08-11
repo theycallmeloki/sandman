@@ -211,9 +211,11 @@ type Commit struct {
 	Branch      string `json:"branch,omitempty"`
 	Description string `json:"description,omitempty"`
 	Started     bool   `json:"started"`
-	Finished    bool   `json:"finished"`
-	Empty       bool   `json:"empty,omitempty"`
-	ParentID    string `json:"parentId,omitempty"`
+	// CreatedAt is the commit's creation time (UTC RFC3339Nano).
+	CreatedAt string `json:"createdAt,omitempty"`
+	Finished  bool   `json:"finished"`
+	Empty     bool   `json:"empty,omitempty"`
+	ParentID  string `json:"parentId,omitempty"`
 }
 
 func (c *Client) StartCommit(repo, branch, description string) (Commit, error) {
@@ -383,6 +385,15 @@ type Input struct {
 	// (SB-077/078). A member may be a plain repo, a cross, or a nested
 	// union; the exposed namespace is the member's own Name.
 	Union []Input `json:"union,omitempty"`
+	// Cron makes the input a scheduled cron input (SB-089/133): the
+	// schedule is an "@every <duration>" spec, and at each tick the
+	// system commits a file named by the tick time (UTC RFC3339) to the
+	// input's auto-created repository (named after the pipeline and the
+	// input). Overwrite makes each tick's commit replace the previous
+	// tick's file instead of accumulating. A cron input needs no repo or
+	// glob.
+	Cron      string `json:"cron,omitempty"`
+	Overwrite bool   `json:"overwrite,omitempty"`
 	// Lazy marks the input as materialized on demand rather than eagerly
 	// (SB-014/015/017). The flag is part of the pipeline spec and is
 	// recorded on every job's input snapshot; sandman materializes the
@@ -579,6 +590,13 @@ func (c *Client) RunPipeline(name string, provenance []string, jobID string) (Jo
 		body["job"] = jobID
 	}
 	return out, c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/run", body, &out)
+}
+
+// TriggerCron creates an immediate tick on every cron input of the
+// pipeline (SB-089): a commit lands now regardless of the schedule, and
+// scheduled ticks keep flowing.
+func (c *Client) TriggerCron(name string) error {
+	return c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/trigger", nil, nil)
 }
 
 // ---- Datums ----

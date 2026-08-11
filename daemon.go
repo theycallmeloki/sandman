@@ -81,6 +81,12 @@ type daemon struct {
 	// observability (SB-132).
 	metrics metricsStore
 
+	// cronTickers are the live cron-input schedules, keyed by the cron
+	// repository; the cancel functions stop the ticker goroutines
+	// (SB-089, SB-133).
+	cronMu      sync.Mutex
+	cronTickers map[string]context.CancelFunc
+
 	// liveJobs maps running job ids to their execution contexts for the
 	// datum API (restart, SB-064).
 	liveJobs sync.Map

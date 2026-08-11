@@ -113,6 +113,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/stop", hErr(d.stopPipelineH))
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", hErr(d.startPipelineH))
 	mux.HandleFunc("POST /api/v1/pipelines/{name}/run", hErr(d.runPipelineH))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/trigger", hErr(d.triggerCronH))
 	mux.HandleFunc("GET /api/v1/jobs", d.instrument("listJobs", hErr(d.listJobsH)))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/datums", hErr(d.listDatumsH))
@@ -809,6 +810,15 @@ func (d *daemon) listPipelinesH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, pipes)
+	return nil
+}
+
+// triggerCronH is the manual cron trigger (SB-089 clauses 4-6).
+func (d *daemon) triggerCronH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.triggerCron(r.PathValue("name")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
 
