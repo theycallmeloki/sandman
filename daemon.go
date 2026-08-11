@@ -460,7 +460,7 @@ func (d *daemon) handleRun(r *bufio.Reader, w *bufio.Writer) {
 	jobID := strings.Join(idTok, "")
 	image := strings.Join(imgTok, "")
 	if jobID == "" || image == "" {
-		writeLine(w, "ERR", "missing jobid or image")
+		_ = writeLine(w, "ERR", "missing jobid or image")
 		return
 	}
 
@@ -497,12 +497,12 @@ func (d *daemon) handleRun(r *bufio.Reader, w *bufio.Writer) {
 
 	workdir := filepath.Join(d.state, "jobs", jobID)
 	if err := os.MkdirAll(workdir, 0o755); err != nil {
-		writeLine(w, "ERR", "workdir: "+err.Error())
+		_ = writeLine(w, "ERR", "workdir: "+err.Error())
 		return
 	}
 	j, err := startJob(jobSpec{ID: jobID, Image: image, Env: env, Workdir: workdir, Argv: argv, Node: d.name})
 	if err != nil {
-		writeLine(w, "ERR", err.Error())
+		_ = writeLine(w, "ERR", err.Error())
 		return
 	}
 	if err := writeLine(w, "RUNNING", jobID); err != nil {
@@ -517,7 +517,7 @@ func (d *daemon) handleRun(r *bufio.Reader, w *bufio.Writer) {
 			n, rerr := src.Read(buf)
 			if n > 0 {
 				wmu.Lock()
-				writeOutFrame(w, fd, buf[:n])
+				_ = writeOutFrame(w, fd, buf[:n])
 				wmu.Unlock()
 			}
 			if rerr != nil {
@@ -577,6 +577,6 @@ func (d *daemon) handleRun(r *bufio.Reader, w *bufio.Writer) {
 	code := <-j.done
 	rg.Wait() // flush remaining output before declaring the exit code
 	wmu.Lock()
-	writeLine(w, "EXIT", strconv.Itoa(code))
+	_ = writeLine(w, "EXIT", strconv.Itoa(code))
 	wmu.Unlock()
 }

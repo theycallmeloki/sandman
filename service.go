@@ -154,7 +154,6 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 	if h, err := d.store.headCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished {
 		lastID = h.ID
 		syncServeDir(d.store, serveRoot, lastID)
-	} else {
 	}
 
 	cname := fmt.Sprintf("sandman-%s-service", id)
@@ -209,7 +208,7 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 	// start the process: locally through the execution backend, or on
 	// the placed host through the worker's service endpoints
 	exited := make(chan int, 1)
-	stop := func() {}
+	var stop func()
 	if remote == "" {
 		go func() {
 			res := d.runner.Run(spec)
@@ -268,7 +267,6 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 			} else {
 				if err := d.remoteServiceRefresh(remote, cname, side); err != nil {
 					log.Printf("service %s refresh: %v", pl.Pipeline.Name, err)
-				} else {
 				}
 			}
 			continue // the head may have advanced again during the work

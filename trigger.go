@@ -61,7 +61,7 @@ func (d *daemon) loadTriggerAccum(pipeline string, pos int) int64 {
 		return 0
 	}
 	var accum int64
-	json.Unmarshal(b, &accum)
+	_ = json.Unmarshal(b, &accum)
 	return accum
 }
 

@@ -110,7 +110,7 @@ func (c *Client) doClient(hc *http.Client, method, p string, in, out any) error 
 		var e struct {
 			Error string `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&e)
+		_ = json.NewDecoder(resp.Body).Decode(&e)
 		return &Error{Status: resp.StatusCode, Message: e.Error}
 	}
 	if out != nil {
@@ -143,7 +143,7 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 		var e struct {
 			Error string `json:"error"`
 		}
-		json.Unmarshal(b, &e)
+		_ = json.Unmarshal(b, &e)
 		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
 	}
 	return b, nil
@@ -168,7 +168,7 @@ func (c *Client) doRawHeaders(method, p string) (FileFetch, error) {
 		var e struct {
 			Error string `json:"error"`
 		}
-		json.Unmarshal(b, &e)
+		_ = json.Unmarshal(b, &e)
 		return FileFetch{}, &Error{Status: resp.StatusCode, Message: e.Error}
 	}
 	return FileFetch{
@@ -1113,36 +1113,11 @@ func (c *Client) WaitJob(jobID string, timeout time.Duration) (Job, error) {
 	return j, err
 }
 
-// consumersSettled reports whether every pipeline consuming the repo is
-// terminal-for-scheduling: only a pipeline whose state is "running" can
-// still create a job for a finished commit (backfill, update reprocessing).
 // consumersSettled reports whether every pipeline that could schedule work
 // for the commit on this branch is terminal. A consumer that watches a
 // different branch of the repo cannot schedule work for the commit, so it
 // is settled regardless of its state — a commit on a non-watched branch
 // flushes to zero immediately (SB-142).
-func (c *Client) consumersSettled(repo, branch string) bool {
-	pipes, err := c.ListPipelines()
-	if err != nil {
-		return false
-	}
-	consumers := 0
-	for _, p := range pipes {
-		if p.Input != nil && p.Input.Repo == repo {
-			if InputBranch(*p.Input) != branch {
-				continue
-			}
-			consumers++
-			if p.State == "running" {
-				return false
-			}
-		}
-	}
-	// no consumer watches this branch: nothing can schedule, so the flush
-	// is settled
-	return true
-}
-
 func AllTerminal(jobs []Job) bool {
 	if len(jobs) == 0 {
 		return false
@@ -1171,17 +1146,9 @@ func SameJobSet(a, b []Job) bool {
 	return true
 }
 
-// downstreamJobs walks the job graph from an input commit: every job whose
-// input commits include it, then every job consuming those jobs' output
-// commits, transitively.
-func downstreamJobs(jobs []Job, commitID string) []Job {
-	return DownstreamJobsSet(jobs, []string{commitID})
-}
-
-// DownstreamJobsSet is downstreamJobs for a set of input commits: a job is
-// relevant when its input set includes every commit in the set (a cross
-// pipeline's pairing), then every consumer of those jobs' outputs,
-// transitively.
+// DownstreamJobsSet returns every job in the graph whose input set
+// includes every commit in the set (a cross pipeline's pairing), then
+// every consumer of those jobs' outputs, transitively.
 func DownstreamJobsSet(jobs []Job, commitIDs []string) []Job {
 	if len(commitIDs) == 0 {
 		return nil
@@ -1521,7 +1488,7 @@ func (c *Client) FollowLogs(p LogParams) (io.ReadCloser, error) {
 		var e struct {
 			Error string `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&e)
+		_ = json.NewDecoder(resp.Body).Decode(&e)
 		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
 	}
 	return resp.Body, nil

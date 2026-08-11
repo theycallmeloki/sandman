@@ -832,7 +832,7 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 	if r.URL.Query().Get("download") == "true" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(r.PathValue("path"))))
 	}
-	w.Write(data)
+	_, _ = w.Write(data)
 	return nil
 }
 
@@ -1188,7 +1188,7 @@ func (d *daemon) getTagH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(data)
+	_, _ = w.Write(data)
 	return nil
 }
 

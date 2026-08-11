@@ -125,7 +125,7 @@ func TestSB154_AuthDisabledOpenPosture(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start no-auth daemon: %v", err)
 	}
-	defer cmd.Process.Kill()
+	defer func() { _ = cmd.Process.Kill() }()
 
 	open := client.New(fmt.Sprintf("127.0.0.1:%d", port))
 	// token-less repo creation succeeds once the daemon is up (probe =

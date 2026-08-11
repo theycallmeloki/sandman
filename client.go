@@ -74,16 +74,16 @@ func clientRun(node, state, image string, env, argv []string) {
 	if err := writeLine(w, "RUN"); err != nil {
 		die("send: "+err.Error(), 1)
 	}
-	writeLine(w, jobID)
-	writeLine(w, image)
+	_ = writeLine(w, jobID)
+	_ = writeLine(w, image)
 	for _, e := range env {
-		writeLine(w, "ENV", e)
+		_ = writeLine(w, "ENV", e)
 	}
-	writeLine(w, "CMD")
+	_ = writeLine(w, "CMD")
 	for _, a := range argv {
-		writeLine(w, a)
+		_ = writeLine(w, a)
 	}
-	writeLine(w, "")
+	_ = writeLine(w, "")
 
 	run, err := readLine(r)
 	if err != nil || len(run) == 0 || run[0] != "RUNNING" {
@@ -113,7 +113,7 @@ func clientRun(node, state, image string, env, argv []string) {
 				name = "KILL"
 			}
 			signaled[name] = true
-			writeLine(w, "SIGNAL", name)
+			_ = writeLine(w, "SIGNAL", name)
 		}
 	}()
 
@@ -122,10 +122,10 @@ func clientRun(node, state, image string, env, argv []string) {
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				writeFrame(w, "DATA", buf[:n])
+				_ = writeFrame(w, "DATA", buf[:n])
 			}
 			if err != nil {
-				writeLine(w, "EOF")
+				_ = writeLine(w, "EOF")
 				return
 			}
 		}

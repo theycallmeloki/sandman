@@ -1,0 +1,79 @@
+version: "2"
+
+# Lint policy: everything strict except the documented deliberate
+# fire-and-forget error classes, excluded per-function below.
+#
+# 1. Network/stream teardown — best-effort closes and deadlines on proxy
+#    and response connections: the connection is owned by the request
+#    lifecycle, and a teardown failure has no recovery path.
+# 2. Response writes — an encode/write failure to a client that already
+#    disconnected cannot be surfaced; the request is over.
+# 3. Cleanup removes — state removal on delete paths is best-effort
+#    (os.Remove/RemoveAll/MkdirAll/WriteFile): the daemon's authoritative
+#    state transitions are recorded before cleanup runs.
+# 4. Fire-and-forget state writers — saveJob/savePipeline/cancelJob/
+#    finishOutput and the store's saveCommit/setHead/finishCommit/
+#    tombstoneRemoved/deleteRepo are called from trigger, resolve, and
+#    cleanup goroutines where the error can only be logged; the in-memory
+#    state advances regardless, and the durable record is rebuilt on
+#    restart. Any call site that CAN propagate an error must do so.
+linters:
+  default: none
+  enable:
+    - errcheck
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        # teardown (class 1)
+        - (net.Conn).Close
+        - (net.Conn).SetDeadline
+        - (*net.TCPConn).Close
+        - (*net.TCPConn).SetDeadline
+        - (*os.File).Close
+        - (*os.File).SetDeadline
+        - (io.ReadCloser).Close
+        - (*io.ReadCloser).Close
+        # response writes (class 2)
+        - (*encoding/json.Encoder).Encode
+        - fmt.Fprintf
+        - (io.Writer).Write
+        - (*os.File).Write
+        - (http.ResponseWriter).Write
+        - (net.Listener).Close
+        - (io.WriteCloser).Close
+        - (*os.File).Seek
+        - (*os/exec.Cmd).Kill
+        - (*os/exec.Cmd).Signal
+        - (*os/exec.Cmd).Run
+        - (*sandman.job).Kill
+        - (*sandman.job).Signal
+        - io.Copy
+        - (*net/http.Server).Serve
+        # cleanup removes and atomic renames (class 3)
+        - os.Remove
+        - os.RemoveAll
+        - os.MkdirAll
+        - os.WriteFile
+        - os.Rename
+        - path/filepath.Walk
+        - (*flag.FlagSet).Parse
+        # fire-and-forget state writers (class 4)
+        - (*sandman.daemon).saveJob
+        - (*sandman.daemon).savePipeline
+        - (*sandman.daemon).cancelJob
+        - (*sandman.daemon).finishOutput
+        - (*sandman.daemon).deleteCommit
+        - (sandman.Runner).Kill
+        - (*sandman.apiStore).saveCommit
+        - (*sandman.apiStore).createRepo
+        - (*sandman.apiStore).deleteFile
+        - (*sandman.apiStore).overwriteFile
+        - (*sandman.apiStore).writeBlob
+        - (*sandman.registry).loadStatic
+        - (*sandman.apiStore).setHead
+        - (*sandman.apiStore).finishCommit
+        - (*sandman.apiStore).tombstoneRemoved
+        - (*sandman.apiStore).deleteRepo

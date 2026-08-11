@@ -96,13 +96,11 @@ func TestSB077_UnionReprocessesRemovedIdenticalDatums(t *testing.T) {
 func TestSB078_UnionComposition(t *testing.T) {
 	// four repositories, each with file-0 ("0") and file-1 ("1")
 	var repos []string
-	var heads []string
 	for i := 1; i <= 4; i++ {
 		r := fmt.Sprintf("%s%d", uniq(t), i)
 		mustRepo(t, r)
 		repos = append(repos, r)
-		cm := commitNamed(t, r, map[string]string{"file-0": "0", "file-1": "1"})
-		heads = append(heads, cm.ID)
+		commitNamed(t, r, map[string]string{"file-0": "0", "file-1": "1"})
 	}
 	sizeOf := func(out, p string) int {
 		t.Helper()

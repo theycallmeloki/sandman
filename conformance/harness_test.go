@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	// os.Exit skips defers, so the daemon must die here or it keeps the
 	// inherited stderr pipe open and go test waits out its WaitDelay.
-	daemonCmd.Process.Kill()
+	_ = daemonCmd.Process.Kill()
 	os.RemoveAll(state)
 	os.Exit(code)
 }
@@ -103,8 +103,8 @@ func dockerAvailable() bool {
 // new one binds the port.
 func restartDaemon(t *testing.T) {
 	t.Helper()
-	daemonCmd.Process.Kill()
-	daemonCmd.Wait()
+	_ = daemonCmd.Process.Kill()
+	_ = daemonCmd.Wait()
 	startDaemon(daemonStateDir)
 	if !waitPort(daemonPort, 15*time.Second) {
 		t.Fatal("daemon did not come back up after restart")

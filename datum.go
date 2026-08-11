@@ -457,7 +457,6 @@ type jobExec struct {
 	// tmpDir is the job's temp directory, mounted at the container's /tmp:
 	// temp files a transform creates are host-readable, so symlinks to
 	// them resolve in the output scan (SB-054).
-	tmpMu   sync.Mutex
 	tmpDir  string
 	tmpOnce sync.Once
 
@@ -603,12 +602,6 @@ func (jx *jobExec) initWorkers(n int) {
 	for i := range jx.workers {
 		jx.workers[i].Worker = i
 	}
-	jx.saveWorkersLocked()
-}
-
-func (jx *jobExec) saveWorkers() {
-	jx.workersMu.Lock()
-	defer jx.workersMu.Unlock()
 	jx.saveWorkersLocked()
 }
 
@@ -911,10 +904,11 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		reason = fmt.Sprintf("exceeded the %s datum timeout", tr.DatumTimeout)
 	}
 	if tail != "" {
-		if r := strings.TrimSpace(tail); len(r) > 2000 {
+		r := strings.TrimSpace(tail)
+		if len(r) > 2000 {
 			r = r[len(r)-2000:]
 		}
-		reason += ": " + strings.TrimSpace(tail)
+		reason += ": " + r
 	}
 	return "failed", reason, nil
 }

@@ -100,16 +100,6 @@ func (r *registry) list() []peer {
 	return out
 }
 
-func (r *registry) find(name string) (string, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	p, ok := r.peers[name]
-	if !ok {
-		return "", false
-	}
-	return p.Addr, true
-}
-
 // writeSnapshot rewrites the registry file: the fleet as plain text.
 func (r *registry) writeSnapshot() {
 	r.mu.Lock()

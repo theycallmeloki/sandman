@@ -48,8 +48,8 @@ func withContainerDaemon(t *testing.T) {
 	daemonPort = port
 	daemonStateDir = state
 	t.Cleanup(func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		os.RemoveAll(state)
 		c, daemonPort, daemonStateDir = oldC, oldPort, oldState
 	})
@@ -619,7 +619,7 @@ func TestSB167_PlacementLabels(t *testing.T) {
 
 	w := startWorker(t, "hostA", "gpu")
 	waitHostRegistered(t, "hostA")
-	defer func() { w.cmd.Process.Kill() }()
+	defer func() { _ = w.cmd.Process.Kill() }()
 
 	name := uniq(t)
 	mustPipeline(t, client.Pipeline{
@@ -686,7 +686,7 @@ func TestSB169_UnplaceableRecovery(t *testing.T) {
 	// automatically and the same job completes (SB-169 clause 2)
 	w := startWorker(t, "hostB", "offline")
 	waitHostRegistered(t, "hostB")
-	defer func() { w.cmd.Process.Kill() }()
+	defer func() { _ = w.cmd.Process.Kill() }()
 	jobs := flushOK(t, cm.ID)
 	if len(jobs) != 1 {
 		t.Fatalf("flush returned %d jobs, want exactly one", len(jobs))

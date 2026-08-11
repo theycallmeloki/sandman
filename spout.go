@@ -89,12 +89,12 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	rj.registerContainer(cname)
 	defer rj.unregisterContainer(cname)
 
-	env := []string{"OUT=/sandman/out", "JOB_ID=" + id}
+	// the container's environment is passed as docker -e flags in argv;
+	// the mount list is the only other docker argument
 	mounts := []string{"-v", outDir + ":/sandman/out"}
 	markerDir := d.spoutMarkerDir(pl.Pipeline.Name)
 	if pl.Pipeline.Spout.Marker != "" {
 		os.MkdirAll(markerDir, 0o755)
-		env = append(env, "MARKER=/sandman/marker")
 		mounts = append(mounts, "-v", markerDir+":/sandman/marker")
 	}
 	argv := []string{"run", "-d", "--name", cname, "-e", "OUT=/sandman/out", "-e", "JOB_ID=" + id}

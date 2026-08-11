@@ -118,7 +118,7 @@ func TestSB138_ChangedHeaderReprocessesAll(t *testing.T) {
 func TestSB088_UrlIngestionJsonSpecPipelines(t *testing.T) {
 	// a local HTTP server serves the "remote" image
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("image-bytes"))
+		_, _ = w.Write([]byte("image-bytes"))
 	}))
 	defer srv.Close()
 

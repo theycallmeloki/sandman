@@ -43,7 +43,7 @@ func TestSB100_ServicePipeline(t *testing.T) {
 		},
 	}
 	mustPipeline(t, p)
-	t.Cleanup(func() { c.DeletePipeline(p.Name, false, false) })
+	t.Cleanup(func() { _ = c.DeletePipeline(p.Name, false, false) })
 
 	// the external endpoint converges as the process comes up — the
 	// contract is eventual reachability, so probe until it serves
@@ -168,7 +168,7 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 	if err := c.CreatePipeline(p1); err != nil {
 		t.Fatalf("create first service: %v", err)
 	}
-	t.Cleanup(func() { c.DeletePipeline(p1.Name, false, false) })
+	t.Cleanup(func() { _ = c.DeletePipeline(p1.Name, false, false) })
 	p2 := mk(&client.Service{InternalPort: 8001, ExternalPort: 31813})
 	err := c.CreatePipeline(p2)
 	if err == nil || !strings.Contains(err.Error(), "already declared") {
@@ -210,7 +210,7 @@ func TestSB168_RemoteServiceReachable(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start worker: %v", err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
 	p := client.Pipeline{
 		Name: uniq(t),
@@ -227,7 +227,7 @@ func TestSB168_RemoteServiceReachable(t *testing.T) {
 		},
 	}
 	mustPipeline(t, p)
-	t.Cleanup(func() { c.DeletePipeline(p.Name, false, false) })
+	t.Cleanup(func() { _ = c.DeletePipeline(p.Name, false, false) })
 
 	// reachable at the control-plane host's external port, converged via
 	// the retry loop (SB-168 clause 4)

@@ -40,8 +40,8 @@ func startWorker(t *testing.T, name string, labels ...string) *workerProc {
 		t.Fatalf("start worker: %v", err)
 	}
 	t.Cleanup(func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	})
 	return &workerProc{cmd: cmd}
 }

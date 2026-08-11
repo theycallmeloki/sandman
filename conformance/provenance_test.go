@@ -170,8 +170,7 @@ func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 	}
 	// C produced one commit per source commit despite the two paths; its
 	// job set is wave-1's lone pairing plus one pairing per wave
-	cs, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pc})
-	if err != nil {
+	if _, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pc}); err != nil {
 		t.Fatalf("list C jobs: %v", err)
 	}
 	// C's matched pairings can land after the flush returns (the cross
@@ -180,7 +179,7 @@ func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 		l, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pc})
 		return err == nil && len(l) == 3
 	})
-	cs, err = c.ListJobsFiltered(client.JobFilter{Pipeline: pc})
+	cs, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pc})
 	if err != nil {
 		t.Fatalf("list C jobs: %v", err)
 	}

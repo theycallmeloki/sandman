@@ -519,7 +519,7 @@ func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
 		}
 	}
 	newPaths := map[string]bool{}
-	walkFiles(outDir, nil, func(rel string, _ []byte) error {
+	_ = walkFiles(outDir, nil, func(rel string, _ []byte) error {
 		newPaths[rel] = true
 		return nil
 	})
