@@ -160,8 +160,9 @@ func TestSB149_NoCommandAcceptedButFailsAtStart(t *testing.T) {
 
 // SB-159 — pipeline creation validates the request shape and rejects every
 // malformed file-input variant cleanly, with the documented signals. (Cases
-// for aggregate/cron/git inputs and services are deferred to the batches
-// that introduce those input types.)
+// for aggregate inputs and services are deferred to the batches that
+// introduce those input types; git-input signals (clause 12) are asserted
+// by TestSB104_GitURLValidation.)
 func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -171,6 +172,9 @@ func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
 		p    client.Pipeline
 		want string
 	}{
+		{"git missing url", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine"}, Input: &client.Input{Git: &client.GitInput{}}}, "clone URL is missing ("},
+		{"git no .git suffix", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine"}, Input: &client.Input{Git: &client.GitInput{URL: "https://host/path"}}}, "clone URL is missing .git suffix"},
+		{"git not https", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine"}, Input: &client.Input{Git: &client.GitInput{URL: "git://host/path.git"}}}, "clone URL must use https protocol"},
 		{"no name no transform", client.Pipeline{}, "invalid pipeline spec"},
 		{"name without transform", client.Pipeline{Name: uniq(t), Input: &client.Input{Repo: repo, Glob: "/*"}}, "transform"},
 		{"empty input", client.Pipeline{Name: uniq(t), Transform: copyTransform(repo)}, "no input set"},

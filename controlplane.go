@@ -134,6 +134,30 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 	}
 	names := map[string]bool{}
 	for _, s := range inputSides(in) {
+		if s.Git != nil {
+			// a git input needs no repo or glob: the mapped repository is
+			// derived from the URL or the custom name (SB-104..112). The
+			// URL form is validated at creation (SB-104/159-12), and the
+			// derived names participate in the duplicate-name check, so
+			// two git inputs with the same URL and no custom names collide
+			// (SB-106 clause 2) while distinct names disambiguate (SB-106
+			// clause 3).
+			if err := validateGitURL(s.Git.URL); err != nil {
+				return err
+			}
+			name := s.Name
+			if name == "" {
+				name = gitRepoName(s.Git.URL)
+			}
+			if !shIdent.MatchString(name) {
+				return fmt.Errorf("input name %q is not a valid environment variable name", name)
+			}
+			if names[name] {
+				return fmt.Errorf("input name %q is used by more than one input", name)
+			}
+			names[name] = true
+			continue
+		}
 		if len(s.Union) > 0 {
 			// a union embedded in a cross: its name is the exposed
 			// namespace; validate it (and its branches) recursively
@@ -324,6 +348,7 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	// started (SB-089); size triggers get their accumulation branches
 	// (SB-160) — the derivations mutate the stored spec
 	d.deriveCronRepos(&p)
+	d.deriveGitRepos(&p)
 	d.deriveTriggerBranches(&p)
 	// the output repo exists from creation: downstream pipelines can be
 	// defined against it before it has any commits (SB-086's stats branch).
@@ -592,6 +617,7 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 	// must not restart the cron clock (SB-133). Trigger branches are
 	// reused across updates (SB-160 clause 7).
 	d.deriveCronRepos(&p)
+	d.deriveGitRepos(&p)
 	d.deriveTriggerBranches(&p)
 	for _, s := range inputSides(p.Input) {
 		if s.Cron != "" {

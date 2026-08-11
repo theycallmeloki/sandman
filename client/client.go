@@ -426,6 +426,19 @@ type Trigger struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+// GitInput declares an external git repository as a pipeline input
+// (SB-104..112): the repository at URL is mapped to an auto-created
+// repository named by the input's own Name (SB-109) or derived from the
+// URL when the input has no name, and a push event for URL on the tracked
+// branch commits the pushed revision into that repository and triggers
+// the pipeline.
+type GitInput struct {
+	URL string `json:"url"`
+	// Branch is the tracked branch (default "master"): pushes to any
+	// other branch are ignored entirely (SB-112).
+	Branch string `json:"branch,omitempty"`
+}
+
 type Input struct {
 	Name   string  `json:"name,omitempty"`
 	Repo   string  `json:"repo,omitempty"`
@@ -464,6 +477,13 @@ type Input struct {
 	// glob.
 	Cron      string `json:"cron,omitempty"`
 	Overwrite bool   `json:"overwrite,omitempty"`
+	// Git makes the input a git input (SB-104..112): the external
+	// repository at URL is mapped to an auto-created repository named by
+	// the input's own Name (SB-109) or derived from the URL when unnamed;
+	// a push event for URL on the tracked branch (Branch, default
+	// "master") commits the pushed revision into the mapped repository
+	// and triggers the pipeline. A git input needs no repo or glob.
+	Git *GitInput `json:"git,omitempty"`
 	// Trigger makes the input a size trigger (SB-160): bytes newly
 	// committed to the watched branch accumulate, and every completed
 	// threshold unit runs the pipeline on the accumulated data, from the
@@ -706,6 +726,23 @@ func (c *Client) RunPipeline(name string, provenance []string, jobID string) (Jo
 // scheduled ticks keep flowing.
 func (c *Client) TriggerCron(name string) error {
 	return c.do("POST", "/api/v1/pipelines/"+url.PathEscape(name)+"/trigger", nil, nil)
+}
+
+// PushGitEvent delivers a git push event (SB-107..112): the daemon
+// commits the pushed revision into every mapped repository bound to the
+// URL (on the tracked branch) and triggers the consuming pipelines.
+// files is the pushed revision's working tree (the external repository's
+// content); private marks a repository the system cannot clone (no
+// credentials) — the event is accepted but produces no commit and the
+// bound pipelines fail with a reason naming the URL (SB-105).
+func (c *Client) PushGitEvent(url, branch, revision string, files map[string]string, private bool) error {
+	return c.do("POST", "/api/v1/git/push", map[string]any{
+		"url":      url,
+		"branch":   branch,
+		"revision": revision,
+		"files":    files,
+		"private":  private,
+	}, nil)
 }
 
 // ---- Datums ----
