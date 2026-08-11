@@ -356,6 +356,17 @@ type Transform struct {
 // cartesian product of the listed inputs (each member is itself a
 // file-scoped input with its own repo, glob, branch, and name); a
 // file-scoped Input with Cross set is invalid.
+// Trigger is a size-based commit trigger (SB-160): bytes newly committed
+// to the watched branch accumulate, and when the accumulated total
+// reaches SizeBytes the pipeline runs on the accumulated data. The input
+// reads its dedicated accumulation branch (derived from the pipeline and
+// the input's position), not the watched branch.
+type Trigger struct {
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
+	// Branch is the watched branch (default "master").
+	Branch string `json:"branch,omitempty"`
+}
+
 type Input struct {
 	Name   string  `json:"name,omitempty"`
 	Repo   string  `json:"repo,omitempty"`
@@ -394,6 +405,11 @@ type Input struct {
 	// glob.
 	Cron      string `json:"cron,omitempty"`
 	Overwrite bool   `json:"overwrite,omitempty"`
+	// Trigger makes the input a size trigger (SB-160): bytes newly
+	// committed to the watched branch accumulate, and every completed
+	// threshold unit runs the pipeline on the accumulated data, from the
+	// input's dedicated accumulation branch.
+	Trigger *Trigger `json:"trigger,omitempty"`
 	// Lazy marks the input as materialized on demand rather than eagerly
 	// (SB-014/015/017). The flag is part of the pipeline spec and is
 	// recorded on every job's input snapshot; sandman materializes the

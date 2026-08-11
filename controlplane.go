@@ -262,9 +262,10 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	p.Update = false
 	// cron inputs get their derived repositories and their schedules
-	// started (SB-089); the derivation mutates the stored spec so the
-	// cron sides carry real repos
+	// started (SB-089); size triggers get their accumulation branches
+	// (SB-160) — the derivations mutate the stored spec
 	d.deriveCronRepos(&p)
+	d.deriveTriggerBranches(&p)
 	// the output repo exists from creation: downstream pipelines can be
 	// defined against it before it has any commits (SB-086's stats branch).
 	// An existing repo (a keepRepo delete followed by a recreate, SB-157)
@@ -518,8 +519,10 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 	}
 	// cron inputs keep their derived repositories; the existing tickers
 	// are keyed by those repositories and are left running — an update
-	// must not restart the cron clock (SB-133)
+	// must not restart the cron clock (SB-133). Trigger branches are
+	// reused across updates (SB-160 clause 7).
 	d.deriveCronRepos(&p)
+	d.deriveTriggerBranches(&p)
 	for _, s := range inputSides(p.Input) {
 		if s.Cron != "" {
 			d.startCronTicker(p.Name, s.Name, s.Cron, s.Overwrite)
@@ -840,7 +843,8 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 	// cancel in-flight work and wait for it to settle, then remove the job
 	// records (SB-026/027: no orphaned job listings)
 	d.cancelPipelineJobs(name)
-	d.stopCronTickers(name) // a deleted pipeline's schedule stops (SB-089)
+	d.stopCronTickers(name)     // a deleted pipeline's schedule stops (SB-089)
+	d.clearTriggerLedgers(name) // its trigger accumulation goes too (SB-160)
 	for _, j := range d.mustListJobs() {
 		if j.Pipeline == name {
 			os.RemoveAll(d.jobDir(j.ID))
@@ -1181,6 +1185,9 @@ func inputConsumesRepo(in *client.Input, repo string) bool {
 
 // the caller (the HTTP handler that finished the commit).
 func (d *daemon) triggerForCommit(cm client.Commit) {
+	// size triggers watching the commit's branch accumulate its bytes and
+	// may fire (SB-160); the trigger commits they create re-enter here
+	d.accumulateTriggers(cm)
 	pipes, _ := d.listPipelinesFiltered(nil, "", false)
 	for _, p := range pipes {
 		if p.State == "failure" || p.State == "crashed" {

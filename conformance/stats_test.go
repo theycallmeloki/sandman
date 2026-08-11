@@ -45,12 +45,21 @@ func TestSB080_PerDatumStatistics(t *testing.T) {
 		EnableStats: true,
 	})
 
-	// wait for the job to be running and all 10 datums to appear (the
-	// listing is complete during execution — queued datums included)
+	// wait for the job to be running and all 10 datums to appear with
+	// their input files (the listing is complete during execution —
+	// queued datums included — once the placeholder records are durable)
 	job := waitJobFor(t, pipe, 30*time.Second)
-	pollFor(t, "10 datums listed mid-flight", 30*time.Second, func() bool {
+	pollFor(t, "10 datums with input files mid-flight", 30*time.Second, func() bool {
 		pg, err := c.ListDatums(job.ID, 0, 0)
-		return err == nil && len(pg.Datums) == 10
+		if err != nil || len(pg.Datums) != 10 {
+			return false
+		}
+		for _, dt := range pg.Datums {
+			if len(dt.InputFiles) != 1 {
+				return false
+			}
+		}
+		return true
 	})
 	pg, err := c.ListDatums(job.ID, 0, 0)
 	if err != nil {

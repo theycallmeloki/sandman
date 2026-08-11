@@ -229,6 +229,15 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Size triggers** — an input with a `Trigger` accumulates the bytes
+  newly committed to its watched branch (durably — a ledger file, so an
+  interruption never loses or double-counts), and every completed
+  threshold unit commits the accumulated view to the input's dedicated
+  accumulation branch — derived from the pipeline and the input's
+  position, and reused across updates so state is never orphaned — where
+  the pipeline runs on it. One oversized commit fires once per threshold
+  unit, accumulation resets after firing, and triggers compose across a
+  DAG (SB-160)
 - **Cron inputs** — an input with a schedule (`@every <duration>`) ticks
   on its own clock: each tick commits a file named by the tick time (UTC
   RFC3339 — a legal path) to the input's auto-created repository (named
