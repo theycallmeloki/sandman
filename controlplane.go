@@ -74,6 +74,43 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 	if len(in.Join) > 0 && len(in.Group) > 0 {
 		return fmt.Errorf("input cannot specify both a join and a group")
 	}
+	if len(in.Union) > 0 {
+		if in.Repo != "" || len(in.Cross) > 0 || len(in.Join) > 0 || len(in.Group) > 0 {
+			return fmt.Errorf("input cannot combine a union with other input kinds")
+		}
+		if in.Name == "" {
+			return fmt.Errorf("a union input must specify a name")
+		}
+		if !shIdent.MatchString(in.Name) || in.Name == "out" {
+			return fmt.Errorf("invalid union name %q", in.Name)
+		}
+		for i := range in.Union {
+			if err := validateInputSides(&in.Union[i], pipelineName); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(in.Cross) > 0 {
+		// a cross's immediate members expose distinct namespaces — a
+		// member's namespace is its own name (a union member's name is
+		// its alias), so two branches sharing an alias are rejected
+		// (SB-078 clauses 5/6)
+		ns := map[string]bool{}
+		for _, m := range in.Cross {
+			n := m.Name
+			if n == "" {
+				n = m.Repo
+			}
+			if n == "" {
+				n = "input"
+			}
+			if ns[n] {
+				return fmt.Errorf("cross branches must expose distinct namespaces")
+			}
+			ns[n] = true
+		}
+	}
 	if len(in.Join) > 0 && in.Repo != "" {
 		return fmt.Errorf("input cannot specify both a repo and a join")
 	}
@@ -91,6 +128,14 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 	}
 	names := map[string]bool{}
 	for _, s := range inputSides(in) {
+		if len(s.Union) > 0 {
+			// a union embedded in a cross: its name is the exposed
+			// namespace; validate it (and its branches) recursively
+			if err := validateInputSides(&s, pipelineName); err != nil {
+				return err
+			}
+			continue
+		}
 		if s.Name == "" {
 			s.Name = s.Repo // an input's environment variable is named after its repo
 		}
@@ -244,6 +289,28 @@ func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 	heads := d.pairHeads(rec.Pipeline.Input)
 	for _, h := range heads {
 		if h.ID != "" {
+			return d.spawnJob(rec, heads, "", "", nil)
+		}
+	}
+	// a union whose branches have no direct heads may still consume repos
+	// through its cross or nested-union branches (SB-078 clauses 2/3)
+	if len(rec.Pipeline.Input.Union) > 0 {
+		var any func(in *client.Input) bool
+		any = func(in *client.Input) bool {
+			for _, s := range inputSides(in) {
+				if s.Repo != "" {
+					if _, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil {
+						return true
+					}
+				} else if len(s.Cross) > 0 || len(s.Union) > 0 {
+					if any(&s) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		if any(rec.Pipeline.Input) {
 			return d.spawnJob(rec, heads, "", "", nil)
 		}
 	}
@@ -1048,11 +1115,21 @@ func (d *daemon) pairHeads(in *client.Input) []client.Commit {
 }
 
 // pipelineConsumes reports whether any input side subscribes to the
-// (repo, branch) pair — the trigger condition for a commit.
+// (repo, branch) pair — the trigger condition for a commit. Union and
+// cross branches are walked recursively, so a union of crosses still
+// triggers on its members' repos (SB-078).
 func pipelineConsumes(in *client.Input, repo, branch string) bool {
 	for _, s := range inputSides(in) {
-		if s.Repo == repo && inputBranch(s) == branch {
-			return true
+		if s.Repo != "" {
+			if s.Repo == repo && inputBranch(s) == branch {
+				return true
+			}
+			continue
+		}
+		if len(s.Cross) > 0 || len(s.Union) > 0 {
+			if pipelineConsumes(&s, repo, branch) {
+				return true
+			}
 		}
 	}
 	return false
@@ -1062,6 +1139,9 @@ func pipelineConsumes(in *client.Input, repo, branch string) bool {
 func inputConsumesRepo(in *client.Input, repo string) bool {
 	for _, s := range inputSides(in) {
 		if s.Repo == repo {
+			return true
+		}
+		if s.Repo == "" && (len(s.Cross) > 0 || len(s.Union) > 0) && inputConsumesRepo(&s, repo) {
 			return true
 		}
 	}
@@ -1938,6 +2018,45 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// side without a head contributes no datums, so the product is empty.
 	views := map[string]map[string]fileEntry{}
 	sideLists := make([][]datumSide, len(sides))
+	in := pl.Pipeline.Input
+	if len(in.Union) > 0 {
+		// a union's branches may themselves be crosses or nested unions:
+		// resolve every consumed repo's head into the views (SB-078
+		// clauses 2/3), and record the full input set on the job so the
+		// flush can find it
+		var resolve func(in *client.Input)
+		resolve = func(in *client.Input) {
+			for _, s := range inputSides(in) {
+				if s.Repo != "" {
+					if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished {
+						if v, err := d.store.resolveViewByID(h.ID); err == nil {
+							views[s.Name] = v
+						}
+					}
+				} else if len(s.Cross) > 0 || len(s.Union) > 0 {
+					resolve(&s)
+				}
+			}
+		}
+		resolve(pl.Pipeline.Input)
+		seen := map[string]bool{}
+		rec.InputCommits = nil
+		var collect func(in *client.Input)
+		collect = func(in *client.Input) {
+			for _, s := range inputSides(in) {
+				if s.Repo != "" {
+					if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished && !seen[h.ID] {
+						seen[h.ID] = true
+						rec.InputCommits = append(rec.InputCommits, h.ID)
+					}
+				} else if len(s.Cross) > 0 || len(s.Union) > 0 {
+					collect(&s)
+				}
+			}
+		}
+		collect(pl.Pipeline.Input)
+		d.saveJob(rec)
+	}
 	for i, s := range sides {
 		if i >= len(heads) || heads[i].ID == "" {
 			continue
@@ -1955,9 +2074,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		}
 		sideLists[i] = sd
 	}
-	in := pl.Pipeline.Input
 	var datums []datum
 	switch {
+	case len(in.Union) > 0:
+		datums = d.unionDatums(views, in)
 	case len(in.Join) > 0:
 		datums = joinDatums(views, sides)
 	case len(in.Group) > 0:
@@ -1966,6 +2086,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		datums = crossDatums(sideLists)
 	}
 	for i := range datums {
+		if len(datums[i].Sides) == 1 && datums[i].Sides[0].Merge != nil {
+			continue // a union datum already carries its merged content hash
+		}
 		datums[i].Hash = datumHash(views, datums[i])
 	}
 	for _, dt := range datums {

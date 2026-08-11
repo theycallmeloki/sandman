@@ -229,6 +229,15 @@ revisions, and jobs that run them.
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
   erroring (SB-022)
+- **Union inputs** — a union exposes its branches under one namespace and
+  merges same-named files by concatenation in branch order, one datum per
+  distinct path; the merge is tracked per occurrence, so removing a file
+  from every branch is detected as a removal, never hidden by hash
+  matching (SB-077). Branches may be plain repos, crosses (each
+  constituent repo its own directory, every file once per cross
+  combination), or nested unions; a cross's immediate branches must expose
+  distinct namespaces, and a cross of unions with the same alias is
+  rejected at creation (SB-078)
 - **Join and group inputs** — a join pairs files across repositories by a
   captured glob group (`JoinOn` selects it, e.g. `$1` or `$1$3`): a datum
   exists for every key present in all members, containing one file per

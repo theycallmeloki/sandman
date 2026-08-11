@@ -376,6 +376,13 @@ type Input struct {
 	// joins first, then groups the joined pairs.
 	Group   []Input `json:"group,omitempty"`
 	GroupBy string  `json:"groupBy,omitempty"`
+	// Union, when non-empty, makes the input a union: the members'
+	// (branches') files are exposed under this input's namespace, and
+	// files at the same path from different branches merge by
+	// concatenation in branch order — one datum per distinct path
+	// (SB-077/078). A member may be a plain repo, a cross, or a nested
+	// union; the exposed namespace is the member's own Name.
+	Union []Input `json:"union,omitempty"`
 	// Lazy marks the input as materialized on demand rather than eagerly
 	// (SB-014/015/017). The flag is part of the pipeline spec and is
 	// recorded on every job's input snapshot; sandman materializes the
@@ -406,6 +413,9 @@ func InputSides(in *Input) []Input {
 	}
 	if len(in.Group) > 0 {
 		return in.Group
+	}
+	if len(in.Union) > 0 {
+		return in.Union
 	}
 	return []Input{*in}
 }

@@ -58,6 +58,110 @@ type datumSide struct {
 	Name  string   // the input's environment variable name
 	ID    string   // the matched path within this side's view
 	Files []string // file paths in this side's view
+	// Merge, when set, overrides Files' content for the listed paths: the
+	// side's file at each path is the concatenation of the copies (a
+	// union's branches merging by path, SB-077/078).
+	Merge map[string][]fileRef
+}
+
+// unionDatums builds a union input's datum set (SB-077/078): each branch
+// contributes its files at their namespaced paths (a plain repo at its
+// file paths, a cross at memberName/file, a nested union under its name),
+// and files at the same path merge by concatenation in branch order — one
+// datum per distinct path. The merged content hash is computed from the
+// copies, so dedup tracks the union's merged state.
+func (d *daemon) unionDatums(views map[string]map[string]fileEntry, union *client.Input) []datum {
+	merged := map[string][]fileRef{}
+	var order []string
+	seen := map[string]bool{}
+	for _, branch := range union.Union {
+		for path, refs := range d.unionBranchPaths(views, branch) {
+			if !seen[path] {
+				seen[path] = true
+				order = append(order, path)
+			}
+			merged[path] = append(merged[path], refs...)
+		}
+	}
+	var out []datum
+	for _, path := range order {
+		refs := merged[path]
+		sum := sha256.New()
+		for _, r := range refs {
+			if b, err := d.store.readBlob(r.Hash); err == nil {
+				sum.Write(b)
+			}
+		}
+		out = append(out, datum{
+			ID: path,
+			Sides: []datumSide{{
+				Name:  union.Name,
+				ID:    path,
+				Files: []string{path},
+				Merge: map[string][]fileRef{path: refs},
+			}},
+			Hash: hex.EncodeToString(sum.Sum(nil)),
+		})
+	}
+	return out
+}
+
+// unionBranchPaths exposes one union branch's files at their namespaced
+// paths, one copy per contributing datum combination.
+func (d *daemon) unionBranchPaths(views map[string]map[string]fileEntry, branch client.Input) map[string][]fileRef {
+	out := map[string][]fileRef{}
+	switch {
+	case len(branch.Cross) > 0:
+		// the cross's combinations: each combination contributes every
+		// member's file at memberName/file, once per combination
+		var memberFiles [][]string
+		for _, m := range branch.Cross {
+			var fs []string
+			for p := range views[m.Name] {
+				if globMatches(m.Glob, p) {
+					fs = append(fs, p)
+				}
+			}
+			sort.Strings(fs)
+			memberFiles = append(memberFiles, fs)
+		}
+		// cartesian product of the members' file lists
+		var combos [][]string
+		combos = [][]string{{}}
+		for _, fs := range memberFiles {
+			var next [][]string
+			for _, combo := range combos {
+				for _, f := range fs {
+					next = append(next, append(append([]string{}, combo...), f))
+				}
+			}
+			combos = next
+		}
+		for _, combo := range combos {
+			for j, f := range combo {
+				m := branch.Cross[j]
+				path := m.Name + "/" + f
+				e := views[m.Name][f]
+				out[path] = append(out[path], fileRef{Path: path, Hash: e.SHA, Size: e.Size})
+			}
+		}
+	case len(branch.Union) > 0:
+		// nested union: its merged files exposed under the branch's name
+		for _, dt := range d.unionDatums(views, &branch) {
+			for path, refs := range dt.Sides[0].Merge {
+				ns := branch.Name + "/" + path
+				out[ns] = append(out[ns], refs...)
+			}
+		}
+	default:
+		for p := range views[branch.Name] {
+			if globMatches(branch.Glob, p) {
+				e := views[branch.Name][p]
+				out[p] = append(out[p], fileRef{Path: p, Hash: e.SHA, Size: e.Size})
+			}
+		}
+	}
+	return out
 }
 
 // datumState is the durable per-datum record (the dedup table).
@@ -581,6 +685,26 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 			return "failed", err.Error(), nil
 		}
 		for _, f := range sd.Files {
+			// a union side's file is the concatenation of its branch
+			// copies (SB-077/078)
+			if refs, ok := sd.Merge[f]; ok {
+				var buf []byte
+				for _, r := range refs {
+					b, err := d.store.readBlob(r.Hash)
+					if err != nil {
+						return "failed", "materialize input: " + err.Error(), nil
+					}
+					buf = append(buf, b...)
+				}
+				dst := filepath.Join(inDir, filepath.FromSlash(f))
+				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+					return "failed", err.Error(), nil
+				}
+				if err := os.WriteFile(dst, buf, 0o644); err != nil {
+					return "failed", err.Error(), nil
+				}
+				continue
+			}
 			data, err := d.store.readBlob(jx.views[sd.Name][f].SHA)
 			if err != nil {
 				return "failed", "materialize input: " + err.Error(), nil

@@ -302,6 +302,9 @@ func TestSB055_UpstreamOutputInsideCross(t *testing.T) {
 		}
 	}
 	if len(outs) != 1 {
+		for _, j := range cs {
+			t.Logf("C job %s state=%s input=%v out=%s started=%s", j.ID, j.State, j.InputCommits, j.OutputCommit, j.Started)
+		}
 		t.Fatalf("C has %d output commits, want exactly 1", len(outs))
 	}
 	bf, err := c.GetFile(outs[0].OutputCommit, "bFile")

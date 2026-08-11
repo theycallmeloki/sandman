@@ -217,7 +217,10 @@ func TestSB073_LargeOutputAcrossParallelWorkers(t *testing.T) {
 		Parallelism: &client.Parallelism{Constant: 4},
 	})
 
-	jobs := flushOK(t, cm.ID)
+	jobs, err := c.Flush(cm.ID, 180*time.Second) // 100 datums x 100 files, 4 workers — slow under full-suite load
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
 	if len(jobs) != 1 {
 		t.Fatalf("flush returned %d jobs, want exactly 1 output commit", len(jobs))
 	}
