@@ -6,6 +6,7 @@ package conformance
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,25 @@ func TestSB089_CronInputs(t *testing.T) {
 		cronRepo := pipe + "-cron"
 		// wait for two ticks, then flush each through both stages
 		first := waitCronTicks(t, cronRepo, 2, 60*time.Second)
+		// the tick file is named by the tick time in UTC RFC3339 — a
+		// legal path with no glob metacharacters (SB-089 edge case);
+		// append-mode ticks accumulate, so after two ticks the commit
+		// holds two tick files
+		tickFiles, err := c.ListFiles(first.ID)
+		if err != nil {
+			t.Fatalf("list tick files: %v", err)
+		}
+		if len(tickFiles) != 2 {
+			t.Fatalf("tick commit has %d files, want 2 (accumulated)", len(tickFiles))
+		}
+		for _, tf := range tickFiles {
+			if _, err := time.Parse(time.RFC3339, tf.Path); err != nil {
+				t.Fatalf("tick file %q is not RFC3339: %v", tf.Path, err)
+			}
+			if !strings.HasSuffix(tf.Path, "Z") || strings.ContainsAny(tf.Path, "+*?[]") {
+				t.Fatalf("tick file %q is not a UTC path (no glob metacharacters)", tf.Path)
+			}
+		}
 		jobs1 := flushOK(t, first.ID)
 		if len(jobs1) != 2 {
 			t.Fatalf("after 2 ticks: %d jobs, want 2 (pipeline + downstream)", len(jobs1))
@@ -64,6 +84,16 @@ func TestSB089_CronInputs(t *testing.T) {
 			Input: &client.Input{Name: "cron", Cron: "@every 2s", Overwrite: true},
 		})
 		first := waitCronTicks(t, pipe+"-cron", 3, 90*time.Second)
+		// the overwrite tick deletes the prior tick's file: every cron
+		// commit holds exactly one file, the latest tick (SB-089 edge
+		// case, the reference's CronOverwrite shape)
+		ticks, err := c.ListFiles(first.ID)
+		if err != nil {
+			t.Fatalf("list overwrite tick files: %v", err)
+		}
+		if len(ticks) != 1 {
+			t.Fatalf("overwrite tick commit has %d files, want exactly 1", len(ticks))
+		}
 		jobs := flushOK(t, first.ID)
 		var pipeJob client.Job
 		for _, j := range jobs {

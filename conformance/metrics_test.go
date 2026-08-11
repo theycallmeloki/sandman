@@ -4,6 +4,8 @@
 package conformance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,7 +155,15 @@ func TestSB079_GarbageCollection(t *testing.T) {
 		t.Fatalf("output bar after collection = %q (%v)", string(b), err)
 	}
 
-	// deleting the pipeline and collecting reclaims its unreferenced blob
+	// deleting the pipeline and collecting reclaims exactly its
+	// unreferenced blob: the output "barbar" content is a distinct blob
+	// from the input's "bar", while the output "foo" shares the input's
+	// blob — so exactly one object is collected and the shared one
+	// survives (SB-079 clause 4, exact accounting)
+	barbarSha := sha256Hex("barbar")
+	if !objectExists(t, barbarSha) {
+		t.Fatalf("expected the unreferenced barbar blob %s to exist before collection", barbarSha)
+	}
 	before := objectCount(t)
 	if err := c.DeletePipeline(pipe, false, false); err != nil {
 		t.Fatalf("delete pipeline: %v", err)
@@ -162,8 +172,14 @@ func TestSB079_GarbageCollection(t *testing.T) {
 		t.Fatalf("collection after pipeline deletion: %v", err)
 	}
 	after := objectCount(t)
-	if after >= before {
-		t.Fatalf("collection reclaimed nothing: %d objects before, %d after", before, after)
+	if after != before-1 {
+		t.Fatalf("collection reclaimed %d objects, want exactly 1 (the barbar blob)", before-after)
+	}
+	if objectExists(t, barbarSha) {
+		t.Fatalf("the unreferenced barbar blob survived collection")
+	}
+	if !objectExists(t, sha256Hex("foo")) {
+		t.Fatalf("the input's shared foo blob was collected")
 	}
 	// the input data survives
 	if b, err := c.GetFile(cm.ID, "foo"); err != nil || string(b) != "foo" {
@@ -204,6 +220,19 @@ func TestSB079_GarbageCollection(t *testing.T) {
 
 // objectCount counts the daemon's stored durable artifacts (the blobs
 // under .objects). The conformance harness knows the state directory.
+// sha256Hex is the blob name of a content's sha256 digest.
+func sha256Hex(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+// objectExists reports whether the object store holds the blob.
+func objectExists(t *testing.T, sha string) bool {
+	t.Helper()
+	_, err := os.Stat(filepath.Join(daemonStateDir, "repos", ".objects", sha[:2], sha[2:]))
+	return err == nil
+}
+
 func objectCount(t *testing.T) int {
 	t.Helper()
 	n := 0

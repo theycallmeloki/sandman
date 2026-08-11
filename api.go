@@ -962,6 +962,22 @@ func (d *daemon) listFilesH(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// a prefix-glob filter on the listing (SB-047 clause 4): "1*" lists
+	// the paths beginning with "1". Any other pattern returns an error.
+	if glob := r.URL.Query().Get("glob"); glob != "" {
+		prefix, star, ok := strings.Cut(glob, "*")
+		if !ok || strings.Contains(star, "*") {
+			return fmt.Errorf("unsupported listing glob %q (prefix patterns only)", glob)
+		}
+		var out []client.FileInfo
+		for _, f := range files {
+			if strings.HasPrefix(f.Path, prefix) {
+				out = append(out, f)
+			}
+		}
+		writeJSON(w, out)
+		return nil
+	}
 	writeJSON(w, files)
 	return nil
 }

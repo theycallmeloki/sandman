@@ -387,6 +387,14 @@ func (c *Client) ListFiles(commitID string) ([]FileInfo, error) {
 	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(commitID)+"/files", nil, &out)
 }
 
+// ListFilesGlob lists a commit's files whose paths start with the given
+// prefix ("1*" lists the paths beginning with "1"; SB-047 clause 4). The
+// server applies the filter; only prefix patterns are supported.
+func (c *Client) ListFilesGlob(commitID, glob string) ([]FileInfo, error) {
+	var out []FileInfo
+	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(commitID)+"/files?glob="+url.QueryEscape(glob), nil, &out)
+}
+
 // ListFileHistory lists the revisions of a path across the commit's
 // ancestry: one FileInfo per ancestor revision where the path resolves,
 // newest first (SB-145). A negative limit returns every revision.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"sandman/client"
 )
@@ -55,6 +56,37 @@ func TestSB029_PipelineJobCounts(t *testing.T) {
 		if info.JobCounts[st] != 0 {
 			t.Fatalf("jobCounts[%s] = %d, want 0", st, info.JobCounts[st])
 		}
+	}
+
+	// the reference's InspectJob(BlockState): WaitJob blocks on the
+	// server's state broadcast until the job settles — a running job's
+	// wait returns its terminal state and genuinely blocks for the
+	// remaining run time (D-23 R-5's long-poll wait)
+	repo2 := uniq(t)
+	mustRepo(t, repo2)
+	slow := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name: slow,
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "sleep 3; cp ${" + repo2 + "}/f ${OUT}/f"},
+		},
+		Input: &client.Input{Repo: repo2, Glob: "/*"},
+	})
+	_ = commitFiles(t, repo2, "master", map[string]string{"f": "x"})
+	waitJobFor(t, slow, 30*time.Second)
+	j := latestJob(t, slow)
+	start := time.Now()
+	settled, err := c.WaitJob(j.ID, 60*time.Second)
+	if err != nil {
+		t.Fatalf("wait job: %v", err)
+	}
+	elapsed := time.Since(start)
+	if settled.State != "success" {
+		t.Fatalf("waited job state = %s (reason %q), want success", settled.State, settled.Reason)
+	}
+	if elapsed < 2*time.Second {
+		t.Fatalf("WaitJob returned after %v; it did not block for the run", elapsed)
 	}
 }
 
@@ -122,14 +154,12 @@ func TestSB047_TwentyThousandOutputFiles(t *testing.T) {
 		t.Fatalf("output has %d files, want 20000", len(files))
 	}
 	count := func(glob string) int {
-		prefix := strings.TrimSuffix(glob, "*")
-		n := 0
-		for _, f := range files {
-			if strings.HasPrefix(f.Path, prefix) {
-				n++
-			}
+		// the server applies the prefix-glob filter (SB-047 clause 4)
+		got, err := c.ListFilesGlob(out, glob)
+		if err != nil {
+			t.Fatalf("list %q: %v", glob, err)
 		}
-		return n
+		return len(got)
 	}
 	if got := count("1*"); got != 11111 {
 		t.Fatalf("prefix 1*: %d files, want 11111", got)
