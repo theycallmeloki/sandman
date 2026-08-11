@@ -109,6 +109,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/hosts/{name}", hErr(d.deleteHostH))
 	mux.HandleFunc("GET /api/v1/metrics", hErr(d.metricsH))
 	mux.HandleFunc("POST /api/v1/gc", hErr(d.collectGarbageH))
+	mux.HandleFunc("POST /api/v1/check", hErr(d.checkH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
 	mux.HandleFunc("GET /api/v1/pipelines", hErr(d.listPipelinesH))
 	mux.HandleFunc("GET /api/v1/pipelines/{name}", hErr(d.inspectPipelineH))
@@ -445,6 +446,18 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 }
 
 // ---- garbage collection (SB-079, D-20) ----
+
+// checkH is the consistency check (SB-139 clause 14): every piece of
+// control-plane metadata parses; a corrupted record is reported as an
+// error, an intact system reports ok. A system-wide reset (POST
+// /api/v1/reset) runs the same check first (D-08).
+func (d *daemon) checkH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.checkMetadata(); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
 
 // collectGarbageH is the manual collection trigger (D-20: automatic
 // collection defaults off).

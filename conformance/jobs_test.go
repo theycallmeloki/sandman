@@ -149,6 +149,11 @@ func TestSB135_InspectJobByJobOrOutputCommit(t *testing.T) {
 	orphan := commitFiles(t, lonely, "master", map[string]string{"x": "y"})
 	_, err = c.InspectJob(orphan.ID)
 	wantErr(t, err, "not found")
+
+	// clause 1: no identifier at all is rejected with an error stating
+	// that one of the two must be specified
+	_, err = c.InspectJob("")
+	wantErr(t, err, "specify a Job or an OutputCommit")
 }
 
 // SB-057 — deleting a running job still finalizes its output revision.

@@ -193,6 +193,19 @@ func TestSB150_TagsListAndRetrieve(t *testing.T) {
 	if string(got) != "Object 0" {
 		t.Fatalf("tag0 = %q, want %q", got, "Object 0")
 	}
+
+	// clause 3: tags survive garbage collection — a tag holds a
+	// reference to its blob, so a GC cycle must not collect it
+	if err := c.CollectGarbage(); err != nil {
+		t.Fatalf("collect garbage: %v", err)
+	}
+	after, err := c.GetTag("tag0")
+	if err != nil {
+		t.Fatalf("get tag0 after GC: %v", err)
+	}
+	if string(after) != "Object 0" {
+		t.Fatalf("tag0 after GC = %q, want %q", after, "Object 0")
+	}
 }
 
 // SB-155 — every data-plane API endpoint validates its request and never

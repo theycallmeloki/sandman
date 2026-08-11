@@ -556,3 +556,54 @@ func TestSB114_ListDatumDuringJob(t *testing.T) {
 		t.Fatalf("unexpected job id %q", job.ID)
 	}
 }
+
+// TestSB041_StatsSurviveUpdate — the stats+update variant (SB-041): a
+// stats-enabled pipeline's flush reports the output and stats commits,
+// and after an update the pipeline is not blocked by a stats commit a
+// previous version left unfinished — a new commit's flush still reports
+// both commits, and the job is not held by the stats step.
+func TestSB041_StatsSurviveUpdate(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "x"})
+	pipe := uniq(t)
+	tr := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 1; cp ${" + repo + "}/file ${OUT}/file"}}
+	in := &client.Input{Repo: repo, Glob: "/*"}
+	mustPipeline(t, client.Pipeline{Name: pipe, Transform: tr, Input: in, EnableStats: true})
+
+	// a stats-enabled flush settles two branches: output + stats
+	flushOK(t, cm1.ID)
+	out1, err := c.CommitHistory(pipe, "master")
+	if err != nil || len(out1) != 1 {
+		t.Fatalf("output branch = %d commits (err %v), want 1", len(out1), err)
+	}
+	stats1, err := c.CommitHistory(pipe, "stats")
+	if err != nil || len(stats1) != 1 {
+		t.Fatalf("stats branch = %d commits (err %v), want 1", len(stats1), err)
+	}
+
+	// update the pipeline mid-history, then process a new commit: the
+	// flush still reports both branches and does not stall on a stats
+	// commit left unfinished by the previous version (SB-041 clause 3);
+	// statistics are one-way, so the update must re-declare them
+	if err := c.CreatePipeline(client.Pipeline{
+		Name: pipe, Transform: tr, Input: in, Update: true, EnableStats: true,
+	}); err != nil {
+		t.Fatalf("update pipeline: %v", err)
+	}
+	cm3 := commitFiles(t, repo, "master", map[string]string{"file": "z"})
+	jobs := flushOK(t, cm3.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("post-update flush: %d jobs, want 1", len(jobs))
+	}
+	out2, err := c.CommitHistory(pipe, "master")
+	if err != nil || len(out2) != 3 {
+		// the update itself reprocessed the head (SB-042), then cm3:
+		// three output commits total
+		t.Fatalf("output branch after update = %d commits (err %v), want 3", len(out2), err)
+	}
+	stats2, err := c.CommitHistory(pipe, "stats")
+	if err != nil || len(stats2) != 3 {
+		t.Fatalf("stats branch after update = %d commits (err %v), want 3", len(stats2), err)
+	}
+}

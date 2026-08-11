@@ -999,6 +999,12 @@ func (c *Client) ListJobsFiltered(f JobFilter) ([]Job, error) {
 
 func (c *Client) InspectJob(id string) (Job, error) {
 	var out Job
+	// clause 1 (SB-135): inspecting with neither a job nor an output
+	// commit identifier is rejected stating that one of the two must be
+	// specified
+	if id == "" {
+		return out, fmt.Errorf("must specify a Job or an OutputCommit")
+	}
 	return out, c.do("GET", "/api/v1/jobs/"+url.PathEscape(id), nil, &out)
 }
 
@@ -1034,6 +1040,12 @@ func (c *Client) FetchMetrics() (string, error) {
 // commit, tag, or spec record (SB-079). It fails while a job is running.
 func (c *Client) CollectGarbage() error {
 	return c.do("POST", "/api/v1/gc", nil, nil)
+}
+
+// Check runs the control plane's consistency check (SB-139 clause 14): an
+// error reports corrupted metadata, nil reports an intact system.
+func (c *Client) Check() error {
+	return c.do("POST", "/api/v1/check", nil, nil)
 }
 
 // Flush waits until every job triggered by the commit — including jobs of

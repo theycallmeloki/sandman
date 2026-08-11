@@ -299,6 +299,17 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		if j.State != "success" {
 			t.Fatalf("spout job state = %s (reason %q), want success", j.State, j.Reason)
 		}
+		// clause 14: after sustained spout activity, a full consistency
+		// check reports no errors and a system-wide reset completes
+		if err := c.Check(); err != nil {
+			t.Fatalf("consistency check: %v", err)
+		}
+		if err := c.Reset(); err != nil {
+			t.Fatalf("reset: %v", err)
+		}
+		if err := c.Check(); err != nil {
+			t.Fatalf("consistency check after reset: %v", err)
+		}
 	})
 
 	t.Run("overwrite keeps size constant", func(t *testing.T) {
