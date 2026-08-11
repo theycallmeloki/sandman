@@ -248,6 +248,17 @@ revisions, and jobs that run them.
   `--memory-reservation`, CPU `--cpus` (a CPU request maps to the
   allocation; a disk request is recorded but not enforceable on docker's
   default driver). No declared resources → none injected (SB-067–070)
+- **Spouts** — a pipeline with no input whose transform runs in the
+  background, committing each data-bearing cycle to its own output branch
+  from the pipe mounts (accumulating or replacing per the overwrite
+  option) and its marker directory to a separate markers branch
+  (SB-139). Every spout commit records its pipeline's specification
+  commit as provenance, so updates start observable provenance epochs and
+  a spec commit's subvenants are its spout output plus the downstream
+  output; the marker directory is per-pipeline, so a plain update
+  continues the marker while a reprocess update resets it (SB-140 — the
+  client-tool write path was evaluated and rejected; see the behavior
+  note)
 - **Placement** — a pipeline may require a placement label; its jobs run
   on an execution host that registered that label with the control plane.
   A host joins with configuration set at host setup time (`sandman worker

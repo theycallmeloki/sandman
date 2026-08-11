@@ -42,9 +42,16 @@ func validateSpout(p client.Pipeline) error {
 	return nil
 }
 
-// spawnSpoutJob starts a spout's background job.
-func (d *daemon) spawnSpoutJob(rec *pipelineRec) string {
+// spawnSpoutJob starts a spout's background job. fresh marks a restart
+// after a reprocess update: the marker state is reset (SB-139 clause 10,
+// SB-140 clause 4).
+func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 	id := newJobID(d.name)
+	if fresh {
+		if dir := d.spoutMarkerDir(rec.Pipeline.Name); dir != "" {
+			os.RemoveAll(dir)
+		}
+	}
 	go d.runSpoutJob(*rec, id)
 	return id
 }
@@ -84,9 +91,8 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 
 	env := []string{"OUT=/sandman/out", "JOB_ID=" + id}
 	mounts := []string{"-v", outDir + ":/sandman/out"}
-	markerDir := ""
+	markerDir := d.spoutMarkerDir(pl.Pipeline.Name)
 	if pl.Pipeline.Spout.Marker != "" {
-		markerDir = filepath.Join(dir, "marker")
 		os.MkdirAll(markerDir, 0o755)
 		env = append(env, "MARKER=/sandman/marker")
 		mounts = append(mounts, "-v", markerDir+":/sandman/marker")
@@ -132,12 +138,12 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 			break
 		}
 		if changed := spoutDiff(outDir, committedOut); len(changed) > 0 {
-			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj)
+			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
 			committedOut = spoutSnapshot(outDir)
 		}
 		if markerDir != "" {
 			if changed := spoutDiff(markerDir, committedMarker); len(changed) > 0 {
-				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj)
+				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
 				committedMarker = spoutSnapshot(markerDir)
 			}
 		}
@@ -146,9 +152,18 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	exec.Command("docker", "rm", "-f", cname).Run()
 }
 
+// spoutMarkerDir is the spout's per-pipeline marker directory: it lives
+// across spout restarts, so a plain update preserves the marker file
+// (SB-139 clause 10) — a reprocess update clears it via spawnSpoutJob.
+func (d *daemon) spoutMarkerDir(pipeline string) string {
+	return filepath.Join(d.state, "spout", pipeline, "marker")
+}
+
 // spoutCommit commits a data-bearing cycle: the changed files with their
-// current content, one finished commit that triggers the consumers.
-func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo string, rj *runningJob) {
+// current content, one finished commit that triggers the consumers. The
+// commit records the pipeline's specification commit as its provenance —
+// the epoch anchor (SB-139 clause 7, SB-140 clause 3).
+func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo string, rj *runningJob, specCommit string) {
 	if rj.cancelled.Load() {
 		return
 	}
@@ -162,6 +177,12 @@ func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo
 		}
 	}
 	if fin, err := d.store.finishCommit(cm.ID, "", false); err == nil {
+		if specCommit != "" {
+			if rec, err := d.store.loadCommitByID(fin.ID); err == nil {
+				rec.Provenance = []string{specCommit}
+				d.store.saveCommit(rec)
+			}
+		}
 		d.triggerForCommit(fin)
 	}
 }

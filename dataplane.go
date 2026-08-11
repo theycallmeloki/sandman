@@ -62,6 +62,12 @@ type commitRec struct {
 	Finished  bool        `json:"finished"`
 	Empty     bool        `json:"empty"`
 	Files     []fileEntry `json:"files,omitempty"`
+	// Provenance is the revision's derivation: the source commits it
+	// consumes, transitively. A spout commit records its pipeline's
+	// specification commit (the epoch it belongs to, SB-140); a job's
+	// output commit records its input commits and their own provenance.
+	// Inspect exposes it so epochs and subvenance are observable.
+	Provenance []string `json:"provenance,omitempty"`
 	// Deleted are tombstoned paths: files removed from the branch at this
 	// revision (SB-007). A deletion wins over every ancestor's file; a
 	// later re-add wins over the tombstone.
@@ -696,6 +702,7 @@ func (rec *commitRec) commit() client.Commit {
 		Finished:    rec.Finished,
 		Empty:       rec.Empty,
 		ParentID:    rec.ParentID,
+		Provenance:  rec.Provenance,
 	}
 }
 

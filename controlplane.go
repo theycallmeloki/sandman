@@ -41,6 +41,12 @@ type pipelineRec struct {
 	Stopped   bool            `json:"stopped,omitempty"`
 	StoppedAt string          `json:"stoppedAt,omitempty"`
 	Version   int             `json:"version"`
+	// SpecCommit is the pipeline's current specification commit (the
+	// "spec" repository, SB-164): the provenance anchor for the pipeline's
+	// spout commits. An update writes a new spec commit, so spout commits
+	// before and after the update carry distinct provenance epochs
+	// (SB-139 clause 7, SB-140 clause 3).
+	SpecCommit string `json:"specCommit,omitempty"`
 }
 
 var shIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -301,7 +307,7 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	if p.Spout != nil {
 		// a spout's job is its own: a background run committing each
 		// data-bearing cycle (SB-139)
-		d.spawnSpoutJob(rec)
+		d.spawnSpoutJob(rec, false)
 		return nil
 	}
 	d.scheduleHeadJob(rec)
@@ -343,7 +349,7 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	// The spec commit is durable before the pipeline is considered created
 	// (SB-164): a failed create leaves no spec commit behind because the
 	// validation above ran first.
-	d.writeSpecCommit(p.Name, p, 1)
+	rec.SpecCommit = d.writeSpecCommit(p.Name, p, 1)
 	d.archiveVersion(&rec)
 	if err := d.savePipeline(&rec); err != nil {
 		return nil, err
@@ -560,8 +566,8 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 	}
 	if p.Spout != nil {
 		// the update killed the old spout job; the new epoch starts fresh
-		// (SB-139 clause 7/10)
-		d.spawnSpoutJob(rec)
+		// (SB-139 clause 7/10); a reprocess update resets the marker state
+		d.spawnSpoutJob(rec, p.Reprocess)
 		return nil
 	}
 	d.scheduleHeadJob(rec)
@@ -612,7 +618,7 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 	} else if existing.Stopped {
 		rec.State = "paused" // an update must not restart a paused pipeline (SB-044)
 	}
-	d.writeSpecCommit(name, p, v)
+	rec.SpecCommit = d.writeSpecCommit(name, p, v)
 	d.archiveVersion(&rec)
 	if err := d.savePipeline(&rec); err != nil {
 		return nil, err
@@ -622,20 +628,24 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 
 // writeSpecCommit records one pipeline definition as a commit in the spec
 // repository (SB-127, SB-164): one commit per definition, written only
-// after validation passed.
-func (d *daemon) writeSpecCommit(name string, spec client.Pipeline, version int) {
+// after validation passed. It returns the commit id — the pipeline's
+// provenance anchor for spout epochs (SB-139 clause 7).
+func (d *daemon) writeSpecCommit(name string, spec client.Pipeline, version int) string {
 	b, err := json.Marshal(spec)
 	if err != nil {
-		return
+		return ""
 	}
 	cm, err := d.store.startCommit("spec", defaultBranch, fmt.Sprintf("pipeline %s v%d", name, version))
 	if err != nil {
-		return
+		return ""
 	}
 	if err := d.store.putFile(cm.ID, "spec.json", b); err != nil {
-		return
+		return ""
 	}
-	d.store.finishCommit(cm.ID, "", false)
+	if _, err := d.store.finishCommit(cm.ID, "", false); err != nil {
+		return ""
+	}
+	return cm.ID
 }
 
 func (d *daemon) versionPath(name string, version int) string {
@@ -1678,8 +1688,45 @@ func (d *daemon) finishOutput(pl pipelineRec, outCommit client.Commit, outDir st
 	return d.store.finishCommit(outCommit.ID, "", empty)
 }
 
-// isProvisioningError reports whether a failed docker run never started the
-// container — an environment problem, not a user-code failure.
+// recordProvenance stamps a finished output commit with its derivation:
+// its input commits and their own provenance, transitively. The recorded
+// provenance makes spout epochs and spec-commit subvenance observable
+// (SB-139 clause 7, SB-140 clauses 1/3): a downstream commit's recorded
+// provenance includes its upstream spout commit AND that spout's
+// specification commit, so the spec commit's subvenants are exactly the
+// spout output and the downstream output.
+func (d *daemon) recordProvenance(commitID string, inputs []string) {
+	if commitID == "" {
+		return
+	}
+	seen := map[string]bool{}
+	var prov []string
+	var expand func(id string)
+	expand = func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		prov = append(prov, id)
+		if cm, err := d.store.loadCommitByID(id); err == nil {
+			for _, p := range cm.Provenance {
+				expand(p)
+			}
+		}
+	}
+	for _, in := range inputs {
+		expand(in)
+	}
+	if len(prov) == 0 {
+		return
+	}
+	if cm, err := d.store.loadCommitByID(commitID); err == nil {
+		cm.Provenance = prov
+		d.store.saveCommit(cm)
+	}
+}
+
+// isProvisioningError reports whether a failed docker run never started the// container — an environment problem, not a user-code failure.
 func isProvisioningError(tail string) bool {
 	for _, marker := range []string{
 		"invalid reference format",
@@ -2149,6 +2196,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			rec.OutputCommit = oc.ID
 			d.saveJob(rec)
 			d.finishOutput(pl, oc, "", true)
+			d.recordProvenance(oc.ID, rec.InputCommits)
 		}
 		return
 	}
@@ -2427,6 +2475,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		// so the downstream trigger observes the failure (SB-022)
 		d.saveJob(rec)
 		d.finishOutput(pl, outCommit, "", true)
+		d.recordProvenance(outCommit.ID, rec.InputCommits)
 		if !killed && !rec.Manual {
 			// a failed output is still a revision: every downstream stage
 			// is triggered and fails in turn (SB-022). A killed job's empty
@@ -2477,6 +2526,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		fail("upload output: " + err.Error())
 		return
 	}
+	d.recordProvenance(fin.ID, rec.InputCommits)
 	// statistics-enabled pipelines also produce a per-job statistics
 	// commit on the output repo's "stats" branch, consumable downstream
 	// (SB-086, SB-113's two-commit count)

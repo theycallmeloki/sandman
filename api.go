@@ -296,6 +296,23 @@ func (d *daemon) inspectCommitH(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// Subvenants are the commits that derive from this one: every commit
+	// whose recorded provenance includes it (SB-140 — a spec commit's
+	// subvenants are its pipeline's spout output and the downstream
+	// output; an epoch's commits all derive from their spec commit). The
+	// scan is unconditional: the inspected commit needs no provenance of
+	// its own to be derived from.
+	for _, c := range d.allCommitRecs() {
+		if c.ID == cm.ID {
+			continue
+		}
+		for _, p := range c.Provenance {
+			if p == cm.ID {
+				cm.Subvenants = append(cm.Subvenants, c.ID)
+				break
+			}
+		}
+	}
 	writeJSON(w, cm)
 	return nil
 }

@@ -121,6 +121,9 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	if c.token != "" {
+		req.Header.Set("X-Sandbox-Token", c.token)
+	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, err
@@ -216,6 +219,13 @@ type Commit struct {
 	Finished  bool   `json:"finished"`
 	Empty     bool   `json:"empty,omitempty"`
 	ParentID  string `json:"parentId,omitempty"`
+	// Provenance is the revision's derivation: the source commits it
+	// consumes, transitively (a spout commit records its pipeline's
+	// specification commit — its provenance epoch; a job's output records
+	// its inputs and their provenance). Subvenants are the commits that
+	// derive from this one, recorded only by InspectCommit.
+	Provenance []string `json:"provenance,omitempty"`
+	Subvenants []string `json:"subvenants,omitempty"`
 }
 
 func (c *Client) StartCommit(repo, branch, description string) (Commit, error) {
