@@ -517,27 +517,27 @@ func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 			return d.spawnJob(rec, heads, "", "", nil)
 		}
 	}
-	// a union whose branches have no direct heads may still consume repos
-	// through its cross or nested-union branches (SB-078 clauses 2/3)
-	if len(rec.Pipeline.Input.Union) > 0 {
-		var any func(in *client.Input) bool
-		any = func(in *client.Input) bool {
-			for _, s := range inputSides(in) {
-				if s.Repo != "" {
-					if _, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil {
-						return true
-					}
-				} else if len(s.Cross) > 0 || len(s.Union) > 0 {
-					if any(&s) {
-						return true
-					}
+	// a nested union/cross may still consume repos whose heads exist even
+	// when no side has a direct head (SB-078 clauses 2/3/5/6: union of
+	// crosses, cross of unions): schedule the head job; the resolve loop
+	// picks up each nested branch's head
+	var nestedAny func(in *client.Input) bool
+	nestedAny = func(in *client.Input) bool {
+		for _, s := range inputSides(in) {
+			if s.Repo != "" {
+				if _, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil {
+					return true
+				}
+			} else if len(s.Cross) > 0 || len(s.Union) > 0 {
+				if nestedAny(&s) {
+					return true
 				}
 			}
-			return false
 		}
-		if any(rec.Pipeline.Input) {
-			return d.spawnJob(rec, heads, "", "", nil)
-		}
+		return false
+	}
+	if nestedAny(rec.Pipeline.Input) {
+		return d.spawnJob(rec, heads, "", "", nil)
 	}
 	return ""
 }

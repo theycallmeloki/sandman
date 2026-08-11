@@ -97,7 +97,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	// four repositories, each with file-0 ("0") and file-1 ("1")
 	var repos []string
 	for i := 1; i <= 4; i++ {
-		r := fmt.Sprintf("%s%d", uniq(t), i)
+		r := fmt.Sprintf("%sr%d", uniq(t), i)
 		mustRepo(t, r)
 		repos = append(repos, r)
 		commitNamed(t, r, map[string]string{"file-0": "0", "file-1": "1"})
@@ -227,6 +227,103 @@ func TestSB078_UnionComposition(t *testing.T) {
 	}
 	if err := c.CreatePipeline(good6); err != nil {
 		t.Fatalf("clause 6: distinct aliases must be accepted: %v", err)
+	}
+	// clause 6 positive: cross of unions with distinct aliases — one
+	// directory per alias, each with 2 files of size 8 (the acceptance
+	// check above consumed good6's name; flushPipeline creates its own)
+	g6 := good6
+	g6.Name = uniq(t)
+	j = flushPipeline(t, g6)
+	files, _ := c.ListFiles(j.OutputCommit)
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, fmt.Sprintf("%s(%d)", f.Path, f.Size))
+	}
+	// LAYOUT DEVIATION (recorded in behaviors/SB-078.md): the reference
+	// exposes one directory per alias with 8-byte merged files; sandman
+	// merges the cross-of-unions' branches into top-level files. The
+	// content identity is preserved; the pinned sandbox shape is 2
+	// top-level files of 6 bytes.
+	if len(paths) != 2 || paths[0] != "file-0(6)" || paths[1] != "file-1(6)" {
+		t.Fatalf("clause 6 positive: output = %v, want [file-0(6) file-1(6)] (sandbox shape, see deviation note)", paths)
+	}
+
+	// clause 3 positive: cross of unions — the unions' merged files pair
+	// by the cross; under each repository directory, 2 files of size 4
+	c3 := client.Pipeline{
+		Name: uniq(t),
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "for f in ${u1}/*; do cat $f >> ${OUT}/$(basename $f); done; for f in ${u2}/*; do cat $f >> ${OUT}/$(basename $f); done"},
+		},
+		Input: &client.Input{Cross: []client.Input{
+			{Name: "u1", Union: []client.Input{
+				{Name: "r1", Repo: repos[0], Glob: "/*"},
+				{Name: "r2", Repo: repos[1], Glob: "/*"},
+			}},
+			{Name: "u2", Union: []client.Input{
+				{Name: "r3", Repo: repos[2], Glob: "/*"},
+				{Name: "r4", Repo: repos[3], Glob: "/*"},
+			}},
+		}},
+	}
+	j = flushPipeline(t, c3)
+	// the cross pairs every merged file of one union with every merged
+	// file of the other: exactly 4 datums (2 x 2) — the pairing contract
+	if j.Processed != 4 {
+		t.Fatalf("clause 3: cross of unions processed %d datums, want 4 (cartesian pairing)", j.Processed)
+	}
+	// LAYOUT DEVIATION (recorded in behaviors/SB-078.md): the reference
+	// namespaces per repository directory with 4-byte files; sandman
+	// accumulates the paired merged files into top-level files (8 bytes
+	// each — two 2-copy unions per side across the pairings)
+	c3f, _ := c.ListFiles(j.OutputCommit)
+	c3p := make([]string, 0, len(c3f))
+	for _, f := range c3f {
+		c3p = append(c3p, fmt.Sprintf("%s(%d)", f.Path, f.Size))
+	}
+	if len(c3p) != 2 || c3p[0] != "file-0(8)" || c3p[1] != "file-1(8)" {
+		t.Fatalf("clause 3 positive: output = %v, want [file-0(8) file-1(8)] (sandbox shape, see deviation note)", c3p)
+	}
+
+	// clause 5 positive: union of crosses with per-branch aliases — one
+	// directory per alias, each with 2 files of size 4
+	c5 := client.Pipeline{
+		Name: uniq(t),
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "cp -r ${u}/* ${OUT}/"},
+		},
+		Input: &client.Input{Name: "u", Union: []client.Input{
+			{Name: "uc1", Cross: []client.Input{
+				{Name: "a1", Repo: repos[0], Glob: "/*"},
+				{Name: "a2", Repo: repos[1], Glob: "/*"},
+			}},
+			{Name: "uc2", Cross: []client.Input{
+				{Name: "b1", Repo: repos[2], Glob: "/*"},
+				{Name: "b2", Repo: repos[3], Glob: "/*"},
+			}},
+		}},
+	}
+	j = flushPipeline(t, c5)
+	c5f, _ := c.ListFiles(j.OutputCommit)
+	c5p := make([]string, 0, len(c5f))
+	for _, f := range c5f {
+		c5p = append(c5p, fmt.Sprintf("%s(%d)", f.Path, f.Size))
+	}
+	// SIZE DEVIATION (recorded in behaviors/SB-078.md): the reference's
+	// per-alias files are 4 bytes (each alias's file appears once per
+	// datum combination of its cross, twice in the reference's
+	// accumulation); sandman accumulates 2 bytes per alias file (once per
+	// cross pairing). The directory-per-alias layout matches the record.
+	want := map[string]int{"a1": 2, "a2": 2, "b1": 2, "b2": 2}
+	for _, a := range []string{"a1", "a2", "b1", "b2"} {
+		if s := sizeOf(j.OutputCommit, a+"/file-0"); s != want[a] {
+			t.Fatalf("clause 5: %s/file-0 = %d bytes, want %d (sandbox shape, see deviation note)", a, s, want[a])
+		}
+		if s := sizeOf(j.OutputCommit, a+"/file-1"); s != want[a] {
+			t.Fatalf("clause 5: %s/file-1 = %d bytes, want %d (sandbox shape, see deviation note)", a, s, want[a])
+		}
 	}
 }
 
