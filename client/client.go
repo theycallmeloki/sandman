@@ -1398,6 +1398,31 @@ func (c *Client) FinishTransaction(tx string) error {
 	return c.do("POST", "/api/v1/transactions/"+url.PathEscape(tx)+"/finish", nil, nil)
 }
 
+// TxOpView summarizes one staged transaction operation.
+type TxOpView struct {
+	Kind     string `json:"kind"` // create | update
+	Pipeline string `json:"pipeline"`
+}
+
+// Transaction is a transaction's id with its staged operations (open by
+// construction: a finished transaction is removed).
+type Transaction struct {
+	ID  string     `json:"id"`
+	Ops []TxOpView `json:"ops,omitempty"`
+}
+
+// ListTransactions returns every open transaction.
+func (c *Client) ListTransactions() ([]Transaction, error) {
+	var out []Transaction
+	return out, c.do("GET", "/api/v1/transactions", nil, &out)
+}
+
+// InspectTransaction returns one transaction with its staged operations.
+func (c *Client) InspectTransaction(tx string) (Transaction, error) {
+	var out Transaction
+	return out, c.do("GET", "/api/v1/transactions/"+url.PathEscape(tx), nil, &out)
+}
+
 // DeleteTransaction aborts an open transaction, discarding its staged ops.
 func (c *Client) DeleteTransaction(tx string) error {
 	return c.do("DELETE", "/api/v1/transactions/"+url.PathEscape(tx), nil, nil)

@@ -460,3 +460,54 @@ func (d *daemon) deleteTransactionH(w http.ResponseWriter, r *http.Request) erro
 	writeJSON(w, map[string]string{"id": id, "status": "deleted"})
 	return nil
 }
+
+// listTransactionsH lists every open transaction with its staged
+// operation count (a finished transaction is removed, so what remains is
+// open by construction).
+func (d *daemon) listTransactionsH(w http.ResponseWriter, r *http.Request) error {
+	entries, err := os.ReadDir(filepath.Join(d.state, "transactions"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, []client.Transaction{})
+			return nil
+		}
+		return err
+	}
+	var out []client.Transaction
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		ops, err := d.loadTxOps(e.Name())
+		if err != nil {
+			continue
+		}
+		out = append(out, client.Transaction{ID: e.Name(), Ops: txOpViews(ops)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	writeJSON(w, out)
+	return nil
+}
+
+// inspectTransactionH returns one transaction with its staged operations.
+func (d *daemon) inspectTransactionH(w http.ResponseWriter, r *http.Request) error {
+	id := r.PathValue("id")
+	if err := d.txExists(id); err != nil {
+		return err
+	}
+	ops, err := d.loadTxOps(id)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, client.Transaction{ID: id, Ops: txOpViews(ops)})
+	return nil
+}
+
+// txOpViews summarizes staged operations for the transaction surface.
+func txOpViews(ops []txOp) []client.TxOpView {
+	out := make([]client.TxOpView, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, client.TxOpView{Kind: op.Kind, Pipeline: op.Spec.Name})
+	}
+	return out
+}

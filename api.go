@@ -145,6 +145,8 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", hErr(d.cancelJobH))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", hErr(d.deleteJobH))
 	mux.HandleFunc("POST /api/v1/transactions", hErr(d.startTransactionH))
+	mux.HandleFunc("GET /api/v1/transactions", hErr(d.listTransactionsH))
+	mux.HandleFunc("GET /api/v1/transactions/{id}", hErr(d.inspectTransactionH))
 	mux.HandleFunc("POST /api/v1/transactions/{id}/finish", hErr(d.finishTransactionH))
 	mux.HandleFunc("DELETE /api/v1/transactions/{id}", hErr(d.deleteTransactionH))
 	mux.HandleFunc("POST /api/v1/datums", hErr(d.enumerateDatumsH))

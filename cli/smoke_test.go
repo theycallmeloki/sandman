@@ -332,6 +332,35 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("pipeline list %q after delete: cap2 still present", pl)
 	}
 
+	// 6b. transaction resume stages subsequent creates into the active tx
+	// (XDG_CONFIG_HOME isolates the active-tx marker)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tid := strings.TrimSpace(mustCLI(t, "", "transaction", "start"))
+	mustCLI(t, "", "transaction", "resume", tid)
+	spec4 := filepath.Join(t.TempDir(), "spec4.json")
+	if err := os.WriteFile(spec4, []byte(`{
+	  "name": "cap3",
+	  "transform": {"image": "alpine"},
+	  "input": {"repo": "r2", "glob": "/*"}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCLI(t, "", "pipeline", "create", "-f", spec4)
+	ti := mustCLI(t, "", "transaction", "inspect", tid)
+	if !strings.Contains(ti, "create cap3") {
+		t.Fatalf("transaction inspect %q: want the staged create cap3", ti)
+	}
+	tl := mustCLI(t, "", "transaction", "list")
+	if !strings.Contains(tl, tid) {
+		t.Fatalf("transaction list %q: missing %s", tl, tid)
+	}
+	mustCLI(t, "", "transaction", "finish", tid)
+	pl2 := mustCLI(t, "", "pipeline", "list")
+	if !strings.Contains(pl2, "cap3") {
+		t.Fatalf("pipeline list %q after finish: cap3 missing", pl2)
+	}
+	mustCLI(t, "", "transaction", "stop")
+
 	// 7. repo delete removes it from the listing
 	mustCLI(t, "", "repo", "delete", "r2")
 	rl := mustCLI(t, "", "repo", "list")

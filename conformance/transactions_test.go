@@ -215,3 +215,102 @@ func TestSB164_TxAbortLeavesNoSpecCommits(t *testing.T) {
 		t.Fatalf("spec commits after abort = %d, want %d (unchanged)", specAfter, specBefore)
 	}
 }
+
+// TestTxInspectList — the transaction inspect/list surface (CLI_SURFACE
+// row closure): open transactions are enumerable and inspectable with
+// their staged operations; a finished or deleted transaction disappears
+// from the list and inspects as an error.
+func TestTxInspectList(t *testing.T) {
+	// fresh slate: the harness may carry a transaction from an aborted
+	// earlier test (each leaves none, but be safe)
+	tx0, err := c.ListTransactions()
+	if err != nil {
+		t.Fatalf("list transactions: %v", err)
+	}
+	repo := uniq(t) + "r"
+	mustRepo(t, repo)
+
+	tx, err := c.StartTransaction()
+	if err != nil {
+		t.Fatalf("start transaction: %v", err)
+	}
+	pa := uniq(t) + "a"
+	if err := c.CreatePipelineTx(client.Pipeline{Name: pa, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}}, tx); err != nil {
+		t.Fatalf("stage create: %v", err)
+	}
+	pb := uniq(t) + "b"
+	up := client.Pipeline{Name: pb, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}}
+	if err := c.CreatePipelineTx(up, tx); err != nil {
+		t.Fatalf("stage create b: %v", err)
+	}
+	if err := c.CreatePipelineTx(client.Pipeline{Name: pb, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}, Update: true}, tx); err != nil {
+		t.Fatalf("stage update b: %v", err)
+	}
+
+	// inspect shows the staged operations in order
+	ti, err := c.InspectTransaction(tx)
+	if err != nil {
+		t.Fatalf("inspect transaction: %v", err)
+	}
+	if ti.ID != tx {
+		t.Fatalf("inspect id = %s, want %s", ti.ID, tx)
+	}
+	if len(ti.Ops) != 3 || ti.Ops[0].Kind != "create" || ti.Ops[0].Pipeline != pa ||
+		ti.Ops[1].Kind != "create" || ti.Ops[1].Pipeline != pb || ti.Ops[2].Kind != "update" {
+		t.Fatalf("ops = %+v, want create %s, create %s, update %s", ti.Ops, pa, pb, pb)
+	}
+
+	// the list carries the transaction with its op count
+	tl, err := c.ListTransactions()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	found := false
+	for _, txn := range tl {
+		if txn.ID == tx {
+			found = true
+			if len(txn.Ops) != 3 {
+				t.Fatalf("listed tx op count = %d, want 3", len(txn.Ops))
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("transaction %s not listed (list = %+v)", tx, tl)
+	}
+
+	// finish: the transaction is gone from the list and inspects as an
+	// error; the staged pipelines took effect
+	if err := c.FinishTransaction(tx); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if _, err := c.InspectTransaction(tx); err == nil {
+		t.Fatalf("inspect finished transaction: want an error")
+	}
+	tl, err = c.ListTransactions()
+	if err != nil {
+		t.Fatalf("list after finish: %v", err)
+	}
+	for _, txn := range tl {
+		if txn.ID == tx {
+			t.Fatalf("finished transaction %s still listed", tx)
+		}
+	}
+	if len(tl) != len(tx0) {
+		t.Fatalf("transaction count after finish = %d, want %d (back to the baseline)", len(tl), len(tx0))
+	}
+	if _, err := c.InspectPipeline(pa); err != nil {
+		t.Fatalf("staged pipeline %s did not take effect: %v", pa, err)
+	}
+
+	// delete: gone the same way
+	tx2, err := c.StartTransaction()
+	if err != nil {
+		t.Fatalf("start second transaction: %v", err)
+	}
+	if err := c.DeleteTransaction(tx2); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := c.InspectTransaction(tx2); err == nil {
+		t.Fatalf("inspect deleted transaction: want an error")
+	}
+}

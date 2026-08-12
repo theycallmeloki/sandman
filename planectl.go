@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -588,8 +589,12 @@ func newPipelineCmd() *cobra.Command {
 			if err != nil {
 				die("pipeline create: "+err.Error(), 1)
 			}
-			if txID != "" {
-				if err := cliClient().CreatePipelineTx(p, txID); err != nil {
+			tx := txID
+			if tx == "" {
+				tx = activeTx() // transaction resume sets this
+			}
+			if tx != "" {
+				if err := cliClient().CreatePipelineTx(p, tx); err != nil {
 					die("pipeline create: "+err.Error(), 1)
 				}
 			} else if err := cliClient().CreatePipeline(p); err != nil {
@@ -611,7 +616,15 @@ func newPipelineCmd() *cobra.Command {
 				die("pipeline update: "+err.Error(), 1)
 			}
 			p.Update = true
-			if err := cliClient().CreatePipeline(p); err != nil {
+			tx := txID
+			if tx == "" {
+				tx = activeTx() // transaction resume sets this
+			}
+			if tx != "" {
+				if err := cliClient().CreatePipelineTx(p, tx); err != nil {
+					die("pipeline update: "+err.Error(), 1)
+				}
+			} else if err := cliClient().CreatePipeline(p); err != nil {
 				die("pipeline update: "+err.Error(), 1)
 			}
 			fmt.Printf("updated pipeline %s\n", p.Name)
@@ -1017,6 +1030,95 @@ func newTransactionCmd() *cobra.Command {
 				fmt.Printf("deleted transaction %s\n", args[0])
 			},
 		},
+		&cobra.Command{
+			Use: "list",
+			Run: func(_ *cobra.Command, _ []string) {
+				ts, err := cliClient().ListTransactions()
+				if err != nil {
+					die("transaction list: "+err.Error(), 1)
+				}
+				for _, tx := range ts {
+					fmt.Printf("%s\t%d ops\n", tx.ID, len(tx.Ops))
+				}
+			},
+		},
+		&cobra.Command{
+			Use:  "inspect <id>",
+			Args: cobra.ExactArgs(1),
+			Run: func(_ *cobra.Command, args []string) {
+				tx, err := cliClient().InspectTransaction(args[0])
+				if err != nil {
+					die("transaction inspect: "+err.Error(), 1)
+				}
+				fmt.Printf("transaction: %s\n", tx.ID)
+				if len(tx.Ops) == 0 {
+					fmt.Println("  (no staged operations)")
+				}
+				for _, op := range tx.Ops {
+					fmt.Printf("  %s %s\n", op.Kind, op.Pipeline)
+				}
+			},
+		},
+		&cobra.Command{
+			Use:  "resume <id>",
+			Args: cobra.ExactArgs(1),
+			Run: func(_ *cobra.Command, args []string) {
+				if err := setActiveTx(args[0]); err != nil {
+					die("transaction resume: "+err.Error(), 1)
+				}
+				fmt.Printf("resumed transaction %s (pipeline create/update will stage into it)\n", args[0])
+			},
+		},
+		&cobra.Command{
+			Use: "stop",
+			Run: func(_ *cobra.Command, _ []string) {
+				if err := setActiveTx(""); err != nil {
+					die("transaction stop: "+err.Error(), 1)
+				}
+				fmt.Println("no active transaction")
+			},
+		},
 	)
 	return cmd
+}
+
+// activeTxFile is the CLI's per-user active-transaction marker (the
+// reference's "resume" persists the session's transaction in local state).
+func activeTxFile() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "sandman", "active-tx")
+}
+
+// setActiveTx persists (or clears, with "") the CLI's active transaction.
+func setActiveTx(id string) error {
+	p := activeTxFile()
+	if p == "" {
+		return fmt.Errorf("no user config directory")
+	}
+	if id == "" {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(id+"\n"), 0o600)
+}
+
+// activeTx returns the resumed transaction id, or "" when none is set.
+func activeTx() string {
+	p := activeTxFile()
+	if p == "" {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
