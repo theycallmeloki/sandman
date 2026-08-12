@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -330,5 +331,12 @@ func installAsRoot() error {
 	}
 	cmd := exec.Command("sudo", append([]string{"-p", "sudo password: ", self}, os.Args[1:]...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return fmt.Errorf("could not write %s (permission denied) and sudo failed (exit %d) — run `sudo %s %s`", updatePath, ee.ExitCode(), self, strings.Join(os.Args[1:], " "))
+		}
+		return err
+	}
+	return nil
 }
