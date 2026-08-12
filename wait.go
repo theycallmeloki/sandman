@@ -192,6 +192,23 @@ func (d *daemon) flushSet(commitIDs []string, timeout time.Duration) ([]client.J
 			if d.triggerPending(relevant) {
 				continue
 			}
+			// the closure can grow between the loop-top computation and
+			// this point: a downstream spawn landing in the window's tail
+			// is visible to triggerPending's raw job list but not to the
+			// closure below. Re-read the closure with a fresh wait
+			// channel registered first (grab-then-check) — any change,
+			// landed or landing, forces a re-evaluation instead of
+			// returning a stale snapshot (SB-021: 4 of 5 stages).
+			ch2 := d.stateChanged.changed()
+			fresh := client.LatestPerPipeline(client.DownstreamJobsSet(d.mustListJobs(), commitIDs))
+			if len(fresh) != len(relevant) {
+				continue
+			}
+			select {
+			case <-ch2:
+				continue // a change landed during the recompute
+			default:
+			}
 			return relevant, false, nil
 		}
 		if len(relevant) == 0 {
@@ -276,7 +293,15 @@ func (d *daemon) triggerPending(jobs []client.Job) bool {
 		}
 		cm, err := d.store.inspectCommit(j.OutputCommit)
 		if err != nil || !cm.Finished {
-			return true // the commit is still being finalized
+			// a terminal failure job's unfinished commit is orphaned (its
+			// output repo was deleted mid-job, SB-146): no trigger comes
+			// from it, and waiting would stall the flush to its deadline.
+			// A success job's unfinished commit is the finish still in
+			// flight — wait for it.
+			if j.State == "failure" {
+				continue
+			}
+			return true
 		}
 		pipes, err := d.listPipelinesFiltered(nil, "", false)
 		if err != nil {
