@@ -44,7 +44,10 @@ jobs:
         run: go build -v ./...
 
       - name: Test
-        run: go test -timeout 30m ./...
+        # the conformance suite is docker-heavy and exceeds 30m under CI
+        # runner load (observed: timeout cascades at ~33m); 45m fits the
+        # worst observed run while still failing on a genuine hang
+        run: go test -timeout 45m ./...
 
   race:
     # race-detector pass over the fast suites (root unit tests + the
