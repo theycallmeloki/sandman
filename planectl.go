@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -31,6 +32,39 @@ func cliClient() *client.Client {
 		c.SetToken(*tokenFlag)
 	}
 	return c
+}
+
+// table prints an aligned table with an uppercase header row via
+// tabwriter (empty row sets print nothing — the caller prints the
+// empty-state message instead).
+func table(header []string, rows [][]string) {
+	if len(rows) == 0 {
+		return
+	}
+	w := tabwriter.NewWriter(os.Stdout, 4, 8, 2, ' ', 0)
+	if _, err := fmt.Fprintln(w, strings.Join(header, "\t")); err != nil {
+		return
+	}
+	for _, r := range rows {
+		if _, err := fmt.Fprintln(w, strings.Join(r, "\t")); err != nil {
+			return
+		}
+	}
+	_ = w.Flush()
+}
+
+// humanSize renders a byte count for humans (42 B, 1.5 KB, 3.2 MB).
+func humanSize(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // parseRef splits repo[@branch][:path]; branch defaults to "master".
@@ -100,8 +134,13 @@ func newRepoCmd() *cobra.Command {
 				if err != nil {
 					die("repo list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(repos))
 				for _, r := range repos {
-					fmt.Printf("%s\t%d\t%s\n", r.Name, r.SizeBytes, strings.Join(r.Branches, ","))
+					rows = append(rows, []string{r.Name, humanSize(r.SizeBytes), strings.Join(r.Branches, ",")})
+				}
+				table([]string{"NAME", "SIZE", "BRANCHES"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no repos")
 				}
 			},
 		},
@@ -113,7 +152,9 @@ func newRepoCmd() *cobra.Command {
 				if err != nil {
 					die("repo inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("name: %s\nsize: %d\nbranches: %s\n", r.Name, r.SizeBytes, strings.Join(r.Branches, ", "))
+				fmt.Printf("%-10s : %s\n", "name", r.Name)
+				fmt.Printf("%-10s : %s\n", "size", humanSize(r.SizeBytes))
+				fmt.Printf("%-10s : %s\n", "branches", strings.Join(r.Branches, ", "))
 			},
 		},
 	)
@@ -174,8 +215,13 @@ func newCommitCmd() *cobra.Command {
 				if err != nil {
 					die("commit list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(hist))
 				for _, cm := range hist {
-					fmt.Printf("%s\t%s\tfinished=%v\n", cm.ID, cm.Branch, cm.Finished)
+					rows = append(rows, []string{cm.ID, cm.Branch, fmt.Sprintf("%t", cm.Finished)})
+				}
+				table([]string{"ID", "BRANCH", "FINISHED"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no commits")
 				}
 			},
 		},
@@ -199,7 +245,11 @@ func newCommitCmd() *cobra.Command {
 				if err != nil {
 					die("commit inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("id: %s\nrepo: %s\nbranch: %s\nstarted: %v\nfinished: %v\n", cm.ID, cm.Repo, cm.Branch, cm.Started, cm.Finished)
+				fmt.Printf("%-10s : %s\n", "id", cm.ID)
+				fmt.Printf("%-10s : %s\n", "repo", cm.Repo)
+				fmt.Printf("%-10s : %s\n", "branch", cm.Branch)
+				fmt.Printf("%-10s : %t\n", "started", cm.Started)
+				fmt.Printf("%-10s : %t\n", "finished", cm.Finished)
 			},
 		},
 		&cobra.Command{
@@ -249,7 +299,9 @@ func newBranchCmd() *cobra.Command {
 				if err != nil {
 					die("branch inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("repo: %s\nbranch: %s\nhead: %s\n", b.Repo, b.Branch, b.Head)
+				fmt.Printf("%-10s : %s\n", "repo", b.Repo)
+				fmt.Printf("%-10s : %s\n", "branch", b.Branch)
+				fmt.Printf("%-10s : %s\n", "head", b.Head)
 			},
 		},
 		&cobra.Command{
@@ -261,8 +313,13 @@ func newBranchCmd() *cobra.Command {
 					if err != nil {
 						die("branch list: "+err.Error(), 1)
 					}
+					rows := make([][]string, 0, len(bs))
 					for _, b := range bs {
-						fmt.Printf("%s\t%s\t%s\n", b.Repo, b.Branch, b.Head)
+						rows = append(rows, []string{b.Branch, b.Head})
+					}
+					table([]string{"BRANCH", "HEAD"}, rows)
+					if len(rows) == 0 {
+						fmt.Println("no branches")
 					}
 					return
 				}
@@ -270,10 +327,15 @@ func newBranchCmd() *cobra.Command {
 				if err != nil {
 					die("branch list: "+err.Error(), 1)
 				}
+				var rows [][]string
 				for _, r := range repos {
 					for _, b := range r.Branches {
-						fmt.Printf("%s\t%s\n", r.Name, b)
+						rows = append(rows, []string{r.Name, b})
 					}
+				}
+				table([]string{"REPO", "BRANCH"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no branches")
 				}
 			},
 		},
@@ -407,11 +469,12 @@ func newFileCmd() *cobra.Command {
 				if err != nil {
 					die("file inspect: "+err.Error(), 1)
 				}
-				desc, err := cliClient().DescribeFile(head.ID, path)
+				data, err := cliClient().GetFile(head.ID, path)
 				if err != nil {
 					die("file inspect: "+err.Error(), 1)
 				}
-				fmt.Println(desc)
+				fmt.Printf("%-10s : %s\n", "path", path)
+				fmt.Printf("%-10s : %s\n", "size", humanSize(uint64(len(data))))
 			},
 		},
 		&cobra.Command{
@@ -435,8 +498,13 @@ func newFileCmd() *cobra.Command {
 				if err != nil {
 					die("file list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(files))
 				for _, f := range files {
-					fmt.Printf("%s\t%d\n", f.Path, f.Size)
+					rows = append(rows, []string{f.Path, humanSize(f.Size)})
+				}
+				table([]string{"PATH", "SIZE"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no files")
 				}
 			},
 		},
@@ -535,8 +603,13 @@ func newJobCmd() *cobra.Command {
 				if err != nil {
 					die("job list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(js))
 				for _, j := range js {
-					fmt.Printf("%s\t%s\t%s\n", j.ID, j.Pipeline, j.State)
+					rows = append(rows, []string{j.ID, j.Pipeline, j.State})
+				}
+				table([]string{"ID", "PIPELINE", "STATE"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no jobs")
 				}
 			},
 		},
@@ -548,7 +621,11 @@ func newJobCmd() *cobra.Command {
 				if err != nil {
 					die("job inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("id: %s\npipeline: %s\nstate: %s\nreason: %s\noutputCommit: %s\n", j.ID, j.Pipeline, j.State, j.Reason, j.OutputCommit)
+				fmt.Printf("%-13s : %s\n", "id", j.ID)
+				fmt.Printf("%-13s : %s\n", "pipeline", j.Pipeline)
+				fmt.Printf("%-13s : %s\n", "state", j.State)
+				fmt.Printf("%-13s : %s\n", "reason", j.Reason)
+				fmt.Printf("%-13s : %s\n", "outputCommit", j.OutputCommit)
 			},
 		},
 		&cobra.Command{
@@ -596,8 +673,13 @@ func newDatumCmd() *cobra.Command {
 				if err != nil {
 					die("datum list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(page.Datums))
 				for _, d := range page.Datums {
-					fmt.Printf("%s\t%s\n", d.ID, d.State)
+					rows = append(rows, []string{d.ID, d.State})
+				}
+				table([]string{"ID", "STATE"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no datums")
 				}
 			},
 		},
@@ -609,7 +691,11 @@ func newDatumCmd() *cobra.Command {
 				if err != nil {
 					die("datum inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("id: %s\nstate: %s\nreason: %s\nstarted: %s\nfinished: %s\n", d.ID, d.State, d.Reason, d.Started, d.Finished)
+				fmt.Printf("%-10s : %s\n", "id", d.ID)
+				fmt.Printf("%-10s : %s\n", "state", d.State)
+				fmt.Printf("%-10s : %s\n", "reason", d.Reason)
+				fmt.Printf("%-10s : %s\n", "started", d.Started)
+				fmt.Printf("%-10s : %s\n", "finished", d.Finished)
 			},
 		},
 		&cobra.Command{
@@ -688,8 +774,13 @@ func newPipelineCmd() *cobra.Command {
 				if err != nil {
 					die("pipeline list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(ps))
 				for _, p := range ps {
-					fmt.Printf("%s\t%s\tv%d\n", p.Name, p.State, p.Version)
+					rows = append(rows, []string{p.Name, p.State, fmt.Sprintf("%d", p.Version)})
+				}
+				table([]string{"NAME", "STATE", "VERSION"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no pipelines")
 				}
 			},
 		},
@@ -701,7 +792,10 @@ func newPipelineCmd() *cobra.Command {
 				if err != nil {
 					die("pipeline inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("name: %s\nstate: %s\nversion: %d\nreason: %s\n", p.Name, p.State, p.Version, p.Reason)
+				fmt.Printf("%-10s : %s\n", "name", p.Name)
+				fmt.Printf("%-10s : %s\n", "state", p.State)
+				fmt.Printf("%-10s : %d\n", "version", p.Version)
+				fmt.Printf("%-10s : %s\n", "reason", p.Reason)
 			},
 		},
 		&cobra.Command{
@@ -869,8 +963,13 @@ func newFlushCmd() *cobra.Command {
 			if err != nil {
 				die("flush: "+err.Error(), 1)
 			}
+			rows := make([][]string, 0, len(js))
 			for _, j := range js {
-				fmt.Printf("%s\t%s\n", j.Pipeline, j.State)
+				rows = append(rows, []string{j.Pipeline, j.State, j.ID})
+			}
+			table([]string{"PIPELINE", "STATE", "ID"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no downstream jobs")
 			}
 		},
 	}
@@ -916,7 +1015,9 @@ func newSecretCmd() *cobra.Command {
 				if err != nil {
 					die("secret inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("name: %s\ntype: %s\ncreated: %s\n", s.Name, s.Type, s.Created)
+				fmt.Printf("%-10s : %s\n", "name", s.Name)
+				fmt.Printf("%-10s : %s\n", "type", s.Type)
+				fmt.Printf("%-10s : %s\n", "created", s.Created)
 			},
 		},
 		&cobra.Command{
@@ -926,8 +1027,13 @@ func newSecretCmd() *cobra.Command {
 				if err != nil {
 					die("secret list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(ss))
 				for _, s := range ss {
-					fmt.Printf("%s\t%s\n", s.Name, s.Type)
+					rows = append(rows, []string{s.Name, s.Type})
+				}
+				table([]string{"NAME", "TYPE"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no secrets")
 				}
 			},
 		},
@@ -986,8 +1092,13 @@ func newTagCmd() *cobra.Command {
 				if err != nil {
 					die("tag list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(ts))
 				for _, t := range ts {
-					fmt.Printf("%s\t%s\n", t.Name, t.Ref)
+					rows = append(rows, []string{t.Name, t.Ref})
+				}
+				table([]string{"NAME", "REF"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no tags")
 				}
 			},
 		},
@@ -1094,8 +1205,13 @@ func newTransactionCmd() *cobra.Command {
 				if err != nil {
 					die("transaction list: "+err.Error(), 1)
 				}
+				rows := make([][]string, 0, len(ts))
 				for _, tx := range ts {
-					fmt.Printf("%s\t%d ops\n", tx.ID, len(tx.Ops))
+					rows = append(rows, []string{tx.ID, fmt.Sprintf("%d ops", len(tx.Ops))})
+				}
+				table([]string{"ID", "OPS"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no transactions")
 				}
 			},
 		},

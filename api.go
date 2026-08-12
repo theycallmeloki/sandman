@@ -119,6 +119,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts", hErr(d.listHostsH))
 	mux.HandleFunc("DELETE /api/v1/hosts/{name}", hErr(d.deleteHostH))
 	mux.HandleFunc("GET /api/v1/metrics", hErr(d.metricsH))
+	mux.HandleFunc("GET /api/v1/version", hErr(d.versionH))
 	mux.HandleFunc("POST /api/v1/gc", hErr(d.collectGarbageH))
 	mux.HandleFunc("POST /api/v1/check", hErr(d.checkH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
@@ -463,6 +464,14 @@ func (d *daemon) instrument(op string, h http.HandlerFunc) http.HandlerFunc {
 // invocation counters and latency sum/count aggregates for file reads,
 // file writes, and job listings, with read latency split by outcome
 // (SB-132).
+// versionH reports the daemon's baked build version (the same Version the
+// binary carries; a `sandman --version` shows both so a stale daemon is
+// visible).
+func (d *daemon) versionH(w http.ResponseWriter, r *http.Request) error {
+	writeJSON(w, map[string]string{"version": Version})
+	return nil
+}
+
 func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	d.metrics.mu.Lock()
 	readTotal := d.metrics.readTotal

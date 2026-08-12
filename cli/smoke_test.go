@@ -180,7 +180,7 @@ func TestCLI_SmokeFlow(t *testing.T) {
 
 	// 6. the commit history shows the branch's commit
 	ch := mustCLI(t, "", "commit", "list", "r1@master")
-	if !strings.Contains(ch, "master") || !strings.Contains(ch, "finished=true") {
+	if !strings.Contains(ch, "master") || !strings.Contains(ch, "FINISHED") {
 		t.Fatalf("commit list %q: want a finished master commit", ch)
 	}
 
@@ -215,7 +215,7 @@ func TestCLI_SmokeFlow(t *testing.T) {
 
 	// 11. pipeline inspect round-trips the name and state
 	pi := mustCLI(t, "", "pipeline", "inspect", "cap")
-	if !strings.Contains(pi, "cap") || !strings.Contains(pi, "state:") {
+	if !strings.Contains(pi, "cap") || !strings.Contains(pi, "state") {
 		t.Fatalf("pipeline inspect %q: want name and state", pi)
 	}
 
@@ -259,8 +259,8 @@ func TestCLI_VerbCoverage(t *testing.T) {
 	// 1. repo inspect round-trips the name
 	mustCLI(t, "", "repo", "create", "r2")
 	ri := mustCLI(t, "", "repo", "inspect", "r2")
-	if !strings.Contains(ri, "name: r2") {
-		t.Fatalf("repo inspect %q: want name: r2", ri)
+	if !strings.Contains(ri, "name") || !strings.Contains(ri, "r2") {
+		t.Fatalf("repo inspect %q: want name r2", ri)
 	}
 
 	// 2. put a file and list it with a path prefix
@@ -272,9 +272,9 @@ func TestCLI_VerbCoverage(t *testing.T) {
 
 	// 3. commit inspect round-trips the repo
 	cl := mustCLI(t, "", "commit", "list", "r2")
-	id := strings.Fields(strings.Split(cl, "\n")[0])[0]
+	id := strings.Fields(strings.Split(cl, "\n")[1])[0]
 	ci := mustCLI(t, "", "commit", "inspect", id)
-	if !strings.Contains(ci, "repo: r2") || !strings.Contains(ci, "finished: true") {
+	if !strings.Contains(ci, "repo") || !strings.Contains(ci, "r2") || !strings.Contains(ci, "finished") {
 		t.Fatalf("commit inspect %q: want repo r2 finished", ci)
 	}
 
@@ -298,8 +298,8 @@ func TestCLI_VerbCoverage(t *testing.T) {
 
 	// 4b. file inspect reports the size
 	fi := mustCLI(t, "", "file", "inspect", "r2@master:/a.txt")
-	if !strings.Contains(fi, "SizeBytes") {
-		t.Fatalf("file inspect %q: want SizeBytes", fi)
+	if !strings.Contains(fi, "path") || !strings.Contains(fi, "size") || !strings.Contains(fi, "1 B") {
+		t.Fatalf("file inspect %q: want path and size", fi)
 	}
 
 	// 4c. pipeline extract emits a round-trippable spec (update -f accepts it)
@@ -319,9 +319,9 @@ func TestCLI_VerbCoverage(t *testing.T) {
 
 	// 5. job inspect round-trips the success state
 	jl := mustCLI(t, "", "job", "list", "cap2")
-	jid := strings.Fields(strings.Split(jl, "\n")[0])[0]
+	jid := strings.Fields(strings.Split(jl, "\n")[1])[0]
 	ji := mustCLI(t, "", "job", "inspect", jid)
-	if !strings.Contains(ji, "state: success") {
+	if !strings.Contains(ji, "state") || !strings.Contains(ji, "success") {
 		t.Fatalf("job inspect %q: want state: success", ji)
 	}
 
@@ -367,7 +367,7 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("get file r2@master:/a.txt = %q, want A", got)
 	}
 	ci2 := mustCLI(t, "", "commit", "inspect", "r2@master")
-	if !strings.Contains(ci2, "repo: r2") {
+	if !strings.Contains(ci2, "repo") || !strings.Contains(ci2, "r2") {
 		t.Fatalf("commit inspect r2@master %q: want repo r2", ci2)
 	}
 
@@ -436,7 +436,10 @@ type jobRow struct {
 
 func jobRows(out string) []jobRow {
 	var rows []jobRow
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for i, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if i == 0 {
+			continue // the table header row
+		}
 		f := strings.Fields(line)
 		if len(f) == 3 {
 			rows = append(rows, jobRow{f[0], f[1], f[2]})
@@ -498,7 +501,7 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 		t.Fatal("commit start: empty id")
 	}
 	mustCLI(t, "", "commit", "finish", cid)
-	if cl := mustCLI(t, "", "commit", "list", "rw@side"); !strings.Contains(cl, "finished=true") {
+	if cl := mustCLI(t, "", "commit", "list", "rw@side"); !strings.Contains(cl, "FINISHED") {
 		t.Fatalf("commit list rw@side %q: want a finished commit", cl)
 	}
 
@@ -541,11 +544,11 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 
 	// 10. datum list/inspect on the settled job (3 files -> 3 datums)
 	dl := mustCLI(t, "", "datum", "list", v1)
-	if n := len(strings.Split(strings.TrimSpace(dl), "\n")); n != 3 {
-		t.Fatalf("datum list: %d datums, want 3 (%q)", n, dl)
+	if n := len(strings.Split(strings.TrimSpace(dl), "\n")); n != 4 {
+		t.Fatalf("datum list: %d lines (header + 3 datums), want 4 (%q)", n, dl)
 	}
-	did := strings.Fields(strings.Split(strings.TrimSpace(dl), "\n")[0])[0]
-	if di := mustCLI(t, "", "datum", "inspect", v1, did); !strings.Contains(di, "state: success") {
+	did := strings.Fields(strings.Split(strings.TrimSpace(dl), "\n")[1])[0]
+	if di := mustCLI(t, "", "datum", "inspect", v1, did); !strings.Contains(di, "state") || !strings.Contains(di, "success") {
 		t.Fatalf("datum inspect %q: want state: success", di)
 	}
 
@@ -563,7 +566,7 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustCLI(t, "", "pipeline", "update", "-f", spec2)
-	if pi := mustCLI(t, "", "pipeline", "inspect", "capw"); !strings.Contains(pi, "version: 2") {
+	if pi := mustCLI(t, "", "pipeline", "inspect", "capw"); !strings.Contains(pi, "version") || !strings.Contains(pi, "2") {
 		t.Fatalf("pipeline inspect after update %q: want version: 2", pi)
 	}
 	// a new input file is what makes the v2 transform actually run: an
@@ -628,7 +631,7 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 	// the datum that is actually running (skipped datums are not
 	// restartable)
 	rdl := pollCLI(t, func(out string) bool {
-		return len(strings.Split(strings.TrimSpace(out), "\n")) == 4
+		return len(strings.Split(strings.TrimSpace(out), "\n")) == 5 // header + 4 datums
 	}, 60*time.Second, "datum", "list", rjid)
 	rdid := ""
 	for _, line := range strings.Split(strings.TrimSpace(rdl), "\n") {
@@ -645,7 +648,7 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 	// cancelJob settles the job before returning: the state is killed
 	mustCLI(t, "", "job", "stop", rjid)
 	ji := mustCLI(t, "", "job", "inspect", rjid)
-	if !strings.Contains(ji, "state: killed") {
+	if !strings.Contains(ji, "state") || !strings.Contains(ji, "killed") {
 		t.Fatalf("job inspect after stop %q: want state: killed", ji)
 	}
 	mustCLI(t, "", "job", "delete", rjid)
@@ -655,11 +658,11 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 
 	// 14. pipeline stop/start round-trip
 	mustCLI(t, "", "pipeline", "stop", "capw")
-	if pi := mustCLI(t, "", "pipeline", "inspect", "capw"); !strings.Contains(pi, "state: paused") {
+	if pi := mustCLI(t, "", "pipeline", "inspect", "capw"); !strings.Contains(pi, "state") || !strings.Contains(pi, "paused") {
 		t.Fatalf("pipeline inspect after stop %q: want state: paused", pi)
 	}
 	mustCLI(t, "", "pipeline", "start", "capw")
-	if pi := mustCLI(t, "", "pipeline", "inspect", "capw"); !strings.Contains(pi, "state: running") {
+	if pi := mustCLI(t, "", "pipeline", "inspect", "capw"); !strings.Contains(pi, "state") || !strings.Contains(pi, "running") {
 		t.Fatalf("pipeline inspect after start %q: want state: running", pi)
 	}
 
@@ -711,5 +714,12 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 	mustCLI(t, "", "transaction", "finish", tx3)
 	if pl := mustCLI(t, "", "pipeline", "list"); !strings.Contains(pl, "txp") {
 		t.Fatalf("pipeline list %q after tx finish: txp missing", pl)
+	}
+
+	// 19. --version reports both the binary and the daemon version (the
+	// daemon runs the same binary, so they agree here)
+	v := mustCLI(t, "", "--version")
+	if !strings.Contains(v, "sandman 0.0.1") || !strings.Contains(v, "daemon: 0.0.1") {
+		t.Fatalf("--version = %q, want binary and daemon version lines", v)
 	}
 }

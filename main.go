@@ -8,9 +8,12 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"sandman/client"
 )
 
-const Version = "0.1.0"
+// Version is the baked build version. Releases set it at build time via
+// -ldflags "-X main.Version=0.0.1"; dev builds fall back to this value.
+var Version = "0.0.1"
 
 // One static binary, busybox-style: every verb is a subcommand, the daemon
 // is just another verb. Install sandman once, run `sandman daemon` (or the
@@ -25,7 +28,27 @@ var (
 	addrFlag = flag.String("addr", defaultAddr(), "control-plane address (data-plane verbs)")
 	// tokenFlag is the credential sent with the data-plane verbs (SB-154).
 	tokenFlag = flag.String("token", "", "auth token for the control plane")
+	// versionFlag prints the binary and daemon versions and exits.
+	versionFlag = flag.Bool("version", false, "print binary and daemon versions")
 )
+
+// printVersion reports the binary's baked version and, when a control
+// plane answers, the daemon's version — a stale daemon is visible at a
+// glance (the two come from the same binary, so a mismatch means the
+// daemon predates this build).
+func printVersion() {
+	fmt.Printf("sandman %s\n", Version)
+	c := client.New(*addrFlag)
+	if *tokenFlag != "" {
+		c.SetToken(*tokenFlag)
+	}
+	ver, err := c.Version()
+	if err != nil {
+		fmt.Printf("daemon: not reachable at %s\n", *addrFlag)
+		return
+	}
+	fmt.Printf("daemon: %s (%s)\n", ver, *addrFlag)
+}
 
 func defaultAddr() string {
 	if a := os.Getenv("SANDBOX_ADDR"); a != "" {
@@ -54,6 +77,7 @@ func newRootCmd() *cobra.Command {
 		{"dashboard", cmdDashboard},
 		{"attach", cmdAttach},
 		{"detach", cmdDetach},
+		{"update", cmdUpdate},
 	} {
 		c := &cobra.Command{
 			Use:                f.use,
@@ -69,7 +93,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newGetCmd())
 	root.AddCommand(&cobra.Command{
 		Use: "version",
-		Run: func(*cobra.Command, []string) { fmt.Printf("sandman %s\n", Version) },
+		Run: func(*cobra.Command, []string) { printVersion() },
 	})
 	return root
 }
@@ -77,6 +101,10 @@ func newRootCmd() *cobra.Command {
 func main() {
 	flag.Usage = usage
 	flag.Parse()
+	if *versionFlag {
+		printVersion()
+		os.Exit(0)
+	}
 	args := flag.Args()
 	if len(args) == 0 {
 		usage()
@@ -107,6 +135,8 @@ verbs:
   dashboard           live TUI overview: nodes, containers, cpu/mem
   attach <name> <addr>    remember a static peer (for non-mDNS networks)
   detach <name>       forget a static peer
+  update [--check]    check GitHub releases and install the latest build
+  version / -version  print binary and daemon versions
   repo                create/list/inspect/delete repositories
   commit              start/finish/list/inspect/delete commits
   branch              create/list branches

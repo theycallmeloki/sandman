@@ -1061,6 +1061,18 @@ func (c *Client) Reset() error {
 	return c.do("POST", "/api/v1/reset", nil, nil)
 }
 
+// Version reports the control plane's version (the daemon's baked build
+// version). `sandman --version` uses it to show both binary and daemon.
+func (c *Client) Version() (string, error) {
+	var out struct {
+		Version string `json:"version"`
+	}
+	if err := c.do("GET", "/api/v1/version", nil, &out); err != nil {
+		return "", err
+	}
+	return out.Version, nil
+}
+
 // FetchMetrics returns the runtime metrics in Prometheus exposition
 // format: invocation counters and latency aggregates for file reads
 // (split by outcome), file writes, and job listings (SB-132).
