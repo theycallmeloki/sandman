@@ -961,3 +961,40 @@ func TestD15_UnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
 		t.Fatalf("pipeline state = %s, want operational (declaration is not a gate)", pi.State)
 	}
 }
+
+// TestServiceLocalContainerReachable — a LOCAL service on the container
+// backend (the production default runner) must be reachable through the
+// external-port proxy. The matrix daemon runs -runner process (where the
+// service process binds the host directly), so the container path was
+// untested — and broken: without a -p publish the container sits on the
+// docker bridge, unreachable at the loopback the proxy dials (reviewer
+// finding, fixed by publishing 127.0.0.1:<internal>:<internal>).
+func TestServiceLocalContainerReachable(t *testing.T) {
+	withContainerDaemon(t)
+	repo := uniq(t)
+	mustRepo(t, repo)
+	commitFiles(t, repo, "master", map[string]string{"file1": "foo"})
+	ext := freePort()
+	p := client.Pipeline{
+		Name: uniq(t),
+		Transform: &client.Transform{
+			Image: "python:3-alpine",
+			Cmd:   []string{"sh", "-c", "cd /sandman/in && exec python3 -m http.server 8001"},
+		},
+		Parallelism: &client.Parallelism{Constant: 1},
+		Input:       &client.Input{Repo: repo, Glob: "/"},
+		Service: &client.Service{
+			InternalPort: 8001,
+			ExternalPort: ext,
+		},
+	}
+	mustPipeline(t, p)
+	// a service job never completes: deleting the pipeline kills the job
+	// (and its container) while the daemon is still alive — without this,
+	// the leaked container's published internal port collides with the
+	// next service test on the same dockerd
+	t.Cleanup(func() { _ = c.DeletePipeline(p.Name, false, false) })
+	if b := getUntil(t, fmt.Sprintf("http://127.0.0.1:%d/%s/file1", ext, repo), "foo"); b != "foo" {
+		t.Fatalf("local container service = %q, want foo (the publish must reach the proxy's loopback dial)", b)
+	}
+}

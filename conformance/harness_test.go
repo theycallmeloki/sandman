@@ -57,17 +57,16 @@ func TestMain(m *testing.M) {
 	daemonStateDir = state
 	daemonName = "conformance-" + strconv.Itoa(daemonPort)
 
-	// stale sandman-* containers and orphaned daemons/workers from
-	// interrupted runs (a test-timeout SIGKILL kills the test binary,
-	// not its children; the kernel reparents the children to init) hold
-	// the external ports and poison every later run — clean them up
-	// first. The harness binary's path sandman-conformance-<pid>
-	// appears in every child's argv, so pgrep -f finds them; only
-	// processes whose parent is DEAD (PPID 1) are orphans of an
-	// interrupted run — a live concurrent suite's daemons keep their
-	// parent and must never be killed (a broad pkill here would SIGTERM
-	// a sibling suite's daemon: daemon.go exits silently on SIGTERM).
-	// This must run BEFORE startDaemon or we kill our own daemon.
+	// Orphaned daemons/workers from interrupted runs (a test-timeout
+	// SIGKILL kills the test binary, not its children; the kernel
+	// reparents the children to init) hold the external ports and
+	// poison later runs. The harness binary path sandman-conformance-
+	// <pid> appears in every child's argv, so pgrep -f finds them; only
+	// processes whose parent is DEAD (PPID 1) are orphans — a live
+	// concurrent suite's daemons keep their parent and must never be
+	// killed (a broad pkill here would SIGTERM a sibling suite's daemon:
+	// daemon.go exits silently on SIGTERM). This must run BEFORE
+	// startDaemon or we kill our own daemon.
 	if out, err := exec.Command("pgrep", "-f", "sandman-conformance-").Output(); err == nil {
 		for _, pid := range strings.Fields(string(out)) {
 			if ppid := procPPID(pid); ppid == 1 || ppid == 0 {
@@ -75,8 +74,16 @@ func TestMain(m *testing.M) {
 			}
 		}
 	}
+	// Stale sandbox containers from interrupted runs (a SIGKILLed daemon
+	// cannot run its docker rm -f) hold external ports and poison later
+	// runs. Scoped to the harness's own naming namespace
+	// (sandman-conformance-*): the node label is an exact per-daemon
+	// match, so it would miss leftovers from earlier ports, while an
+	// unscoped name=sandman- sweep SIGKILLs foreign production services
+	// on a shared dockerd (sandman-<id>-service — observed live:
+	// "service process exited with code 137").
 	if dockerAvailable() {
-		if out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-").Output(); err == nil {
+		if out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-conformance-").Output(); err == nil {
 			for _, id := range strings.Fields(string(out)) {
 				exec.Command("docker", "rm", "-f", id).Run()
 			}

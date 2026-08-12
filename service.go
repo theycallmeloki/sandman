@@ -172,6 +172,13 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 		}
 	}
 	mounts := []string{"-v", outDir + ":/sandman/out", "-v", serveDir + ":/sandman/in"}
+	// A LOCAL service container publishes its internal port on the host's
+	// loopback so the proxy's 127.0.0.1:<internal> dial reaches it — the
+	// remote path publishes on the worker host (worker.go), but without
+	// -p a local container sits on the docker bridge, unreachable at the
+	// loopback the proxy dials. The process backend ignores these flags.
+	// (Must append before the spec captures the slice.)
+	mounts = append(mounts, "-p", fmt.Sprintf("127.0.0.1:%d:%d", pl.Pipeline.Service.InternalPort, pl.Pipeline.Service.InternalPort))
 	pathMap := map[string]string{"/sandman/out": outDir, "/sandman/in": serveDir}
 	spec := JobSpec{
 		Image:    pl.Pipeline.Transform.Image,
