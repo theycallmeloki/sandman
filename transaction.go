@@ -41,7 +41,7 @@ func (d *daemon) txDir(id string) string {
 
 func (d *daemon) txExists(id string) error {
 	if st, err := os.Stat(d.txDir(id)); err != nil || !st.IsDir() {
-		return fmt.Errorf("transaction %q not found", id)
+		return notFound("transaction %q not found", id)
 	}
 	return nil
 }
@@ -64,7 +64,7 @@ type txOp struct {
 func (d *daemon) loadTxOps(id string) ([]txOp, error) {
 	entries, err := os.ReadDir(d.txDir(id))
 	if err != nil {
-		return nil, fmt.Errorf("transaction %q not found", id)
+		return nil, notFound("transaction %q not found", id)
 	}
 	var ops []txOp
 	for _, e := range entries {
@@ -173,7 +173,7 @@ func (d *daemon) finishTransaction(id string) error {
 					if _, statErr := os.Stat(d.pipelinePath(op.Spec.Name)); statErr == nil {
 						return fmt.Errorf("pipeline %q is incomplete and cannot be updated", op.Spec.Name)
 					}
-					return fmt.Errorf("pipeline %q not found", op.Spec.Name)
+					return notFound("pipeline %q not found", op.Spec.Name)
 				}
 				if rec.Version != op.Baseline {
 					// modified outside the transaction between staging and
@@ -197,7 +197,7 @@ func (d *daemon) finishTransaction(id string) error {
 				continue
 			}
 			if _, err := os.Stat(d.store.repoDir(s.Repo)); err != nil {
-				return fmt.Errorf("input repo %q not found", s.Repo)
+				return notFound("input repo %q not found", s.Repo)
 			}
 		}
 	}

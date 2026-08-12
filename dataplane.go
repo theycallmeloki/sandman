@@ -311,7 +311,7 @@ func (s *apiStore) deleteRepo(name string, force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := os.Stat(s.repoDir(name)); err != nil {
-		return fmt.Errorf("repo %q not found", name)
+		return notFound("repo %q not found", name)
 	}
 	if !force {
 		// a pipeline's output repository is protected from accidental
@@ -348,7 +348,7 @@ func (s *apiStore) inspectRepo(name string) (client.Repo, error) {
 	defer s.mu.RUnlock()
 	dir := s.repoDir(name)
 	if _, err := os.Stat(dir); err != nil {
-		return client.Repo{}, fmt.Errorf("repo %q not found", name)
+		return client.Repo{}, notFound("repo %q not found", name)
 	}
 	r := client.Repo{Name: name, Branches: s.branches(name)}
 	if headID := s.primaryHead(name); headID != "" {
@@ -434,7 +434,7 @@ func (s *apiStore) branchRefs(repo string) ([]client.Branch, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if _, err := os.Stat(s.repoDir(repo)); err != nil {
-		return nil, fmt.Errorf("repo %q not found", repo)
+		return nil, notFound("repo %q not found", repo)
 	}
 	entries, err := os.ReadDir(filepath.Join(s.repoDir(repo), "refs"))
 	if err != nil {
@@ -469,11 +469,11 @@ func (s *apiStore) branchHead(repo, branch string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if _, err := os.Stat(s.repoDir(repo)); err != nil {
-		return "", fmt.Errorf("repo %q not found", repo)
+		return "", notFound("repo %q not found", repo)
 	}
 	id, err := os.ReadFile(filepath.Join(s.repoDir(repo), "refs", branch))
 	if err != nil {
-		return "", fmt.Errorf("branch %q not found", branch)
+		return "", notFound("branch %q not found", branch)
 	}
 	return strings.TrimSpace(string(id)), nil
 }
@@ -491,14 +491,14 @@ func (s *apiStore) deleteBranch(repo, branch string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := os.Stat(s.repoDir(repo)); err != nil {
-		return fmt.Errorf("repo %q not found", repo)
+		return notFound("repo %q not found", repo)
 	}
 	if def, err := os.ReadFile(filepath.Join(s.repoDir(repo), "default")); err == nil && strings.TrimSpace(string(def)) == branch {
 		return fmt.Errorf("cannot delete the default branch %q", branch)
 	}
 	path := filepath.Join(s.repoDir(repo), "refs", branch)
 	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("branch %q not found", branch)
+		return notFound("branch %q not found", branch)
 	}
 	return os.Remove(path)
 }
@@ -566,7 +566,7 @@ func (s *apiStore) putFile(commitID, p string, data []byte) error {
 	defer s.mu.Unlock()
 	rec, err := s.loadCommitByID(commitID)
 	if err != nil {
-		return fmt.Errorf("commit %q not found", commitID)
+		return notFound("commit %q not found", commitID)
 	}
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
@@ -591,7 +591,7 @@ func (s *apiStore) overwriteFile(commitID, p string, data []byte) error {
 	defer s.mu.Unlock()
 	rec, err := s.loadCommitByID(commitID)
 	if err != nil {
-		return fmt.Errorf("commit %q not found", commitID)
+		return notFound("commit %q not found", commitID)
 	}
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
@@ -617,7 +617,7 @@ func (s *apiStore) deleteFile(commitID, p string) error {
 	defer s.mu.Unlock()
 	rec, err := s.loadCommitByID(commitID)
 	if err != nil {
-		return fmt.Errorf("commit %q not found", commitID)
+		return notFound("commit %q not found", commitID)
 	}
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
@@ -739,7 +739,7 @@ func (s *apiStore) addFilesFromDir(commitID, dir string) error {
 	defer s.mu.Unlock()
 	rec, err := s.loadCommitByID(commitID)
 	if err != nil {
-		return fmt.Errorf("commit %q not found", commitID)
+		return notFound("commit %q not found", commitID)
 	}
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
@@ -774,7 +774,7 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string, o
 	defer s.mu.Unlock()
 	dstRec, err := s.loadCommitByID(dstCommitID)
 	if err != nil {
-		return fmt.Errorf("commit %q not found", dstCommitID)
+		return notFound("commit %q not found", dstCommitID)
 	}
 	if !dstRec.Started || dstRec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", dstCommitID)
@@ -798,7 +798,7 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string, o
 			}
 		}
 		if !found {
-			return fmt.Errorf("path %q not found", srcPath)
+			return notFound("path %q not found", srcPath)
 		}
 	}
 	dstView := s.resolveView(dstRec)
@@ -860,7 +860,7 @@ func (s *apiStore) finishCommit(commitID, description string, empty bool) (clien
 	defer s.mu.Unlock()
 	rec, err := s.loadCommitByID(commitID)
 	if err != nil {
-		return client.Commit{}, fmt.Errorf("commit %q not found", commitID)
+		return client.Commit{}, notFound("commit %q not found", commitID)
 	}
 	if !rec.Started {
 		return client.Commit{}, fmt.Errorf("commit %q is not open", commitID)
@@ -895,7 +895,7 @@ func (s *apiStore) inspectCommit(commitID string) (client.Commit, error) {
 	defer s.mu.RUnlock()
 	rec, err := s.loadCommitByID(commitID)
 	if err != nil {
-		return client.Commit{}, fmt.Errorf("commit %q not found", commitID)
+		return client.Commit{}, notFound("commit %q not found", commitID)
 	}
 	return rec.commit(), nil
 }
@@ -907,7 +907,7 @@ func (s *apiStore) headCommitRec(repo, branch string) (client.Commit, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if _, err := os.Stat(s.repoDir(repo)); err != nil {
-		return client.Commit{}, fmt.Errorf("repo %q not found", repo)
+		return client.Commit{}, notFound("repo %q not found", repo)
 	}
 	id := s.headCommit(repo, branch)
 	if id == "" {
@@ -934,7 +934,7 @@ func (s *apiStore) loadCommitByID(commitID string) (*commitRec, error) {
 			return rec, nil
 		}
 	}
-	return nil, fmt.Errorf("commit %q not found", commitID)
+	return nil, notFound("commit %q not found", commitID)
 }
 
 func (rec *commitRec) commit() client.Commit {
@@ -1049,7 +1049,7 @@ func (s *apiStore) getFile(commitID, p string) ([]byte, error) {
 	}
 	f, ok := view[p]
 	if !ok {
-		return nil, fmt.Errorf("file %q not found", p)
+		return nil, notFound("file %q not found", p)
 	}
 	return f.bytes(s)
 }
@@ -1163,7 +1163,7 @@ func (s *apiStore) getTag(name string) ([]byte, error) {
 	defer s.mu.RUnlock()
 	sha, err := os.ReadFile(s.tagPath(name))
 	if err != nil {
-		return nil, fmt.Errorf("tag %q not found", name)
+		return nil, notFound("tag %q not found", name)
 	}
 	return s.readBlob(strings.TrimSpace(string(sha)))
 }
@@ -1179,7 +1179,7 @@ func (s *apiStore) deleteTag(name string) error {
 	defer s.mu.Unlock()
 	path := s.tagPath(name)
 	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("tag %q not found", name)
+		return notFound("tag %q not found", name)
 	}
 	return os.Remove(path)
 }

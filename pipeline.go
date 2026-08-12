@@ -416,7 +416,7 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 			return fmt.Errorf("no input set")
 		}
 	} else if _, err := os.Stat(d.store.repoDir(p.Input.Repo)); err != nil {
-		return fmt.Errorf("input repo %q not found", p.Input.Repo)
+		return notFound("input repo %q not found", p.Input.Repo)
 	}
 	if p.Service != nil && d.externalPortTaken(p.Service.ExternalPort, p.Name) {
 		return fmt.Errorf("external port %d is already declared by another service pipeline", p.Service.ExternalPort)
@@ -429,7 +429,7 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 			return fmt.Errorf("invalid secret name %q", m.Name)
 		}
 		if _, err := d.loadSecret(m.Name); err != nil {
-			return fmt.Errorf("secret %q not found", m.Name)
+			return notFound("secret %q not found", m.Name)
 		}
 	}
 	// materialize the input's implicit defaults into the stored spec so
@@ -653,7 +653,7 @@ func (d *daemon) runPipeline(name string, provenance []string, jobID string) (cl
 	for _, pid := range provenance {
 		cm, err := d.store.loadCommitByID(pid)
 		if err != nil {
-			return client.Job{}, fmt.Errorf("provenance commit %s: not found", pid)
+			return client.Job{}, notFound("provenance commit %s: not found", pid)
 		}
 		if seenBranch[cm.Repo+"/"+cm.Branch] {
 			return client.Job{}, fmt.Errorf("provenance contains two commits of branch %s/%s", cm.Repo, cm.Branch)
@@ -867,7 +867,7 @@ func (d *daemon) stopPipeline(name string) error {
 	rec, err := d.loadPipeline(name)
 	if err != nil {
 		pipelineRecMu.Unlock()
-		return fmt.Errorf("pipeline %q not found", name)
+		return notFound("pipeline %q not found", name)
 	}
 	rec.Stopped = true
 	rec.State = statePaused
@@ -894,7 +894,7 @@ func (d *daemon) startPipeline(name string) error {
 	rec, err := d.loadPipeline(name)
 	if err != nil {
 		pipelineRecMu.Unlock()
-		return fmt.Errorf("pipeline %q not found", name)
+		return notFound("pipeline %q not found", name)
 	}
 	if !rec.Stopped {
 		pipelineRecMu.Unlock()
@@ -982,7 +982,7 @@ func (d *daemon) inspectPipeline(name string, ancestry int) (client.PipelineInfo
 		if _, statErr := os.Stat(d.pipelinePath(name)); statErr == nil {
 			return client.PipelineInfo{}, fmt.Errorf("pipeline %q is incomplete", name)
 		}
-		return client.PipelineInfo{}, fmt.Errorf("pipeline %q not found", name)
+		return client.PipelineInfo{}, notFound("pipeline %q not found", name)
 	}
 	if ancestry == 0 {
 		info := rec.info()

@@ -6,6 +6,7 @@ package main
 // pipeline.go (spec validation + CRUD) and jobs.go (lifecycle).
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -172,7 +173,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			if covered[s.Repo+"/"+inputBranch(s)] {
 				return
 			}
-			if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished && !seenInput[h.ID] {
+			if h := d.finishedHead(s.Repo, inputBranch(s)); h.ID != "" && !seenInput[h.ID] {
 				if v, err := d.store.resolveViewByID(h.ID); err == nil {
 					views[key] = v
 					seenInput[h.ID] = true
@@ -321,7 +322,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	outCommit, err := d.store.startCommit(pl.Pipeline.Name, outputBranch(pl), "")
 	if err != nil {
 		fail("start output commit: " + err.Error())
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errNotFound) {
 			// the output repository vanished (D-10): the pipeline fails with
 			// a recorded reason and stops scheduling
 			d.markPipelineFailed(pl.Pipeline.Name, "output repository missing")

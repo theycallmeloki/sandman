@@ -353,7 +353,7 @@ func (d *daemon) serviceProxyH(w http.ResponseWriter, r *http.Request) error {
 	name := r.PathValue("pipeline")
 	rec, ok := serviceRecord(name)
 	if !ok {
-		return fmt.Errorf("service pipeline %q not found", name)
+		return notFound("service pipeline %q not found", name)
 	}
 	// forward the remainder of the path to the service's own endpoint:
 	// the response is identical to the direct one (SB-100 clause 3)
@@ -373,7 +373,7 @@ func (d *daemon) serviceProxyH(w http.ResponseWriter, r *http.Request) error {
 func (d *daemon) inspectServiceH(w http.ResponseWriter, r *http.Request) error {
 	rec, ok := serviceRecord(r.PathValue("name"))
 	if !ok {
-		return fmt.Errorf("service pipeline %q not found", r.PathValue("name"))
+		return notFound("service pipeline %q not found", r.PathValue("name"))
 	}
 	writeJSON(w, rec)
 	return nil

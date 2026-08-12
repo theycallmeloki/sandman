@@ -215,7 +215,7 @@ func (d *daemon) inspectDatum(jobID, datumID string) (client.DatumInfo, error) {
 	dedup := d.loadDedup(rec.Pipeline)
 	st, ok := dedup[datumID]
 	if !ok {
-		return client.DatumInfo{}, fmt.Errorf("datum %q not found in job %q", datumID, jobID)
+		return client.DatumInfo{}, notFound("datum %q not found in job %q", datumID, jobID)
 	}
 	info := datumInfo(datumID, st)
 	if s, ok := rec.DatumStates[datumID]; ok {

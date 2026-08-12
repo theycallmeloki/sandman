@@ -120,7 +120,7 @@ func (d *daemon) requirePipeline(pipeline string) error {
 		if _, statErr := os.Stat(d.pipelinePath(pipeline)); statErr == nil {
 			return fmt.Errorf("pipeline %q is incomplete", pipeline)
 		}
-		return fmt.Errorf("pipeline %q not found", pipeline)
+		return notFound("pipeline %q not found", pipeline)
 	}
 	return nil
 }
@@ -235,7 +235,7 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 		}
 	}
 	if info.ID == "" {
-		return client.Job{}, fmt.Errorf("job %q not found: specify a Job or an OutputCommit", id)
+		return client.Job{}, notFound("job %q not found: specify a Job or an OutputCommit", id)
 	}
 	// the live per-worker status (SB-065/097)
 	if b, err := os.ReadFile(filepath.Join(d.jobDir(info.ID), "workers.json")); err == nil {
@@ -417,6 +417,18 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 	d.stateChanged.signal()
 }
 
+// finishedHead returns the branch's finished head commit, or the zero
+// Commit when the branch has none or its head is unfinished — the empty
+// contribution in input pairings (pairHeads) and the no-view case in
+// input enumeration. The shared query shape: headCommitRec + Finished
+// check.
+func (d *daemon) finishedHead(repo, branch string) client.Commit {
+	if h, err := d.store.headCommitRec(repo, branch); err == nil && h.Finished {
+		return h
+	}
+	return client.Commit{}
+}
+
 // pairHeads resolves the current finished head of every input side, in
 // declaration order; a side with no finished head yields an empty commit —
 // its contribution to the cross is no datums.
@@ -424,9 +436,7 @@ func (d *daemon) pairHeads(in *client.Input) []client.Commit {
 	sides := inputSides(in)
 	heads := make([]client.Commit, len(sides))
 	for i, s := range sides {
-		if h, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil && h.Finished {
-			heads[i] = h
-		}
+		heads[i] = d.finishedHead(s.Repo, inputBranch(s))
 	}
 	return heads
 }
