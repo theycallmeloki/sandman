@@ -182,13 +182,12 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 // worker's internal port (SB-168). The worker is a sandman worker
 // process bearing the placement label; docker runs the service container.
 func TestSB168_RemoteServiceReachable(t *testing.T) {
-	// PARKED: the live assertion hangs (a GET through the external-port
-	// proxy blocks forever while a manual curl succeeds) — root cause
-	// under review, see implementation-review/SB168_D22_ISSUE.md. Run
-	// with SANDBOX_RUN_SB168=1 on a clean docker daemon to exercise it.
-	if os.Getenv("SANDBOX_RUN_SB168") == "" {
-		t.Skip("SB-168 live assertion hangs; set SANDBOX_RUN_SB168=1")
-	}
+	// FIXED (api batch 60): the hang was a missing half-close propagation
+	// in proxyListener (service.go) — the relay's wg.Wait() coupled both
+	// copy directions, so a close-delimited (HTTP/1.0) service response
+	// never propagated its close to the keep-alive client and Go's
+	// transport blocked forever. See
+	// implementation-review/SB168_D22_ISSUE.md (reviewer verdict).
 	if !dockerAvailable() {
 		t.Skip("docker not available")
 	}

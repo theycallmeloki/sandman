@@ -227,21 +227,49 @@ func newBranchCmd() *cobra.Command {
 			},
 		},
 		&cobra.Command{
+			Use:  "inspect <repo> <branch>",
+			Args: cobra.ExactArgs(2),
+			Run: func(_ *cobra.Command, args []string) {
+				b, err := cliClient().InspectBranch(args[0], args[1])
+				if err != nil {
+					die("branch inspect: "+err.Error(), 1)
+				}
+				fmt.Printf("repo: %s\nbranch: %s\nhead: %s\n", b.Repo, b.Branch, b.Head)
+			},
+		},
+		&cobra.Command{
 			Use:  "list [repo]",
 			Args: cobra.MaximumNArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
+				if len(args) == 1 {
+					bs, err := cliClient().ListBranches(args[0])
+					if err != nil {
+						die("branch list: "+err.Error(), 1)
+					}
+					for _, b := range bs {
+						fmt.Printf("%s\t%s\t%s\n", b.Repo, b.Branch, b.Head)
+					}
+					return
+				}
 				repos, err := cliClient().ListRepos()
 				if err != nil {
 					die("branch list: "+err.Error(), 1)
 				}
 				for _, r := range repos {
-					if len(args) == 1 && r.Name != args[0] {
-						continue
-					}
 					for _, b := range r.Branches {
 						fmt.Printf("%s\t%s\n", r.Name, b)
 					}
 				}
+			},
+		},
+		&cobra.Command{
+			Use:  "delete <repo> <branch>",
+			Args: cobra.ExactArgs(2),
+			Run: func(_ *cobra.Command, args []string) {
+				if err := cliClient().DeleteBranch(args[0], args[1]); err != nil {
+					die("branch delete: "+err.Error(), 1)
+				}
+				fmt.Printf("deleted branch %s@%s\n", args[0], args[1])
 			},
 		},
 	)

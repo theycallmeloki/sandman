@@ -318,17 +318,24 @@ func proxyListener(ln net.Listener, internal string) {
 			return
 		}
 		go func(c net.Conn) {
-			defer c.Close()
 			up, err := net.Dial("tcp", internal)
 			if err != nil {
-				return // the process is not up yet: the request is dropped
+				c.Close() // the process is not up yet: the request is dropped
+				return
 			}
-			defer up.Close()
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() { defer wg.Done(); io.Copy(up, c) }()
-			go func() { defer wg.Done(); io.Copy(c, up) }()
-			wg.Wait()
+			// Half-close relay: the two directions are independent, so the
+			// upstream finishing (response complete, or it died) must
+			// propagate to the client and vice versa. A WaitGroup coupling
+			// both directions deadlocks close-delimited (HTTP/1.0) services
+			// behind keep-alive clients: the client holds its side open
+			// waiting for the response, so wg.Wait() never returns and the
+			// client never sees the close that delimits the body.
+			go func() {
+				io.Copy(up, c)
+				up.Close() // client closed: stop the upstream's write side
+			}()
+			io.Copy(c, up)
+			c.Close() // upstream closed: the client must see it
 		}(conn)
 	}
 }

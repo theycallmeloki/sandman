@@ -391,6 +391,91 @@ func (s *apiStore) setHead(repo, branch, id string) error {
 	return nil
 }
 
+// validBranchName rejects names that would escape the refs dir or embed a
+// path separator: a branch is exactly one ref file.
+func validBranchName(b string) bool {
+	return b != "" && b != "." && b != ".." && !strings.ContainsAny(b, "/\\")
+}
+
+// branchRefs lists the repo's branches with their head commit ids (one
+// ref file per branch). A fresh repo with no finished commit has no refs
+// dir and lists empty.
+func (s *apiStore) branchRefs(repo string) ([]client.Branch, error) {
+	if !validName(repo) {
+		return nil, fmt.Errorf("invalid repo name %q", repo)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, err := os.Stat(s.repoDir(repo)); err != nil {
+		return nil, fmt.Errorf("repo %q not found", repo)
+	}
+	entries, err := os.ReadDir(filepath.Join(s.repoDir(repo), "refs"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]client.Branch, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		id, err := os.ReadFile(filepath.Join(s.repoDir(repo), "refs", e.Name()))
+		if err != nil {
+			continue
+		}
+		out = append(out, client.Branch{Repo: repo, Branch: e.Name(), Head: strings.TrimSpace(string(id))})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Branch < out[j].Branch })
+	return out, nil
+}
+
+// branchHead reads one branch's head commit id.
+func (s *apiStore) branchHead(repo, branch string) (string, error) {
+	if !validName(repo) {
+		return "", fmt.Errorf("invalid repo name %q", repo)
+	}
+	if !validBranchName(branch) {
+		return "", fmt.Errorf("invalid branch name %q", branch)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, err := os.Stat(s.repoDir(repo)); err != nil {
+		return "", fmt.Errorf("repo %q not found", repo)
+	}
+	id, err := os.ReadFile(filepath.Join(s.repoDir(repo), "refs", branch))
+	if err != nil {
+		return "", fmt.Errorf("branch %q not found", branch)
+	}
+	return strings.TrimSpace(string(id)), nil
+}
+
+// deleteBranch removes the branch ref. The repo's default branch is
+// protected: the default marker must keep pointing at an existing ref.
+// The branch's commits stay addressable by id.
+func (s *apiStore) deleteBranch(repo, branch string) error {
+	if !validName(repo) {
+		return fmt.Errorf("invalid repo name %q", repo)
+	}
+	if !validBranchName(branch) {
+		return fmt.Errorf("invalid branch name %q", branch)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := os.Stat(s.repoDir(repo)); err != nil {
+		return fmt.Errorf("repo %q not found", repo)
+	}
+	if def, err := os.ReadFile(filepath.Join(s.repoDir(repo), "default")); err == nil && strings.TrimSpace(string(def)) == branch {
+		return fmt.Errorf("cannot delete the default branch %q", branch)
+	}
+	path := filepath.Join(s.repoDir(repo), "refs", branch)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("branch %q not found", branch)
+	}
+	return os.Remove(path)
+}
+
 // ---- commits ----
 
 func newCommitID() string {

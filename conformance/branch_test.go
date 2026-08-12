@@ -95,3 +95,67 @@ func TestSB142_DeferredProcessingAcrossBranches(t *testing.T) {
 		t.Fatalf("p2 output = %q, want x", string(b))
 	}
 }
+
+// TestBranchInspectListDelete — branch inspect/list/delete (1-1 review
+// divergence closure): a repo's branches are enumerable and inspectable
+// by name, a non-default branch is deletable while its commits stay
+// addressable by id, and the default branch is protected.
+func TestBranchInspectListDelete(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
+
+	bs, err := c.ListBranches(repo)
+	if err != nil {
+		t.Fatalf("list branches: %v", err)
+	}
+	if len(bs) != 1 || bs[0].Branch != "master" || bs[0].Head != cm.ID {
+		t.Fatalf("branches = %+v, want exactly master@%s", bs, cm.ID)
+	}
+
+	b, err := c.InspectBranch(repo, "master")
+	if err != nil {
+		t.Fatalf("inspect master: %v", err)
+	}
+	if b.Head != cm.ID {
+		t.Fatalf("inspect master head = %s, want %s", b.Head, cm.ID)
+	}
+
+	// a second branch pointing at the same commit is listed, then
+	// deletable; its commits stay readable by id after deletion
+	if err := c.CreateBranch(repo, "side", cm.ID); err != nil {
+		t.Fatalf("create side branch: %v", err)
+	}
+	bs, err = c.ListBranches(repo)
+	if err != nil {
+		t.Fatalf("list branches after create: %v", err)
+	}
+	if len(bs) != 2 || bs[0].Branch != "master" || bs[1].Branch != "side" {
+		t.Fatalf("branches after create = %+v, want master+side", bs)
+	}
+
+	if err := c.DeleteBranch(repo, "side"); err != nil {
+		t.Fatalf("delete side branch: %v", err)
+	}
+	if bs, err = c.ListBranches(repo); err != nil || len(bs) != 1 || bs[0].Branch != "master" {
+		t.Fatalf("branches after delete = %+v, err %v; want only master", bs, err)
+	}
+	if _, err := c.InspectBranch(repo, "side"); err == nil {
+		t.Fatalf("inspect deleted branch: want an error")
+	}
+	got, err := c.GetFile(cm.ID, "file")
+	if err != nil || string(got) != "x" {
+		t.Fatalf("file after branch delete = %q, err %v; want x (commits addressable by id)", got, err)
+	}
+
+	// the default branch cannot be deleted; a missing repo errors
+	if err := c.DeleteBranch(repo, "master"); err == nil {
+		t.Fatalf("delete the default branch: want an error")
+	}
+	if _, err := c.ListBranches(uniq(t)); err == nil {
+		t.Fatalf("list branches of a missing repo: want an error")
+	}
+	if _, err := c.InspectBranch(uniq(t), "master"); err == nil {
+		t.Fatalf("inspect branch of a missing repo: want an error")
+	}
+}

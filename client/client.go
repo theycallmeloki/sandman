@@ -276,6 +276,32 @@ func (c *Client) CreateBranch(repo, branch, head string) error {
 	return c.do("POST", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch), map[string]string{"head": head}, nil)
 }
 
+// Branch is a named pointer into a repo's commit history (SB-142): Head is
+// the id of the commit the branch currently points at.
+type Branch struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	Head   string `json:"head"`
+}
+
+// ListBranches returns every branch of the repo with its head commit id.
+func (c *Client) ListBranches(repo string) ([]Branch, error) {
+	var out []Branch
+	return out, c.do("GET", "/api/v1/repos/"+url.PathEscape(repo)+"/branches", nil, &out)
+}
+
+// InspectBranch returns the named branch's head commit id.
+func (c *Client) InspectBranch(repo, branch string) (Branch, error) {
+	var out Branch
+	return out, c.do("GET", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch), nil, &out)
+}
+
+// DeleteBranch removes the branch ref (the repo's default branch is
+// protected). The branch's commits stay addressable by id.
+func (c *Client) DeleteBranch(repo, branch string) error {
+	return c.do("DELETE", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch), nil, nil)
+}
+
 // CommitHistory walks the branch's commit chain oldest-first.
 func (c *Client) CommitHistory(repo, branch string) ([]Commit, error) {
 	head, err := c.HeadCommit(repo, branch)

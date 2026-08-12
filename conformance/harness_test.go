@@ -57,23 +57,36 @@ func TestMain(m *testing.M) {
 	daemonStateDir = state
 	daemonName = "conformance-" + strconv.Itoa(daemonPort)
 
-	startDaemon(state)
-	if !waitPort(daemonPort, 15*time.Second) {
-		fmt.Fprintln(os.Stderr, "harness: daemon did not come up")
-		os.Exit(1)
+	// stale sandman-* containers and orphaned daemons/workers from
+	// interrupted runs (a test-timeout SIGKILL kills the test binary,
+	// not its children; the kernel reparents the children to init) hold
+	// the external ports and poison every later run — clean them up
+	// first. The harness binary's path sandman-conformance-<pid>
+	// appears in every child's argv, so pgrep -f finds them; only
+	// processes whose parent is DEAD (PPID 1) are orphans of an
+	// interrupted run — a live concurrent suite's daemons keep their
+	// parent and must never be killed (a broad pkill here would SIGTERM
+	// a sibling suite's daemon: daemon.go exits silently on SIGTERM).
+	// This must run BEFORE startDaemon or we kill our own daemon.
+	if out, err := exec.Command("pgrep", "-f", "sandman-conformance-").Output(); err == nil {
+		for _, pid := range strings.Fields(string(out)) {
+			if ppid := procPPID(pid); ppid == 1 || ppid == 0 {
+				exec.Command("kill", pid).Run()
+			}
+		}
 	}
-
-	// stale sandman-* containers (a SIGKILLed worker or daemon cannot run
-	// its docker rm -f) hold external ports and poison every later run —
-	// remove them up front. The suite is sequential and owns all
-	// sandman-* containers on the host, so this is a clean-slate
-	// precondition (D-22: SB-168's service-container leak class).
 	if dockerAvailable() {
 		if out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-").Output(); err == nil {
 			for _, id := range strings.Fields(string(out)) {
 				exec.Command("docker", "rm", "-f", id).Run()
 			}
 		}
+	}
+
+	startDaemon(state)
+	if !waitPort(daemonPort, 15*time.Second) {
+		fmt.Fprintln(os.Stderr, "harness: daemon did not come up")
+		os.Exit(1)
 	}
 
 	c = client.New(fmt.Sprintf("127.0.0.1:%d", daemonPort))
@@ -109,6 +122,28 @@ func dockerAvailable() bool {
 		return false
 	}
 	return exec.Command("docker", "version").Run() == nil
+}
+
+// procPPID reads a process's parent pid from /proc/<pid>/stat. Returns -1
+// when the process is gone or unreadable.
+func procPPID(pid string) int {
+	b, err := os.ReadFile("/proc/" + pid + "/stat")
+	if err != nil {
+		return -1
+	}
+	// stat layout: pid (comm) state ppid ... — comm may contain spaces
+	// and parens, so split after the LAST ')'.
+	s := string(b)
+	i := strings.LastIndexByte(s, ')')
+	f := strings.Fields(s[i+1:])
+	if len(f) < 2 {
+		return -1
+	}
+	n, err := strconv.Atoi(f[1])
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // restartDaemon kills the daemon and starts a fresh one on the same port

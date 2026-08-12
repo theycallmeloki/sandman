@@ -91,6 +91,9 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/repos/{name}", hErr(d.deleteRepoH))
 	mux.HandleFunc("POST /api/v1/repos/{name}/commits", hErr(d.startCommitH))
 	mux.HandleFunc("GET /api/v1/repos/{name}/branches/{branch}/head", hErr(d.headCommitH))
+	mux.HandleFunc("GET /api/v1/repos/{name}/branches", hErr(d.listBranchesH))
+	mux.HandleFunc("GET /api/v1/repos/{name}/branches/{branch}", hErr(d.inspectBranchH))
+	mux.HandleFunc("DELETE /api/v1/repos/{name}/branches/{branch}", hErr(d.deleteBranchH))
 	mux.HandleFunc("POST /api/v1/repos/{name}/branches/{branch}", hErr(d.createBranchH))
 	mux.HandleFunc("POST /api/v1/commits/{id}/finish", hErr(d.finishCommitH))
 	mux.HandleFunc("GET /api/v1/commits/{id}", hErr(d.inspectCommitH))
@@ -251,6 +254,35 @@ func (d *daemon) createBranchH(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("invalid request body")
 	}
 	if err := d.createBranch(r.PathValue("name"), r.PathValue("branch"), body.Head); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// listBranchesH lists the repo's branches with their head commit ids.
+func (d *daemon) listBranchesH(w http.ResponseWriter, r *http.Request) error {
+	bs, err := d.store.branchRefs(r.PathValue("name"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, bs)
+	return nil
+}
+
+// inspectBranchH returns the named branch's head commit id.
+func (d *daemon) inspectBranchH(w http.ResponseWriter, r *http.Request) error {
+	head, err := d.store.branchHead(r.PathValue("name"), r.PathValue("branch"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, client.Branch{Repo: r.PathValue("name"), Branch: r.PathValue("branch"), Head: head})
+	return nil
+}
+
+// deleteBranchH removes the branch ref (the default branch is protected).
+func (d *daemon) deleteBranchH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.store.deleteBranch(r.PathValue("name"), r.PathValue("branch")); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})

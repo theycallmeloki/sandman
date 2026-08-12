@@ -90,6 +90,7 @@ func cmdWorker(args []string) {
 	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (required)")
 	token := fs.String("token", "", "join token the control plane authenticates with")
 	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
+	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
 	var labels strSliceFlag
 	fs.Var(&labels, "label", "placement label this host bears (repeatable)")
 	fs.Parse(args)
@@ -98,12 +99,39 @@ func cmdWorker(args []string) {
 		os.Exit(2)
 	}
 
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
+	if *advertise != "" {
+		if *port == 0 {
+			fmt.Fprintln(os.Stderr, "sandman worker: -advertise requires an explicit -port")
+			os.Exit(2)
+		}
+		if _, _, err := net.SplitHostPort(*advertise); err != nil {
+			fmt.Fprintf(os.Stderr, "sandman worker: -advertise must be host:port: %v\n", err)
+			os.Exit(2)
+		}
+	}
+
+	// the exec listener binds loopback by default: the endpoint is
+	// unauthenticated, so it must not be reachable off-host unless the
+	// operator explicitly advertises a reachable address (remote
+	// placement, SB-167) — then it listens on every interface so the
+	// advertised host is actually reachable, and registers the
+	// advertised address instead of the literal listener address (the
+	// control plane dials h.Addr for both exec and the service's
+	// internal port, so a loopback registration would make the control
+	// plane dial ITS OWN loopback on a true remote host).
+	bind := fmt.Sprintf("127.0.0.1:%d", *port)
+	if *advertise != "" {
+		bind = fmt.Sprintf("0.0.0.0:%d", *port)
+	}
+	ln, err := net.Listen("tcp", bind)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sandman worker: listen: %v\n", err)
 		os.Exit(1)
 	}
 	addr := ln.Addr().String()
+	if *advertise != "" {
+		addr = *advertise
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /exec", func(w http.ResponseWriter, r *http.Request) {
 		var req execRequest
