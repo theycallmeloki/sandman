@@ -19,8 +19,6 @@ package main
 // "outside of transaction", applying nothing.
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -48,11 +46,7 @@ func (d *daemon) txExists(id string) error {
 	return nil
 }
 
-func newTxID(node string) string {
-	b := make([]byte, 6)
-	rand.Read(b)
-	return node + "-tx-" + hex.EncodeToString(b)
-}
+func newTxID(node string) string { return newID(node, "tx") }
 
 // txOp is one staged operation. Baseline is the pipeline's version when
 // the op was staged: finish refuses if the live pipeline has since been
@@ -442,7 +436,7 @@ func (d *daemon) waitJobSettled(id string) {
 			}
 		} else {
 			missingSince = time.Time{}
-			if rec.State != "running" {
+			if rec.State != stateRunning {
 				return
 			}
 		}

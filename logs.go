@@ -68,7 +68,7 @@ func (l *logCapture) Write(p []byte) (int, error) {
 }
 
 func (l *logCapture) emit(line string) {
-	b, _ := json.Marshal(logLineRec{T: time.Now().UTC().Format(time.RFC3339Nano), Line: strings.TrimSuffix(line, "\r")})
+	b, _ := json.Marshal(logLineRec{T: now(), Line: strings.TrimSuffix(line, "\r")})
 	b = append(b, '\n')
 	l.f.Write(b)
 }

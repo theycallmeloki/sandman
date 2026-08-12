@@ -158,6 +158,33 @@ func newAPIStore(stateDir string) *apiStore {
 
 // ---- name and path validation ----
 
+// now returns the current UTC time in the wire format every durable
+// record timestamp uses (RFC3339Nano). One spelling, applied everywhere,
+// so a format change is one line.
+func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// The closed state and reason vocabularies are consts, not literals:
+// these strings are persisted in JSON records and asserted byte-for-byte
+// by the conformance suite, so one spelling per vocabulary prevents a
+// silent desync (a typo in a literal would change the wire contract).
+const (
+	stateRunning   = "running"
+	stateStandby   = "standby"
+	statePaused    = "paused"
+	stateFailure   = "failure"
+	stateCrashed   = "crashed"
+	stateStopped   = "stopped"
+	stateSuccess   = "success"
+	stateKilled    = "killed"
+	stateFailed    = "failed"
+	stateSkipped   = "skipped"
+	stateRecovered = "recovered"
+
+	reasonJobCancelled    = "job cancelled"
+	reasonDaemonRestarted = "daemon restarted mid-job"
+	reasonNoCommandStdin  = "no command specified but stdin lines provided"
+)
+
 // validName rejects names that could escape the store directory or collide
 // with store internals.
 func validName(name string) bool {
@@ -484,6 +511,19 @@ func newCommitID() string {
 	return hex.EncodeToString(b)
 }
 
+// newID generates a unique id with a node prefix, an optional kind, and
+// a random component. crypto/rand never fails (Go 1.24+), so the read is
+// unchecked; the fabric RUN verb uses the same scheme (its old
+// pid+nanos%1e6 id was a six-digit collision space).
+func newID(node, kind string) string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	if kind == "" {
+		return node + "-" + hex.EncodeToString(b)
+	}
+	return node + "-" + kind + "-" + hex.EncodeToString(b)
+}
+
 // startCommit opens a new revision on the branch. The repo is created if it
 // does not exist (pipeline output repos are born this way). The parent is
 // the branch's finished head at start time.
@@ -506,7 +546,7 @@ func (s *apiStore) startCommit(repo, branch, description string) (client.Commit,
 		Description: description,
 		ParentID:    s.headCommit(repo, branch),
 		Started:     true,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		CreatedAt:   now(),
 	}
 	if err := s.saveCommit(rec); err != nil {
 		return client.Commit{}, err

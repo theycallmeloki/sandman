@@ -162,7 +162,7 @@ func drawTable(t *tview.Table, stats []nodeStats) int {
 		mem := ""
 		if ns.HostMemT > 0 {
 			ratio := float64(ns.HostMemU) / float64(ns.HostMemT)
-			mem = fmt.Sprintf("%s %s / %s · %.1f%%", memBar(ratio, 14), humanBytes(ns.HostMemU), humanBytes(ns.HostMemT), ns.HostMemPerc)
+			mem = fmt.Sprintf("%s %s / %s · %.1f%%", memBar(ratio, 14), humanSize(ns.HostMemU), humanSize(ns.HostMemT), ns.HostMemPerc)
 		}
 		t.SetCell(row, 3, tview.NewTableCell(mem).SetTextColor(utilColor(ns.HostMemPerc)))
 		row++
@@ -196,7 +196,7 @@ func drawTable(t *tview.Table, stats []nodeStats) int {
 			mem := ""
 			if c.MemLimit > 0 {
 				ratio := float64(c.MemBytes) / float64(c.MemLimit)
-				mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 16), humanBytes(c.MemBytes), humanBytes(c.MemLimit))
+				mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 16), humanSize(c.MemBytes), humanSize(c.MemLimit))
 			}
 			t.SetCell(row, 3, tview.NewTableCell(mem).SetTextColor(color))
 			row++
@@ -235,18 +235,4 @@ func memBar(ratio float64, width int) string {
 	}
 	filled := int(ratio * float64(width))
 	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-}
-
-func humanBytes(n uint64) string {
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
-	f := float64(n)
-	i := 0
-	for f >= 1024 && i < len(units)-1 {
-		f /= 1024
-		i++
-	}
-	if i == 0 {
-		return fmt.Sprintf("%dB", n)
-	}
-	return fmt.Sprintf("%.1f%s", f, units[i])
 }

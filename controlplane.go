@@ -8,8 +8,6 @@ package main
 // pipeline's output repo, and records success/failure.
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -499,12 +497,12 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 			return nil, err
 		}
 	}
-	rec := pipelineRec{Pipeline: p, State: "running", Version: 1}
+	rec := pipelineRec{Pipeline: p, State: stateRunning, Version: 1}
 	if len(p.Transform.Cmd) == 0 && len(p.Transform.Stdin) > 0 {
 		// No command to feed the stdin lines to: accepted, but the pipeline
 		// fails as soon as it would start (SB-149).
-		rec.State = "failure"
-		rec.Reason = "no command specified but stdin lines provided"
+		rec.State = stateFailure
+		rec.Reason = reasonNoCommandStdin
 	}
 	for _, s := range inputSides(p.Input) {
 		if s.Cron != "" {
@@ -529,7 +527,7 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 // returns the spawned job's id, or "" when nothing was scheduled — the
 // caller can wait for exactly that job to settle.
 func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
-	if rec.State == "failure" || rec.Stopped {
+	if rec.State == stateFailure || rec.Stopped {
 		return ""
 	}
 	heads := d.pairHeads(rec.Pipeline.Input)
@@ -583,8 +581,8 @@ func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, i
 	if rec.Pipeline.Standby {
 		standbyMu.Lock()
 		standbyActive[rec.Pipeline.Name]++
-		if rec.State != "running" {
-			rec.State = "running"
+		if rec.State != stateRunning {
+			rec.State = stateRunning
 			d.savePipeline(rec)
 		}
 		standbyMu.Unlock()
@@ -624,8 +622,8 @@ func (d *daemon) standbySettle(name string) {
 	if err != nil || !rec.Pipeline.Standby || rec.Stopped {
 		return
 	}
-	if rec.State == "running" {
-		rec.State = "standby"
+	if rec.State == stateRunning {
+		rec.State = stateStandby
 		d.savePipeline(rec)
 	}
 }
@@ -704,7 +702,7 @@ func (d *daemon) runPipeline(name string, provenance []string, jobID string) (cl
 // standby state when it has no work to do: with no finished input head on
 // any side, nothing will be scheduled until a commit arrives (SB-049).
 func (d *daemon) standbyIdle(rec *pipelineRec) {
-	if !rec.Pipeline.Standby || rec.Stopped || rec.State == "failure" || rec.State == "crashed" {
+	if !rec.Pipeline.Standby || rec.Stopped || rec.State == stateFailure || rec.State == stateCrashed {
 		return
 	}
 	any := false
@@ -715,7 +713,7 @@ func (d *daemon) standbyIdle(rec *pipelineRec) {
 		}
 	}
 	if !any {
-		rec.State = "standby"
+		rec.State = stateStandby
 		d.savePipeline(rec)
 	}
 }
@@ -775,7 +773,7 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 	v := existing.Version + 1
 	rec := pipelineRec{
 		Pipeline:  p,
-		State:     "running",
+		State:     stateRunning,
 		Stopped:   existing.Stopped,
 		StoppedAt: existing.StoppedAt,
 		Version:   v,
@@ -787,10 +785,10 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 		os.Remove(d.dedupPath(name))
 	}
 	if len(p.Transform.Cmd) == 0 && len(p.Transform.Stdin) > 0 {
-		rec.State = "failure"
-		rec.Reason = "no command specified but stdin lines provided"
+		rec.State = stateFailure
+		rec.Reason = reasonNoCommandStdin
 	} else if existing.Stopped {
-		rec.State = "paused" // an update must not restart a paused pipeline (SB-044)
+		rec.State = statePaused // an update must not restart a paused pipeline (SB-044)
 	}
 	rec.SpecCommit = d.writeSpecCommit(name, p, v)
 	d.archiveVersion(&rec)
@@ -866,7 +864,7 @@ func (d *daemon) loadAllPipelineRecs() []*pipelineRec {
 }
 
 // stopPipeline pauses the pipeline: the persistent Stopped flag is set, the
-// transient state reports "paused" (SB-028), and the input head at stop
+// transient state reports statePaused (SB-028), and the input head at stop
 // time becomes the backlog watermark.
 func (d *daemon) stopPipeline(name string) error {
 	pipelineRecMu.Lock()
@@ -876,7 +874,7 @@ func (d *daemon) stopPipeline(name string) error {
 		return fmt.Errorf("pipeline %q not found", name)
 	}
 	rec.Stopped = true
-	rec.State = "paused"
+	rec.State = statePaused
 	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil {
 		rec.StoppedAt = head.ID
 	}
@@ -908,7 +906,7 @@ func (d *daemon) startPipeline(name string) error {
 	}
 	stopAt := rec.StoppedAt
 	rec.Stopped = false
-	rec.State = "running"
+	rec.State = stateRunning
 	rec.StoppedAt = ""
 	err = d.savePipeline(rec)
 	pipelineRecMu.Unlock()
@@ -1122,12 +1120,12 @@ func (rec *pipelineRec) info() client.PipelineInfo {
 // removed unless keepRepo is set (SB-157). An incomplete pipeline is
 // deletable by name only (SB-144).
 func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
-	rec, loadErr := d.loadPipeline(name)
+	_, loadErr := d.loadPipeline(name)
 	if loadErr != nil {
 		if _, err := os.Stat(d.pipelinePath(name)); err != nil {
 			return nil // deleting an already-deleted pipeline is a no-op (SB-010)
 		}
-		rec = nil // incomplete pipeline: name-only delete
+		// incomplete pipeline: name-only delete
 	} else if !force {
 		for _, other := range d.loadAllPipelineRecs() {
 			if other.Pipeline.Name == name || other.Pipeline.Input == nil {
@@ -1157,7 +1155,6 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 			d.store.deleteRepo(name, true) // internal: the pipeline is gone
 		}
 	}
-	_ = rec
 	return nil
 }
 
@@ -1399,13 +1396,13 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 // work left and returns to standby.
 func (d *daemon) markStaleJobsFailed() {
 	for _, j := range d.mustListJobs() {
-		if j.State == "running" {
-			rec := jobRec{ID: j.ID, Pipeline: j.Pipeline, State: "failure",
-				Reason: "daemon restarted mid-job", InputCommits: j.InputCommits,
-				OutputCommit: j.OutputCommit, Started: j.Started, Finished: time.Now().UTC().Format(time.RFC3339Nano)}
+		if j.State == stateRunning {
+			rec := jobRec{ID: j.ID, Pipeline: j.Pipeline, State: stateFailure,
+				Reason: reasonDaemonRestarted, InputCommits: j.InputCommits,
+				OutputCommit: j.OutputCommit, Started: j.Started, Finished: now()}
 			d.saveJob(&rec)
-			if p, err := d.loadPipeline(j.Pipeline); err == nil && p.Pipeline.Standby && p.State == "running" {
-				p.State = "standby"
+			if p, err := d.loadPipeline(j.Pipeline); err == nil && p.Pipeline.Standby && p.State == stateRunning {
+				p.State = stateStandby
 				d.savePipeline(p)
 			}
 		}
@@ -1428,17 +1425,15 @@ func (d *daemon) jobByOutput(commitID string) (client.Job, bool) {
 	return client.Job{}, false
 }
 
-func newJobID(node string) string {
-	b := make([]byte, 6)
-	rand.Read(b)
-	return node + "-" + hex.EncodeToString(b)
-}
+// newJobID builds a job's unique id: <node>-<hex> (kept byte-identical
+// to the historical format).
+func newJobID(node string) string { return newID(node, "") }
 
 // newJobRec builds a job's initial record: the running state, the input
 // pairing it consumed, and the pipeline-version snapshots (SB-040/143).
 func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
-	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: "running",
-		Started: time.Now().UTC().Format(time.RFC3339Nano),
+	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: stateRunning,
+		Started: now(),
 		Version: pl.Version, Transform: pl.Pipeline.Transform, Input: pl.Pipeline.Input}
 	seen := map[string]bool{}
 	for _, h := range heads {
@@ -1451,7 +1446,84 @@ func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
 }
 
 // triggerForCommit launches one job per running pipeline subscribed to the
-// commit's repo. Jobs run in their own goroutines; the trigger never blocks
+// commit's repo. Jobs run in their own goroutines; the trigger never
+// blocks. It is called by the commit-finish callers (the HTTP handler,
+// job output, cron, spout, git push).
+func (d *daemon) triggerForCommit(cm client.Commit) {
+	// size triggers watching the commit's branch accumulate their bytes and
+	// may fire (SB-160); the trigger commits they create re-enter here
+	d.accumulateTriggers(cm)
+	pipes, _ := d.listPipelinesFiltered(nil, "", false)
+	for _, p := range pipes {
+		if p.State == stateFailure || p.State == stateCrashed {
+			continue
+		}
+		// A pipeline whose transaction head job has not been scheduled yet
+		// must not be triggered twice: the transaction coordinator is the
+		// sole scheduler for it (SB-162: exactly one job per update).
+		if txNoteTrigger(p.Name) {
+			continue
+		}
+		rec, err := d.loadPipeline(p.Name)
+		if err != nil || rec.Pipeline.Input == nil {
+			continue
+		}
+		if rec.Stopped {
+			continue // stopped pipelines ignore new commits (SB-048)
+		}
+		if rec.Pipeline.Service != nil {
+			// a service is never triggered per commit: its single
+			// long-lived job refreshes its served input itself (SB-100)
+			continue
+		}
+		if !pipelineConsumes(rec.Pipeline.Input, cm.Repo, cm.Branch) {
+			continue
+		}
+		// the pairing at trigger time: the new commit on its side, each
+		// other side at its current head (SB-120)
+		heads := d.pairHeads(rec.Pipeline.Input)
+		// a commit produced by a failed job propagates the failure: the
+		// consuming pipeline's job is recorded failed without executing
+		// (SB-022)
+		propagated := ""
+		if j, ok := d.jobByOutput(cm.ID); ok && j.State == stateFailure {
+			propagated = "upstream job " + j.ID + " failed: " + j.Reason
+		}
+		// exactly one job per input pairing: two sides' commits landing
+		// near-simultaneously can each pair with the other's fresh head,
+		// and the second trigger must not spawn a duplicate job for the
+		// same input set (SB-056: one job per wave, never extra). The
+		// duplicate check and the job record's creation are atomic, so a
+		// racing trigger sees the record instead of double-spawning.
+		triggerMu.Lock()
+		if d.hasRunningJobWithInputs(rec.Pipeline.Name, heads) {
+			triggerMu.Unlock()
+			continue
+		}
+		// provenance consistency: two sides that derive from the same
+		// source branch must pair at the same source revision. A trigger
+		// that pairs a fresh commit with the other side's still-stale head
+		// (the other side has not caught up yet) is deferred instead of
+		// spawning a mismatched job — the catch-up trigger will form the
+		// coherent pairing (SB-018/019 diamonds: one commit per source
+		// revision, never one per dependency path).
+		if !d.crossPairingConsistent(heads) {
+			triggerMu.Unlock()
+			continue
+		}
+		id := newJobID(d.name)
+		jr := newJobRec(*rec, heads, id)
+		d.saveJob(jr) // creates the job dir atomically
+		triggerMu.Unlock()
+		d.spawnJob(rec, heads, propagated, id, jr)
+	}
+	// a finished commit always wakes the blocking waits, even when no
+	// job spawned (a service pipeline consumes the commit by refreshing
+	// its served input; an empty flush re-checks its closure): services
+	// and flushes advance on the signal
+	d.stateChanged.signal()
+}
+
 // pairHeads resolves the current finished head of every input side, in
 // declaration order; a side with no finished head yields an empty commit —
 // its contribution to the cross is no datums.
@@ -1500,82 +1572,6 @@ func inputConsumesRepo(in *client.Input, repo string) bool {
 	return false
 }
 
-// the caller (the HTTP handler that finished the commit).
-func (d *daemon) triggerForCommit(cm client.Commit) {
-	// size triggers watching the commit's branch accumulate its bytes and
-	// may fire (SB-160); the trigger commits they create re-enter here
-	d.accumulateTriggers(cm)
-	pipes, _ := d.listPipelinesFiltered(nil, "", false)
-	for _, p := range pipes {
-		if p.State == "failure" || p.State == "crashed" {
-			continue
-		}
-		// A pipeline whose transaction head job has not been scheduled yet
-		// must not be triggered twice: the transaction coordinator is the
-		// sole scheduler for it (SB-162: exactly one job per update).
-		if txNoteTrigger(p.Name) {
-			continue
-		}
-		rec, err := d.loadPipeline(p.Name)
-		if err != nil || rec.Pipeline.Input == nil {
-			continue
-		}
-		if rec.Stopped {
-			continue // stopped pipelines ignore new commits (SB-048)
-		}
-		if rec.Pipeline.Service != nil {
-			// a service is never triggered per commit: its single
-			// long-lived job refreshes its served input itself (SB-100)
-			continue
-		}
-		if !pipelineConsumes(rec.Pipeline.Input, cm.Repo, cm.Branch) {
-			continue
-		}
-		// the pairing at trigger time: the new commit on its side, each
-		// other side at its current head (SB-120)
-		heads := d.pairHeads(rec.Pipeline.Input)
-		// a commit produced by a failed job propagates the failure: the
-		// consuming pipeline's job is recorded failed without executing
-		// (SB-022)
-		propagated := ""
-		if j, ok := d.jobByOutput(cm.ID); ok && j.State == "failure" {
-			propagated = "upstream job " + j.ID + " failed: " + j.Reason
-		}
-		// exactly one job per input pairing: two sides' commits landing
-		// near-simultaneously can each pair with the other's fresh head,
-		// and the second trigger must not spawn a duplicate job for the
-		// same input set (SB-056: one job per wave, never extra). The
-		// duplicate check and the job record's creation are atomic, so a
-		// racing trigger sees the record instead of double-spawning.
-		triggerMu.Lock()
-		if d.hasRunningJobWithInputs(rec.Pipeline.Name, heads) {
-			triggerMu.Unlock()
-			continue
-		}
-		// provenance consistency: two sides that derive from the same
-		// source branch must pair at the same source revision. A trigger
-		// that pairs a fresh commit with the other side's still-stale head
-		// (the other side has not caught up yet) is deferred instead of
-		// spawning a mismatched job — the catch-up trigger will form the
-		// coherent pairing (SB-018/019 diamonds: one commit per source
-		// revision, never one per dependency path).
-		if !d.crossPairingConsistent(heads) {
-			triggerMu.Unlock()
-			continue
-		}
-		id := newJobID(d.name)
-		jr := newJobRec(*rec, heads, id)
-		d.saveJob(jr) // creates the job dir atomically
-		triggerMu.Unlock()
-		d.spawnJob(rec, heads, propagated, id, jr)
-	}
-	// a finished commit always wakes the blocking waits, even when no
-	// job spawned (a service pipeline consumes the commit by refreshing
-	// its served input; an empty flush re-checks its closure): services
-	// and flushes advance on the signal
-	d.stateChanged.signal()
-}
-
 // triggerMu serializes the duplicate check and the job record's creation
 // in triggerForCommit: a racing trigger for the same input pairing must
 // observe the record the first trigger just saved (SB-056).
@@ -1592,7 +1588,7 @@ func (d *daemon) hasRunningJobWithInputs(pipeline string, heads []client.Commit)
 		}
 	}
 	for _, j := range d.mustListJobs() {
-		if j.Pipeline != pipeline || j.State != "running" {
+		if j.Pipeline != pipeline || j.State != stateRunning {
 			continue
 		}
 		if len(j.InputCommits) != len(set) {
@@ -1774,7 +1770,7 @@ func (d *daemon) markPipelineFailed(name, reason string) {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
 	if rec, err := d.loadPipeline(name); err == nil && !rec.Stopped {
-		rec.State = "failure"
+		rec.State = stateFailure
 		rec.Reason = reason
 		d.savePipeline(rec)
 	}
@@ -1786,7 +1782,7 @@ func (d *daemon) markPipelineCrashed(name, reason string) {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
 	if rec, err := d.loadPipeline(name); err == nil && !rec.Stopped {
-		rec.State = "crashed"
+		rec.State = stateCrashed
 		rec.Reason = reason
 		d.savePipeline(rec)
 	}
@@ -1798,8 +1794,8 @@ func (d *daemon) markPipelineCrashed(name, reason string) {
 func (d *daemon) markPipelineRunning(name string) {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
-	if rec, err := d.loadPipeline(name); err == nil && rec.State == "crashed" {
-		rec.State = "running"
+	if rec, err := d.loadPipeline(name); err == nil && rec.State == stateCrashed {
+		rec.State = stateRunning
 		rec.Reason = ""
 		d.savePipeline(rec)
 	}
@@ -2147,7 +2143,7 @@ func (d *daemon) checkMetadata() error {
 // around (product decision D-08).
 func (d *daemon) reset() error {
 	if err := d.checkMetadata(); err != nil {
-		return fmt.Errorf("reset aborted: corrupted metadata (%v)", err)
+		return fmt.Errorf("reset aborted: corrupted metadata (%w)", err)
 	}
 	// cancel in-flight work so no goroutine writes into removed state
 	jobsMu.Lock()
@@ -2477,9 +2473,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// killed without doing any work and passes the slot on.
 	gate := d.jobGate(pl.Pipeline.Name)
 	if !gate.enter(rj) {
-		rec.State = "killed"
-		rec.Reason = "job cancelled"
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.State = stateKilled
+		rec.Reason = reasonJobCancelled
+		rec.Finished = now()
 		if _, err := os.Stat(filepath.Join(dir, "job.json")); err == nil {
 			// the record may have been deleted while the job was queued
 			// (deleteJob removes the whole job directory); never resurrect
@@ -2494,9 +2490,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		// never executed (SB-022). The empty output commit keeps the DAG's
 		// commits continuous, so the failure reaches every downstream stage
 		// and the flush can walk the chain.
-		rec.State = "failure"
+		rec.State = stateFailure
 		rec.Reason = propagated
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.Finished = now()
 		d.saveJob(rec) // terminal state durable before the commit finishes
 		if oc, err := d.store.startCommit(pl.Pipeline.Name, outputBranch(pl), ""); err == nil {
 			rec.OutputCommit = oc.ID
@@ -2508,9 +2504,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 
 	fail := func(reason string) {
-		rec.State = "failure"
+		rec.State = stateFailure
 		rec.Reason = reason
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.Finished = now()
 		d.saveJob(rec)
 	}
 
@@ -2534,9 +2530,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 				fmt.Sprintf("no execution host bearing placement label %q", pl.Pipeline.Placement))
 			select {
 			case <-rj.cancelCh:
-				rec.State = "killed"
-				rec.Reason = "job cancelled"
-				rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+				rec.State = stateKilled
+				rec.Reason = reasonJobCancelled
+				rec.Finished = now()
 				d.saveJob(rec)
 				return
 			case <-time.After(500 * time.Millisecond):
@@ -2720,8 +2716,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// propagates through the DAG (SB-056: exactly one commit per wave;
 	// SB-120's lone cross jobs produce nothing downstream)
 	if len(datums) == 0 {
-		rec.State = "success"
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.State = stateSuccess
+		rec.Finished = now()
 		d.saveJob(rec)
 		return
 	}
@@ -2755,8 +2751,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	rec.DatumStates = map[string]string{}
 	var todo []datum
 	for _, dt := range datums {
-		if st, ok := dedup[dt.ID]; ok && !reprocess && st.Outcome == "success" && st.Hash == dt.Hash {
-			rec.DatumStates[dt.ID] = "skipped"
+		if st, ok := dedup[dt.ID]; ok && !reprocess && st.Outcome == stateSuccess && st.Hash == dt.Hash {
+			rec.DatumStates[dt.ID] = stateSkipped
 			continue
 		}
 		if _, ok := dedup[dt.ID]; !ok {
@@ -2876,13 +2872,13 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			rec.DatumStates[dt.ID] = dedup[dt.ID].Outcome
 		}
 		switch rec.DatumStates[dt.ID] {
-		case "success":
+		case stateSuccess:
 			rec.Processed++
-		case "recovered":
+		case stateRecovered:
 			rec.Recovered++
 		case "failed":
 			rec.Failed++
-		case "skipped":
+		case stateSkipped:
 			rec.Skipped++
 		}
 	}
@@ -2893,13 +2889,13 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		// schedulable (SB-082).
 		killed := rj.cancelled.Load()
 		if killed {
-			rec.State = "killed"
-			rec.Reason = "job cancelled"
+			rec.State = stateKilled
+			rec.Reason = reasonJobCancelled
 		} else {
-			rec.State = "failure"
+			rec.State = stateFailure
 			rec.Reason = failedDatumReason(dedup, datums)
 		}
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.Finished = now()
 		// the terminal state is durable before the output commit finishes,
 		// so the downstream trigger observes the failure (SB-022)
 		d.saveJob(rec)
@@ -2970,16 +2966,16 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// (SB-013)
 	if pl.Pipeline.Egress != nil {
 		if err := d.runEgress(pl, fin); err != nil {
-			rec.State = "failure"
+			rec.State = stateFailure
 			rec.Reason = "egress: " + err.Error()
-			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+			rec.Finished = now()
 			d.saveJob(rec)
 			d.saveDedup(pl.Pipeline.Name, dedup)
 			return
 		}
 	}
-	rec.State = "success"
-	rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+	rec.State = stateSuccess
+	rec.Finished = now()
 	d.saveJob(rec)
 	d.saveDedup(pl.Pipeline.Name, dedup)
 
@@ -3035,10 +3031,6 @@ func copyDir(src, dst string) int {
 	return 0
 }
 
-// runPipelineContainer runs the transform in a throwaway container and
-// returns its exit code plus a tail of combined stderr/stdout for failure
-// reporting. capture, when non-nil, also receives the full combined output
-// for the log store (timestamped, line-split). inName is the input's
 // datumSpec describes one command run through the execution-backend seam
 // (D-23): the transform's image, argv, env, mounts, resources, identity,
 // and stdin, plus the PathMap translating the execution-internal paths

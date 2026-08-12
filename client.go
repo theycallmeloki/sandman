@@ -13,11 +13,6 @@ import (
 	"time"
 )
 
-func die(msg string, code int) {
-	fmt.Fprintln(os.Stderr, "sandman:", msg)
-	os.Exit(code)
-}
-
 // resolveNode turns a node name into host:port. Resolution order: literal
 // addr, local registry/peers files, a quick mDNS browse, then hostname:4242.
 func resolveNode(node, state string) (string, error) {
@@ -70,7 +65,7 @@ func clientRun(node, state, image string, env, argv []string) {
 		die("handshake failed", 1)
 	}
 
-	jobID := fmt.Sprintf("%s-%d-%d", sanitizeName(hostname()), os.Getpid(), time.Now().UnixNano()%1_000_000)
+	jobID := newID(sanitizeName(hostname()), "")
 	if err := writeLine(w, "RUN"); err != nil {
 		die("send: "+err.Error(), 1)
 	}

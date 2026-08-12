@@ -94,7 +94,7 @@ func cmdWorker(args []string) {
 	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (required)")
 	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
 	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
-	var labels strSliceFlag
+	var labels multiFlag
 	fs.Var(&labels, "label", "placement label this host bears (repeatable)")
 	fs.Parse(args)
 	if *name == "" || *control == "" {
@@ -300,14 +300,6 @@ func workerHandleConn(name string, c net.Conn, r *bufio.Reader) {
 		time.Sleep(300 * time.Millisecond)
 		writeStatsReply(w, cpuBusyDelta(prev, readCpu()))
 	}
-}
-
-type strSliceFlag []string
-
-func (s *strSliceFlag) String() string { return strings.Join(*s, ",") }
-func (s *strSliceFlag) Set(v string) error {
-	*s = append(*s, v)
-	return nil
 }
 
 // registerHost joins (or refreshes) the worker in the control plane's

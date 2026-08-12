@@ -75,9 +75,9 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	d.saveJob(rec)
 	gate := d.jobGate(pl.Pipeline.Name)
 	if !gate.enter(rj) {
-		rec.State = "killed"
-		rec.Reason = "job cancelled"
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.State = stateKilled
+		rec.Reason = reasonJobCancelled
+		rec.Finished = now()
 		if _, err := os.Stat(filepath.Join(dir, "job.json")); err == nil {
 			d.saveJob(rec)
 		}
@@ -107,9 +107,9 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		argv[len(argv)-4] = "alpine"
 	}
 	if exec.Command("docker", argv...).Run() != nil {
-		rec.State = "failure"
+		rec.State = stateFailure
 		rec.Reason = "spout container failed to start"
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.Finished = now()
 		d.saveJob(rec)
 		return
 	}
@@ -119,22 +119,22 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	settle := func(state, reason string) {
 		rec.State = state
 		rec.Reason = reason
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.Finished = now()
 		d.saveJob(rec)
 	}
 	for {
 		if rj.cancelled.Load() {
 			exec.Command("docker", "kill", cname).Run()
-			settle("killed", "job cancelled")
+			settle(stateKilled, reasonJobCancelled)
 			break
 		}
 		// the container exited? (a natural end settles the job)
 		if out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", cname).Output(); err != nil {
-			settle("failure", "spout container exited unexpectedly")
+			settle(stateFailure, "spout container exited unexpectedly")
 			break
 		} else if strings.TrimSpace(string(out)) != "true" {
 			exec.Command("docker", "rm", "-f", cname).Run()
-			settle("success", "")
+			settle(stateSuccess, "")
 			break
 		}
 		if changed := spoutDiff(outDir, committedOut); len(changed) > 0 {

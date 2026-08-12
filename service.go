@@ -96,9 +96,9 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 	d.saveJob(rec)
 	gate := d.jobGate(pl.Pipeline.Name)
 	if !gate.enter(rj) {
-		rec.State = "killed"
-		rec.Reason = "job cancelled"
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.State = stateKilled
+		rec.Reason = reasonJobCancelled
+		rec.Finished = now()
 		if _, err := os.Stat(filepath.Join(dir, "job.json")); err == nil {
 			// the record may have been deleted while the job was queued
 			// (deleteJob removes the whole job directory); never resurrect
@@ -137,9 +137,9 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 				fmt.Sprintf("no execution host bearing placement label %q", pl.Pipeline.Placement))
 			select {
 			case <-rj.cancelCh:
-				rec.State = "killed"
-				rec.Reason = "job cancelled"
-				rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+				rec.State = stateKilled
+				rec.Reason = reasonJobCancelled
+				rec.Finished = now()
 				d.saveJob(rec)
 				return
 			case <-time.After(500 * time.Millisecond):
@@ -229,9 +229,9 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 			// started container holding the port — remove it or every
 			// later start fails the same way
 			d.remoteServiceStop(remote, cname)
-			rec.State = "failure"
+			rec.State = stateFailure
 			rec.Reason = "start service on host " + remote + ": " + err.Error()
-			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+			rec.Finished = now()
 			d.saveJob(rec)
 			return
 		}
@@ -250,9 +250,9 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", pl.Pipeline.Service.ExternalPort))
 	if err != nil {
 		stop()
-		rec.State = "failure"
+		rec.State = stateFailure
 		rec.Reason = "bind external port: " + err.Error()
-		rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+		rec.Finished = now()
 		d.saveJob(rec)
 		return
 	}
@@ -282,22 +282,22 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 		case <-ch:
 		case <-rj.cancelCh:
 			stop()
-			rec.State = "killed"
-			rec.Reason = "job cancelled"
-			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+			rec.State = stateKilled
+			rec.Reason = reasonJobCancelled
+			rec.Finished = now()
 			d.saveJob(rec)
 			return
 		case code := <-exited:
 			if rj.cancelled.Load() {
-				rec.State = "killed"
-				rec.Reason = "job cancelled"
+				rec.State = stateKilled
+				rec.Reason = reasonJobCancelled
 			} else if code == 0 {
-				rec.State = "success"
+				rec.State = stateSuccess
 			} else {
-				rec.State = "failure"
+				rec.State = stateFailure
 				rec.Reason = fmt.Sprintf("service process exited with code %d", code)
 			}
-			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+			rec.Finished = now()
 			d.saveJob(rec)
 			return
 		}

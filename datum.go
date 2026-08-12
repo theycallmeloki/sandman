@@ -224,7 +224,7 @@ func (d *daemon) appendLogLine(id, line string) {
 		return
 	}
 	defer f.Close()
-	b, _ := json.Marshal(logLineRec{T: time.Now().UTC().Format(time.RFC3339Nano), Line: line})
+	b, _ := json.Marshal(logLineRec{T: now(), Line: line})
 	b = append(b, '\n')
 	f.Write(b)
 }
@@ -678,9 +678,9 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 	for {
 		if jx.canceled() {
 			rec.Outcome = "failed"
-			rec.Reason = "job cancelled"
+			rec.Reason = reasonJobCancelled
 			rec.Tries = attempt - 1
-			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+			rec.Finished = now()
 			rec.ProcessTime = time.Since(started).Seconds()
 			jx.setDatum(dt.ID, rec)
 			return false
@@ -696,14 +696,14 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 			break // all tries exhausted: finalize as failed below
 		}
 		outcome, reason, files := d.runDatumAttempt(jx, dt, index, attempt, started, worker)
-		if outcome == "success" || outcome == "recovered" {
+		if outcome == stateSuccess || outcome == stateRecovered {
 			// the datum's output files are already content-addressed blobs
 			// (storeOutput): the record's references stay readable for
 			// carry-forward and the output merge
 			rec.Outcome = outcome
 			rec.Tries = attempt
 			rec.Files = files
-			rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+			rec.Finished = now()
 			rec.ProcessTime = time.Since(started).Seconds()
 			jx.setDatum(dt.ID, rec)
 			return false
@@ -715,7 +715,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 	rec.Outcome = "failed"
 	rec.Tries = tries
 	rec.Reason = lastReason
-	rec.Finished = time.Now().UTC().Format(time.RFC3339Nano)
+	rec.Finished = now()
 	rec.ProcessTime = time.Since(started).Seconds()
 	jx.setDatum(dt.ID, rec)
 	// a provisioning failure (the image cannot be obtained at all) is an
@@ -883,7 +883,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		if err != nil {
 			return "failed", "scan output: " + err.Error(), nil
 		}
-		return "success", "", files
+		return stateSuccess, "", files
 	}
 
 	// primary failed: the error-handling command runs in the same output
@@ -898,7 +898,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 			if err != nil {
 				return "failed", "scan output: " + err.Error(), nil
 			}
-			return "recovered", "", files
+			return stateRecovered, "", files
 		}
 		tail += etail
 	}
@@ -1029,9 +1029,9 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		}
 		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 		if code != 0 && errCode == 0 {
-			return "recovered", "", files
+			return stateRecovered, "", files
 		}
-		return "success", "", files
+		return stateSuccess, "", files
 	}
 	// the worker's container output is journaled into the job's log store
 	// like a local run's capture would be
@@ -1360,7 +1360,7 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum) error {
 	for _, dt := range datums {
 		st := jx.dedup[dt.ID]
 		switch st.Outcome {
-		case "success", "recovered", "skipped":
+		case stateSuccess, stateRecovered, stateSkipped:
 		default:
 			continue // failed datums contribute nothing
 		}
@@ -1373,15 +1373,15 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum) error {
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				// a file where a directory is needed (or vice versa) is a
 				// type conflict across the job's datum outputs (FS-5 edge)
-				return fmt.Errorf("output type conflict at path %q: %v", f.Path, err)
+				return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
 			}
 			if cur, err := os.ReadFile(dst); err == nil {
 				if err := os.WriteFile(dst, append(cur, data...), 0o644); err != nil {
-					return fmt.Errorf("output type conflict at path %q: %v", f.Path, err)
+					return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
 				}
 			} else {
 				if err := os.WriteFile(dst, data, 0o644); err != nil {
-					return fmt.Errorf("output type conflict at path %q: %v", f.Path, err)
+					return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
 				}
 			}
 		}
@@ -1533,9 +1533,9 @@ func datumStateRank(outcome string) int {
 	switch outcome {
 	case "failed":
 		return 0
-	case "recovered":
+	case stateRecovered:
 		return 1
-	case "success":
+	case stateSuccess:
 		return 2
 	default: // skipped, or an in-flight datum
 		return 3
@@ -1546,7 +1546,7 @@ func datumInfo(id string, st datumState) client.DatumInfo {
 	info := client.DatumInfo{ID: id}
 	state := st.Outcome
 	if state == "" {
-		state = "running" // picked up, not yet settled
+		state = stateRunning // picked up, not yet settled
 	}
 	info.State = state
 	for _, f := range st.InputFiles {
@@ -1624,7 +1624,7 @@ func (d *daemon) listDatums(jobID string, limit, page int) (client.DatumPage, er
 		if !ok {
 			// queued: part of the job's datum set, not yet picked up by a
 			// worker (SB-080's listing is complete during execution)
-			out.Datums = append(out.Datums, client.DatumInfo{ID: id, State: "pending"})
+			out.Datums = append(out.Datums, client.DatumInfo{ID: id, State: stateRunning})
 			continue
 		}
 		info := datumInfo(id, st)

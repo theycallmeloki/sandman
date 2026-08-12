@@ -394,12 +394,6 @@ func (c *Client) InspectService(pipeline string) (ServiceInfo, error) {
 	return out, c.do("GET", "/api/v1/services/"+url.PathEscape(pipeline), nil, &out)
 }
 
-// ListServices lists every service pipeline's record.
-func (c *Client) ListServices() ([]ServiceInfo, error) {
-	var out []ServiceInfo
-	return out, c.do("GET", "/api/v1/services", nil, &out)
-}
-
 // ServiceProxy fetches a path through the control plane's per-pipeline
 // service proxy (SB-100 clause 3): the request is forwarded to the
 // service's own endpoint, so the response is identical to the direct one.
@@ -1153,33 +1147,15 @@ func (c *Client) WaitJob(jobID string, timeout time.Duration) (Job, error) {
 	return j, err
 }
 
-// consumersSettled reports whether every pipeline that could schedule work
-// for the commit on this branch is terminal. A consumer that watches a
-// different branch of the repo cannot schedule work for the commit, so it
-// is settled regardless of its state — a commit on a non-watched branch
-// flushes to zero immediately (SB-142).
+// AllTerminal reports whether every job in the slice has settled: an
+// empty slice is not terminal (nothing to wait on). Used by flush's
+// downstream-consumer check.
 func AllTerminal(jobs []Job) bool {
 	if len(jobs) == 0 {
 		return false
 	}
 	for _, j := range jobs {
 		if j.State == "running" {
-			return false
-		}
-	}
-	return true
-}
-
-func SameJobSet(a, b []Job) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	ids := map[string]bool{}
-	for _, j := range a {
-		ids[j.ID] = true
-	}
-	for _, j := range b {
-		if !ids[j.ID] {
 			return false
 		}
 	}

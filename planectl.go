@@ -16,6 +16,13 @@ import (
 	"sandman/client"
 )
 
+// die is the CLI's fatal-error exit: print the message to stderr and
+// exit with the given code.
+func die(msg string, code int) {
+	fmt.Fprintln(os.Stderr, "sandman:", msg)
+	os.Exit(code)
+}
+
 // planectl implements the data-plane CLI on spf13/cobra (D-19: the CLI is
 // a second consumer of the same client package the conformance suite
 // drives — semantic and command-level compatibility with the reference,

@@ -22,7 +22,7 @@ import (
 func (d *daemon) runEgress(pl pipelineRec, outCommit client.Commit) error {
 	u, err := url.Parse(pl.Pipeline.Egress.URL)
 	if err != nil {
-		return fmt.Errorf("invalid egress URL: %v", err)
+		return fmt.Errorf("invalid egress URL: %w", err)
 	}
 	switch u.Scheme {
 	case "file":
@@ -31,21 +31,21 @@ func (d *daemon) runEgress(pl pipelineRec, outCommit client.Commit) error {
 			return fmt.Errorf("file egress destination is empty")
 		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create egress destination: %v", err)
+			return fmt.Errorf("create egress destination: %w", err)
 		}
 		// replace the destination's previous contents with the commit's
 		// files, then materialize the output view
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return fmt.Errorf("read egress destination: %v", err)
+			return fmt.Errorf("read egress destination: %w", err)
 		}
 		for _, e := range entries {
 			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
-				return fmt.Errorf("clear egress destination: %v", err)
+				return fmt.Errorf("clear egress destination: %w", err)
 			}
 		}
 		if err := d.store.materializeInput(outCommit.ID, dir); err != nil {
-			return fmt.Errorf("copy output to egress destination: %v", err)
+			return fmt.Errorf("copy output to egress destination: %w", err)
 		}
 		return nil
 	default:

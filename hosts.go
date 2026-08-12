@@ -45,7 +45,7 @@ func newHostRegistry(ttl time.Duration) *hostRegistry {
 func (r *hostRegistry) register(name, addr string, labels []string) execHost {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	h := &execHost{Name: name, Addr: addr, Labels: labels, Seen: time.Now().UTC().Format(time.RFC3339Nano)}
+	h := &execHost{Name: name, Addr: addr, Labels: labels, Seen: now()}
 	r.hosts[name] = h
 	return *h
 }

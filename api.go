@@ -563,7 +563,7 @@ func (d *daemon) collectGarbageH(w http.ResponseWriter, r *http.Request) error {
 // unreferenced blobs are removed — reachable data is never touched.
 func (d *daemon) collectGarbage() error {
 	for _, j := range d.mustListJobs() {
-		if j.State == "running" {
+		if j.State == stateRunning {
 			return fmt.Errorf("cannot collect garbage while a job is running")
 		}
 	}
@@ -644,7 +644,7 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 	rec := secretRec{
 		Name:    body.Name,
 		Type:    "Opaque",
-		Created: time.Now().UTC().Format(time.RFC3339Nano),
+		Created: now(),
 		Data:    body.Data,
 	}
 	if err := os.MkdirAll(filepath.Join(d.state, "secrets"), 0o755); err != nil {

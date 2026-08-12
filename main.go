@@ -134,19 +134,19 @@ verbs:
   repo                create/list/inspect/delete repositories
   commit              start/finish/list/inspect/delete commits
   branch              create/list branches
+  get                 fetch files from commits (repo@branch:path)
   file                put/get/list/copy/delete files (repo@branch:path)
   check               consistency check (fsck analog)
-  pipeline            create/update/list/inspect/delete/start/stop/run/run-cron
+  pipeline            create/update/list/inspect/delete/start/stop/run/run-cron/extract/edit
   job                 list/inspect/delete/stop jobs
   datum               list/inspect/restart datums
   flush commit <repo@branch>   wait for a commit's downstream jobs
   secret              create/inspect/list/delete secrets
   tag                 put/get/list tags
   logs                pipeline/job logs (--follow streams)
-  transaction         start/finish/delete transactions
-  version             print version
+  transaction         start/finish/delete/list/inspect/resume/stop
 
-flags:
+flags (per verb):
   -state <dir>        state directory (default /var/lib/sandman)
 `)
 }

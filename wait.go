@@ -103,7 +103,7 @@ func (d *daemon) jobWaitH(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return false
 		}
-		terminal = j.State != "running"
+		terminal = j.State != stateRunning
 		return terminal
 	})
 	j, err := d.inspectJob(id)
@@ -272,7 +272,7 @@ func (d *daemon) consumersSettled(repo, branch string) bool {
 				continue
 			}
 			consumers++
-			if p.State == "running" {
+			if p.State == stateRunning {
 				return false
 			}
 		}
@@ -298,7 +298,7 @@ func (d *daemon) triggerPending(jobs []client.Job) bool {
 			// from it, and waiting would stall the flush to its deadline.
 			// A success job's unfinished commit is the finish still in
 			// flight — wait for it.
-			if j.State == "failure" {
+			if j.State == stateFailure {
 				continue
 			}
 			return true
@@ -308,7 +308,7 @@ func (d *daemon) triggerPending(jobs []client.Job) bool {
 			return true
 		}
 		for _, p := range pipes {
-			if p.Input == nil || (p.State != "running" && p.State != "standby") {
+			if p.Input == nil || (p.State != stateRunning && p.State != stateStandby) {
 				continue // settled consumers spawn nothing
 			}
 			rec, err := d.loadPipeline(p.Name)
