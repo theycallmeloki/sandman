@@ -6,13 +6,19 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 const Version = "0.1.0"
 
 // One static binary, busybox-style: every verb is a subcommand, the daemon
 // is just another verb. Install sandman once, run `sandman daemon` (or the
-// systemd unit) and the node joins the fleet on its own.
+// systemd unit) and the node joins the fleet on its own. The data-plane
+// verbs (repo/commit/branch/file/job/datum/pipeline/flush/secret/tag/
+// logs/transaction/check) are cobra commands over the client package
+// (planectl.go); the fleet and runtime verbs parse their own flags and
+// receive raw args (DisableFlagParsing).
 var (
 	// addrFlag selects the control plane for the data-plane verbs
 	// (planectl.go); it defaults to the local daemon port.
@@ -28,6 +34,42 @@ func defaultAddr() string {
 	return "127.0.0.1:" + strconv.Itoa(DefaultPort)
 }
 
+// newRootCmd assembles the whole CLI: the fleet/runtime verbs (raw flag
+// passthrough) and the cobra data-plane subtree.
+func newRootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:          "sandman",
+		Short:        "sandman — a naive peer-to-peer docker fabric",
+		SilenceUsage: true,
+	}
+	for _, f := range []struct {
+		use string
+		run func([]string)
+	}{
+		{"daemon", cmdDaemon},
+		{"worker", cmdWorker},
+		{"run", cmdRun},
+		{"nodes", cmdNodes},
+		{"stats", cmdStats},
+		{"dashboard", cmdDashboard},
+		{"attach", cmdAttach},
+		{"detach", cmdDetach},
+	} {
+		c := &cobra.Command{
+			Use:                f.use,
+			DisableFlagParsing: true,
+			Run:                func(_ *cobra.Command, args []string) { f.run(args) },
+		}
+		root.AddCommand(c)
+	}
+	root.AddCommand(newDataPlaneCommands()...)
+	root.AddCommand(&cobra.Command{
+		Use: "version",
+		Run: func(*cobra.Command, []string) { fmt.Printf("sandman %s\n", Version) },
+	})
+	return root
+}
+
 func main() {
 	flag.Usage = usage
 	flag.Parse()
@@ -36,41 +78,10 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	switch args[0] {
-	case "daemon":
-		cmdDaemon(args[1:])
-	case "worker":
-		cmdWorker(args[1:])
-	case "run":
-		cmdRun(args[1:])
-	case "nodes":
-		cmdNodes(args[1:])
-	case "stats":
-		cmdStats(args[1:])
-	case "dashboard":
-		cmdDashboard(args[1:])
-	case "attach":
-		cmdAttach(args[1:])
-	case "detach":
-		cmdDetach(args[1:])
-	case "repo":
-		cmdRepo(args[1:])
-	case "commit":
-		cmdCommit(args[1:])
-	case "file":
-		cmdFile(args[1:])
-	case "pipeline":
-		cmdPipeline(args[1:])
-	case "job":
-		cmdJob(args[1:])
-	case "flush":
-		cmdFlush(args[1:])
-	case "version":
-		fmt.Printf("sandman %s\n", Version)
-	default:
-		fmt.Fprintf(os.Stderr, "sandman: unknown verb %q\n", args[0])
-		usage()
-		os.Exit(2)
+	root := newRootCmd()
+	root.SetArgs(args)
+	if err := root.Execute(); err != nil {
+		os.Exit(1)
 	}
 }
 
@@ -93,11 +104,18 @@ verbs:
   attach <name> <addr>    remember a static peer (for non-mDNS networks)
   detach <name>       forget a static peer
   repo                create/list/inspect/delete repositories
-  commit              list/inspect commits
-  file                put/get/list files (repo@branch:path)
-  pipeline            create/list/inspect/delete pipelines (spec via -f)
-  job                 list/inspect jobs
+  commit              start/finish/list/inspect/delete commits
+  branch              create/list branches
+  file                put/get/list/copy/delete files (repo@branch:path)
+  check               consistency check (fsck analog)
+  pipeline            create/update/list/inspect/delete/start/stop/run/run-cron
+  job                 list/inspect/delete/stop jobs
+  datum               list/inspect/restart datums
   flush commit <repo@branch>   wait for a commit's downstream jobs
+  secret              create/inspect/list/delete secrets
+  tag                 put/get/list tags
+  logs                pipeline/job logs (--follow streams)
+  transaction         start/finish/delete transactions
   version             print version
 
 flags:

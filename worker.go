@@ -269,7 +269,12 @@ func runExec(nodeName string, req execRequest) execResult {
 		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, nil, argv, stdin)
 	}
 	primaryCode, tail := run(cname, req.Cmd, req.Stdin)
-	var errCode int
+	// without an error-handling command a nonzero primary exit fails the
+	// datum (matching the local path): errCode carries the primary code
+	// unless an ErrCmd runs and recovers the datum (SB-012). Defaulting
+	// to 0 here silently turned every container failure into a
+	// success/recovered datum.
+	errCode := primaryCode
 	if primaryCode != 0 && (len(req.ErrCmd) > 0 || len(req.ErrStdin) > 0) {
 		ec, et := run(cname+"-err", req.ErrCmd, req.ErrStdin)
 		errCode, tail = ec, tail+et
