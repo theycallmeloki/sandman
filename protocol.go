@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -14,6 +16,55 @@ const (
 	DefaultPort  = 4242
 	DefaultState = "/var/lib/sandman"
 )
+
+// textBackend is the protocol-specific half of the fabric text protocol:
+// what a node answers to NODES and STATS, and — daemons only — RUN. The
+// daemon and the worker share one connection handler; the backend carries
+// the divergence (a worker's NODES is empty, it has no peer registry, and
+// it cannot RUN).
+type textBackend struct {
+	nodeName    string
+	handleNodes func(w *bufio.Writer)
+	handleStats func(w *bufio.Writer)
+	handleRun   func(r *bufio.Reader, w *bufio.Writer) // nil = not supported
+}
+
+// serveTextProtocol serves the fabric text protocol on one connection:
+// HELLO/OK handshake, then NODES/STATS/RUN dispatched to the backend.
+// The daemon and the worker share it — both answer the fleet's
+// nodes/stats/dashboard views on the same port as their HTTP API.
+func (be textBackend) serve(c net.Conn, r *bufio.Reader) {
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(30 * time.Second)) // handshake window
+	w := bufio.NewWriter(c)
+
+	tok, err := readLine(r)
+	if err != nil || len(tok) == 0 || tok[0] != "HELLO" {
+		return
+	}
+	if err := writeLine(w, "OK", "node="+be.nodeName, "docker="+dockerVersion()); err != nil {
+		return
+	}
+
+	tok, err = readLine(r)
+	if err != nil {
+		return
+	}
+	switch tok[0] {
+	case "NODES":
+		c.SetDeadline(time.Now().Add(10 * time.Second))
+		be.handleNodes(w)
+	case "STATS":
+		c.SetDeadline(time.Now().Add(15 * time.Second))
+		be.handleStats(w)
+	case "RUN":
+		if be.handleRun == nil {
+			return
+		}
+		c.SetDeadline(time.Time{}) // no idle timeout mid-job, like ssh
+		be.handleRun(r, w)
+	}
+}
 
 // readLine reads one line and splits it into space-separated tokens.
 // A blank line yields an empty (len 0) token slice.

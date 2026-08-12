@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -79,7 +80,7 @@ func (c replayConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // serveConn routes one accepted connection by its first four bytes.
 func (d *daemon) serveConn(c net.Conn, apiConns chan<- net.Conn) {
-	routeConn(c, apiConns, d.handleConn)
+	routeConn(c, apiConns, d.text.serve)
 }
 
 // routeConn splits one accepted connection by its first four bytes: HTTP
@@ -198,11 +199,13 @@ func hErr(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r); err != nil {
 			code := http.StatusBadRequest
-			msg := err.Error()
-			if strings.Contains(msg, "not found") {
+			switch {
+			case errors.Is(err, errNotFound):
 				code = http.StatusNotFound
+			case errors.Is(err, errInternal):
+				code = http.StatusInternalServerError
 			}
-			writeErr(w, code, msg)
+			writeErr(w, code, err.Error())
 		}
 	}
 }
@@ -347,7 +350,7 @@ func (d *daemon) createBranch(repo, branch, head string) error {
 	}
 	rec, err := d.store.loadCommitByID(head)
 	if err != nil {
-		return fmt.Errorf("commit %q not found", head)
+		return notFound("commit %q not found", head)
 	}
 	if rec.Repo != repo {
 		return fmt.Errorf("commit %s is not in repo %q", head, repo)
@@ -677,7 +680,7 @@ func (d *daemon) inspectSecretH(w http.ResponseWriter, r *http.Request) error {
 func (d *daemon) loadSecret(name string) (*secretRec, error) {
 	b, err := os.ReadFile(d.secretPath(name))
 	if err != nil {
-		return nil, fmt.Errorf("secret %q not found", name)
+		return nil, notFound("secret %q not found", name)
 	}
 	var rec secretRec
 	if json.Unmarshal(b, &rec) != nil {
@@ -773,7 +776,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		}
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
 		if err != nil {
-			return fmt.Errorf("fetch %s: %v", u, err)
+			return internal("fetch %s: %v", u, err)
 		}
 		client := &http.Client{
 			Timeout:       60 * time.Second,
@@ -781,15 +784,15 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			return fmt.Errorf("fetch %s: %v", u, err)
+			return internal("fetch %s: %v", u, err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode >= 300 {
-			return fmt.Errorf("fetch %s: status %d", u, resp.StatusCode)
+			return internal("fetch %s: status %d", u, resp.StatusCode)
 		}
 		data, err := readBody(resp.Body, 1<<30)
 		if err != nil {
-			return fmt.Errorf("read fetch: %v", err)
+			return internal("read fetch: %v", err)
 		}
 		if err := d.store.putFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 			return err

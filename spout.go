@@ -97,7 +97,13 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		os.MkdirAll(markerDir, 0o755)
 		mounts = append(mounts, "-v", markerDir+":/sandman/marker")
 	}
-	argv := []string{"run", "-d", "--name", cname, "-e", "OUT=/sandman/out", "-e", "JOB_ID=" + id}
+	// the container is labelled so a crashed daemon's orphan prune finds
+	// it (pruneOrphans filters label=sandman.node=; unlabelled, a spout
+	// container survives a daemon crash forever). --rm is deliberately
+	// NOT used: the poll loop detects a natural exit via docker inspect
+	// of the stopped container, and auto-removal would read as an
+	// unexpected-exit failure.
+	argv := []string{"run", "-d", "--name", cname, "--label", "sandman.node=" + d.name, "-e", "OUT=/sandman/out", "-e", "JOB_ID=" + id}
 	if markerDir != "" {
 		argv = append(argv, "-e", "MARKER=/sandman/marker")
 	}

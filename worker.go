@@ -201,9 +201,22 @@ func cmdWorker(args []string) {
 				continue
 			}
 			go guard(func() {
-				routeConn(c, apiConns, func(c net.Conn, r *bufio.Reader) {
-					workerHandleConn(*name, c, r)
-				})
+				routeConn(c, apiConns, textBackend{
+					nodeName: *name,
+					handleNodes: func(w *bufio.Writer) {
+						// a worker has no peer registry; an empty reply
+						// ends the daemon's registry-gossip dial cleanly
+						_ = writeLine(w, "NODES", "0")
+					},
+					handleStats: func(w *bufio.Writer) {
+						// no background cpu ticker on the worker: sample
+						// a short window on demand so the dashboard's
+						// host-cpu column has a real number
+						prev := readCpu()
+						time.Sleep(300 * time.Millisecond)
+						writeStatsReply(w, cpuBusyDelta(prev, readCpu()))
+					},
+				}.serve)
 			})
 		}
 	}()
@@ -261,44 +274,6 @@ func cmdWorker(args []string) {
 			return
 		case <-time.After(3 * time.Second):
 		}
-	}
-}
-
-// workerHandleConn serves the fabric text protocol on the worker's exec
-// port: HELLO/OK handshake, then STATS (the same docker/container reply the
-// daemon serves, so nodes/stats/dashboard treat a worker like any other
-// node). NODES returns empty — a worker has no peer registry — so the
-// daemon's registry-gossip dial completes harmlessly.
-func workerHandleConn(name string, c net.Conn, r *bufio.Reader) {
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(30 * time.Second)) // handshake window
-	w := bufio.NewWriter(c)
-
-	tok, err := readLine(r)
-	if err != nil || len(tok) == 0 || tok[0] != "HELLO" {
-		return
-	}
-	if err := writeLine(w, "OK", "node="+name, "docker="+dockerVersion()); err != nil {
-		return
-	}
-
-	tok, err = readLine(r)
-	if err != nil {
-		return
-	}
-	switch tok[0] {
-	case "NODES":
-		c.SetDeadline(time.Now().Add(10 * time.Second))
-		if err := writeLine(w, "NODES", "0"); err != nil {
-			return
-		}
-	case "STATS":
-		c.SetDeadline(time.Now().Add(15 * time.Second))
-		// no background cpu ticker on the worker: sample a short window on
-		// demand so the dashboard's host-cpu column has a real number
-		prev := readCpu()
-		time.Sleep(300 * time.Millisecond)
-		writeStatsReply(w, cpuBusyDelta(prev, readCpu()))
 	}
 }
 

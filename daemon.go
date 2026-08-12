@@ -100,6 +100,10 @@ type daemon struct {
 	jobsMu  sync.Mutex
 	running map[string]*runningJob
 
+	// text is the fabric text-protocol backend (NODES/STATS/RUN) served
+	// on the same port as the HTTP API (see textBackend).
+	text textBackend
+
 	// hosts is the registered execution-host fleet, scheduled on by
 	// placement label (SB-167/169). Ephemeral: workers re-register on a
 	// heartbeat, so no durable state is needed.
@@ -200,6 +204,7 @@ func cmdDaemon(args []string) {
 		log.Fatalf("state dir: %v", err)
 	}
 	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}, running: map[string]*runningJob{}}
+	d.text = textBackend{nodeName: *name, handleNodes: d.handleNodes, handleStats: d.handleStats, handleRun: d.handleRun}
 	d.store.onFinish = func() { d.stateChanged.signal() }
 	if *runner == "process" {
 		d.runner = processRunner{}
@@ -367,36 +372,6 @@ func (d *daemon) syncOnce() {
 			role = tok[5] // appended last: old peers omit it
 		}
 		d.reg.mergeSync(tok[1], tok[2], docker, role)
-	}
-}
-
-func (d *daemon) handleConn(c net.Conn, r *bufio.Reader) {
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(30 * time.Second)) // handshake window
-	w := bufio.NewWriter(c)
-
-	tok, err := readLine(r)
-	if err != nil || len(tok) == 0 || tok[0] != "HELLO" {
-		return
-	}
-	if err := writeLine(w, "OK", "node="+d.name, "docker="+dockerVersion()); err != nil {
-		return
-	}
-
-	tok, err = readLine(r)
-	if err != nil {
-		return
-	}
-	switch tok[0] {
-	case "NODES":
-		c.SetDeadline(time.Now().Add(10 * time.Second))
-		d.handleNodes(w)
-	case "STATS":
-		c.SetDeadline(time.Now().Add(15 * time.Second))
-		d.handleStats(w)
-	case "RUN":
-		c.SetDeadline(time.Time{}) // no idle timeout mid-job, like ssh
-		d.handleRun(r, w)
 	}
 }
 
