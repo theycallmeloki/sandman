@@ -67,8 +67,8 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return
 	}
-	rj := registerRunning(id, pl.Pipeline.Name)
-	defer unregisterRunning(id, rj)
+	rj := d.registerRunning(id, pl.Pipeline.Name)
+	defer d.unregisterRunning(id, rj)
 	defer d.standbySettle(pl.Pipeline.Name)
 
 	rec := newJobRec(pl, nil, id)
@@ -167,24 +167,18 @@ func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo
 	if rj.cancelled.Load() {
 		return
 	}
-	cm, err := d.store.startCommit(repo, branch, "")
-	if err != nil {
-		return
+	var prov []string
+	if specCommit != "" {
+		prov = []string{specCommit}
 	}
-	for _, p := range sortedStringKeys(changed) {
-		if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
-			d.store.overwriteFile(cm.ID, p, data)
-		}
-	}
-	if fin, err := d.store.finishCommit(cm.ID, "", false); err == nil {
-		if specCommit != "" {
-			if rec, err := d.store.loadCommitByID(fin.ID); err == nil {
-				rec.Provenance = []string{specCommit}
-				d.store.saveCommit(rec)
+	d.commitRevision(repo, branch, func(commitID string) bool {
+		for _, p := range sortedStringKeys(changed) {
+			if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
+				d.store.overwriteFile(commitID, p, data)
 			}
 		}
-		d.triggerForCommit(fin)
-	}
+		return true
+	}, prov)
 }
 
 // spoutSnapshot maps a directory's files to their content hashes.

@@ -307,6 +307,37 @@ func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
 	return rec
 }
 
+// commitRevision writes and finishes one revision and triggers the
+// pipelines that consume it — the shared tail of every commit-and-trigger
+// path (cron tick, size-trigger fire, spout cycle, git push). The writer
+// fills the commit's tree and reports whether the revision is complete:
+// false abandons the commit (no finish, no trigger), so a caller can
+// refuse to publish a partial revision. finishCommit and the consumer
+// trigger are one step so no caller can produce a finished commit that
+// never triggers. Provenance (optional) is stamped before the trigger
+// (spout's epoch anchor, SB-139 clause 7).
+func (d *daemon) commitRevision(repo, branch string, write func(commitID string) bool, provenance []string) bool {
+	cm, err := d.store.startCommit(repo, branch, "")
+	if err != nil {
+		return false
+	}
+	if write != nil && !write(cm.ID) {
+		return false
+	}
+	fin, err := d.store.finishCommit(cm.ID, "", false)
+	if err != nil {
+		return false
+	}
+	if len(provenance) > 0 {
+		if rec, err := d.store.loadCommitByID(fin.ID); err == nil {
+			rec.Provenance = provenance
+			d.store.saveCommit(rec)
+		}
+	}
+	d.triggerForCommit(fin)
+	return true
+}
+
 // triggerForCommit launches one job per running pipeline subscribed to the
 // commit's repo. Jobs run in their own goroutines; the trigger never
 // blocks. It is called by the commit-finish callers (the HTTP handler,
@@ -552,7 +583,9 @@ func (d *daemon) provenanceOf(commitID string, seen map[string]bool) []string {
 // owning pipeline (for update/delete cancellation, SB-045/026), done signals
 // the job goroutine has settled, cancelled distinguishes a deliberate kill
 // from a plain failure (SB-122). containers tracks the live datum
-// container names so a cancel can kill every one of them.
+// container names so a cancel can kill every one of them. jx is the live
+// execution context while the job runs (datum API restart, SB-064),
+// attached under d.jobsMu by setJobExec.
 type runningJob struct {
 	pipeline   string
 	cancelled  atomic.Bool
@@ -560,6 +593,8 @@ type runningJob struct {
 	cancelOnce sync.Once
 	started    atomic.Bool // the job passed the pipeline's gate
 	done       chan struct{}
+
+	jx *jobExec
 
 	containersMu sync.Mutex
 	containers   map[string]struct{}
@@ -590,37 +625,51 @@ func (rj *runningJob) containerNames() []string {
 	return names
 }
 
-var (
-	jobsMu  sync.Mutex
-	running = map[string]*runningJob{}
-)
-
-func registerRunning(id, pipeline string) *runningJob {
+// registerRunning puts a job in the live registry (d.running, under
+// d.jobsMu). The handle exists from spawn to settlement: a cancel
+// arriving in that window finds it, and waitJobSettled/countRunningJobs
+// see the job.
+func (d *daemon) registerRunning(id, pipeline string) *runningJob {
 	rj := &runningJob{pipeline: pipeline, cancelCh: make(chan struct{}), done: make(chan struct{})}
-	jobsMu.Lock()
-	running[id] = rj
-	jobsMu.Unlock()
+	d.jobsMu.Lock()
+	d.running[id] = rj
+	d.jobsMu.Unlock()
 	return rj
 }
 
-func unregisterRunning(id string, rj *runningJob) {
-	jobsMu.Lock()
-	delete(running, id)
-	jobsMu.Unlock()
+// unregisterRunning removes the job from the live registry and signals
+// settlement (the JobTimeout kill-select and waitJobSettled select on
+// rj.done).
+func (d *daemon) unregisterRunning(id string, rj *runningJob) {
+	d.jobsMu.Lock()
+	delete(d.running, id)
+	d.jobsMu.Unlock()
 	close(rj.done)
+}
+
+// setJobExec attaches the execution context to the running handle (the
+// datum API reads it via restartDatum). The job may have settled between
+// registerRunning and the jx being built (an early failure path) — the
+// handle is then gone and the jx is simply dropped.
+func (d *daemon) setJobExec(id string, jx *jobExec) {
+	d.jobsMu.Lock()
+	if rj, ok := d.running[id]; ok {
+		rj.jx = jx
+	}
+	d.jobsMu.Unlock()
 }
 
 // cancelPipelineJobs cancels every in-flight job of the pipeline and waits
 // for each to settle (used by update and delete).
 func (d *daemon) cancelPipelineJobs(pipeline string) {
-	jobsMu.Lock()
+	d.jobsMu.Lock()
 	var ids []string
-	for id, rj := range running {
+	for id, rj := range d.running {
 		if rj.pipeline == pipeline {
 			ids = append(ids, id)
 		}
 	}
-	jobsMu.Unlock()
+	d.jobsMu.Unlock()
 	for _, id := range ids {
 		d.cancelJob(id)
 	}
@@ -878,12 +927,12 @@ func (d *daemon) recordProvenance(commitID string, inputs []string) {
 // asynchronously (cancelJob spawns its own retry goroutine), so a
 // shutdown path calls this and then waits on countRunningJobs draining.
 func (d *daemon) cancelAllRunningJobs() {
-	jobsMu.Lock()
-	ids := make([]string, 0, len(running))
-	for id := range running {
+	d.jobsMu.Lock()
+	ids := make([]string, 0, len(d.running))
+	for id := range d.running {
 		ids = append(ids, id)
 	}
-	jobsMu.Unlock()
+	d.jobsMu.Unlock()
 	for _, id := range ids {
 		d.cancelJob(id)
 	}
@@ -891,9 +940,9 @@ func (d *daemon) cancelAllRunningJobs() {
 
 // countRunningJobs reports the number of in-flight jobs (shutdown drain).
 func (d *daemon) countRunningJobs() int {
-	jobsMu.Lock()
-	defer jobsMu.Unlock()
-	return len(running)
+	d.jobsMu.Lock()
+	defer d.jobsMu.Unlock()
+	return len(d.running)
 }
 
 // cancelJob kills a running job and waits for it to settle as KILLED. A
@@ -905,9 +954,9 @@ func (d *daemon) cancelJob(id string) error {
 	// on a transiently unreadable job record (a concurrent save can race
 	// the read; the job then escapes the cancel and runs the old version
 	// indefinitely, SB-045)
-	jobsMu.Lock()
-	rj, ok := running[id]
-	jobsMu.Unlock()
+	d.jobsMu.Lock()
+	rj, ok := d.running[id]
+	d.jobsMu.Unlock()
 	if !ok {
 		if _, err := d.inspectJob(id); err != nil {
 			return err
@@ -1008,12 +1057,12 @@ func (d *daemon) reset() error {
 		return fmt.Errorf("reset aborted: corrupted metadata (%w)", err)
 	}
 	// cancel in-flight work so no goroutine writes into removed state
-	jobsMu.Lock()
+	d.jobsMu.Lock()
 	var ids []string
-	for id := range running {
+	for id := range d.running {
 		ids = append(ids, id)
 	}
-	jobsMu.Unlock()
+	d.jobsMu.Unlock()
 	for _, id := range ids {
 		d.cancelJob(id)
 	}

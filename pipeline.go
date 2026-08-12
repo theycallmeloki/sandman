@@ -590,7 +590,7 @@ func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, i
 	// cancel arriving the instant the job spawns can always find it — a
 	// not-yet-scheduled goroutine would otherwise escape the cancel and
 	// run the old version indefinitely (SB-045)
-	rj := registerRunning(id, rec.Pipeline.Name)
+	rj := d.registerRunning(id, rec.Pipeline.Name)
 	go guard(func() { d.runJob(*rec, heads, id, propagated, pre, rj) })
 	return id
 }

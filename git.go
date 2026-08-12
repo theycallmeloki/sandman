@@ -204,27 +204,25 @@ func (d *daemon) gitPush(ev gitPushEvent) {
 	}
 	sort.Strings(repos)
 	for _, repo := range repos {
-		cm, err := d.store.startCommit(repo, ev.Branch, "")
-		if err != nil {
-			continue
-		}
-		paths := make([]string, 0, len(ev.Files)+1)
-		for p := range ev.Files {
-			paths = append(paths, p)
-		}
-		paths = append(paths, ".git/HEAD")
-		sort.Strings(paths)
-		for _, p := range paths {
-			content := ev.Files[p]
-			if p == ".git/HEAD" {
-				content = ev.Revision
+		d.commitRevision(repo, ev.Branch, func(commitID string) bool {
+			paths := make([]string, 0, len(ev.Files)+1)
+			for p := range ev.Files {
+				paths = append(paths, p)
 			}
-			if err := d.store.overwriteFile(cm.ID, p, []byte(content)); err != nil {
-				break
+			paths = append(paths, ".git/HEAD")
+			sort.Strings(paths)
+			for _, p := range paths {
+				content := ev.Files[p]
+				if p == ".git/HEAD" {
+					content = ev.Revision
+				}
+				if err := d.store.overwriteFile(commitID, p, []byte(content)); err != nil {
+					// a failed write abandons the revision rather than
+					// publishing a partial tree
+					return false
+				}
 			}
-		}
-		if fin, err := d.store.finishCommit(cm.ID, "", false); err == nil {
-			d.triggerForCommit(fin)
-		}
+			return true
+		}, nil)
 	}
 }

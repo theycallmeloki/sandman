@@ -49,11 +49,18 @@ func (d *daemon) writeStatsCommit(pl pipelineRec, dedup map[string]datumState, d
 // and the worker re-queues it, so the next status observation shows it
 // running with a fresh, later start time.
 func (d *daemon) restartDatum(jobID, datumID string) error {
-	v, ok := d.liveJobs.Load(jobID)
-	if !ok {
+	d.jobsMu.Lock()
+	rj, ok := d.running[jobID]
+	var jx *jobExec
+	if ok {
+		jx = rj.jx
+	}
+	d.jobsMu.Unlock()
+	if !ok || jx == nil {
+		// not running, or still queued behind the pipeline gate (its
+		// execution context is not built yet)
 		return fmt.Errorf("job %q is not running", jobID)
 	}
-	jx := v.(*jobExec)
 	var cname string
 	jx.workersMu.Lock()
 	for _, ws := range jx.workers {

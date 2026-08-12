@@ -167,19 +167,14 @@ func (d *daemon) fireOnce(pipeline, branch string, in client.Input, cm client.Co
 	if err != nil {
 		return
 	}
-	acc, err := d.store.startCommit(in.Repo, branch, "")
-	if err != nil {
-		return
-	}
-	for p, f := range snapshot {
-		if b, err := f.bytes(d.store); err == nil {
-			d.store.overwriteFile(acc.ID, p, b)
+	d.commitRevision(in.Repo, branch, func(commitID string) bool {
+		for p, f := range snapshot {
+			if b, err := f.bytes(d.store); err == nil {
+				d.store.overwriteFile(commitID, p, b)
+			}
 		}
-	}
-	if fin, err := d.store.finishCommit(acc.ID, "", false); err == nil {
-		// the trigger commit is a real revision: trigger the pipeline
-		d.triggerForCommit(fin)
-	}
+		return true
+	}, nil)
 }
 
 // clearTriggerLedgers removes a pipeline's trigger accumulation state

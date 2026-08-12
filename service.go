@@ -89,8 +89,8 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 	os.MkdirAll(outDir, 0o755)
 	os.MkdirAll(serveDir, 0o755)
 
-	rj := registerRunning(id, pl.Pipeline.Name)
-	defer unregisterRunning(id, rj)
+	rj := d.registerRunning(id, pl.Pipeline.Name)
+	defer d.unregisterRunning(id, rj)
 
 	rec := newJobRec(pl, nil, id)
 	d.saveJob(rec)

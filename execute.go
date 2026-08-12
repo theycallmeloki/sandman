@@ -46,7 +46,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// put the job in the running map, and an early return without them
 	// leaks the running handle (a later cancel waits 30s and errors) and
 	// the standby activation count (the pipeline never returns to standby)
-	defer unregisterRunning(id, rj)
+	defer d.unregisterRunning(id, rj)
 	// a standby pipeline returns to standby once its work settles; the
 	// defer covers every terminal path (success, failure, killed)
 	defer d.standbySettle(pl.Pipeline.Name)
@@ -435,9 +435,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		}
 	}
 	// the live execution context is visible to the datum API (restart,
-	// SB-064) while the job runs
-	d.liveJobs.Store(id, jx)
-	defer d.liveJobs.Delete(id)
+	// SB-064) while the job runs; it leaves the registry with the running
+	// handle when the job settles
+	d.setJobExec(id, jx)
 
 	// Whole-job deadline (SB-116): at the boundary the job is cancelled and
 	// its active containers killed; it settles as killed, never as a plain

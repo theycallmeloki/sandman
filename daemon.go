@@ -92,9 +92,13 @@ type daemon struct {
 	cronMu      sync.Mutex
 	cronTickers map[string]context.CancelFunc
 
-	// liveJobs maps running job ids to their execution contexts for the
-	// datum API (restart, SB-064).
-	liveJobs sync.Map
+	// running is the single live-job registry: running job ids to their
+	// lifecycle handles (cancel, containers) and — while the job executes
+	// — their jobExec context for the datum API (restart, SB-064). Both
+	// live and die under jobsMu; a job appears here at spawn and leaves
+	// when it settles.
+	jobsMu  sync.Mutex
+	running map[string]*runningJob
 
 	// hosts is the registered execution-host fleet, scheduled on by
 	// placement label (SB-167/169). Ephemeral: workers re-register on a
@@ -195,7 +199,7 @@ func cmdDaemon(args []string) {
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
-	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}}
+	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}, running: map[string]*runningJob{}}
 	d.store.onFinish = func() { d.stateChanged.signal() }
 	if *runner == "process" {
 		d.runner = processRunner{}

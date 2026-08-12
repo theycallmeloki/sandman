@@ -110,27 +110,18 @@ func (d *daemon) stopCronTickers(pipeline string) {
 // repository. With overwrite the previous tick's file is tombstoned so
 // the branch holds exactly one tick file.
 func (d *daemon) cronTick(repo string, overwrite bool) {
-	cm, err := d.store.startCommit(repo, defaultBranch, "")
-	if err != nil {
-		return
-	}
-	if overwrite {
-		if view, err := d.store.resolveViewByID(cm.ID); err == nil {
-			for p := range view {
-				d.store.deleteFile(cm.ID, p)
+	name := time.Now().UTC().Format(time.RFC3339)
+	d.commitRevision(repo, defaultBranch, func(commitID string) bool {
+		if overwrite {
+			if view, err := d.store.resolveViewByID(commitID); err == nil {
+				for p := range view {
+					d.store.deleteFile(commitID, p)
+				}
 			}
 		}
-	}
-	name := time.Now().UTC().Format(time.RFC3339)
-	if err := d.store.putFile(cm.ID, name, []byte(name)); err != nil {
-		return
-	}
-	if fin, err := d.store.finishCommit(cm.ID, "", false); err == nil {
-		// the tick is a real revision: trigger the consuming pipelines
-		// (the store's finish does not fire the trigger — that is the
-		// API layer's job)
-		d.triggerForCommit(fin)
-	}
+		// an unreadable tick never publishes a partial revision
+		return d.store.putFile(commitID, name, []byte(name)) == nil
+	}, nil)
 }
 
 // triggerCron creates an immediate tick on every cron input of the
