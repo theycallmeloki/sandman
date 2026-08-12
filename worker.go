@@ -250,7 +250,9 @@ func workerHandleConn(name string, c net.Conn, r *bufio.Reader) {
 	switch tok[0] {
 	case "NODES":
 		c.SetDeadline(time.Now().Add(10 * time.Second))
-		writeLine(w, "NODES", "0")
+		if err := writeLine(w, "NODES", "0"); err != nil {
+			return
+		}
 	case "STATS":
 		c.SetDeadline(time.Now().Add(15 * time.Second))
 		// no background cpu ticker on the worker: sample a short window on
