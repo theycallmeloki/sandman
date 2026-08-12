@@ -134,10 +134,11 @@ func TestSB079_GarbageCollection(t *testing.T) {
 	if err := c.StopPipeline(slow); err != nil {
 		t.Fatalf("stop pipeline: %v", err)
 	}
-	pollFor(t, "slow job terminal", 60*time.Second, func() bool {
-		j, err := c.InspectJob(latestJob(t, slow).ID)
-		return err == nil && j.State != "running"
-	})
+	// the stopped pipeline's in-flight job is terminated; wait for it
+	// server-side (D-23 R-5)
+	if _, err := c.WaitJob(latestJob(t, slow).ID, 60*time.Second); err != nil {
+		t.Fatalf("slow job did not settle after stop: %v", err)
+	}
 	if err := c.CollectGarbage(); err != nil {
 		t.Fatalf("collection after stop: %v", err)
 	}

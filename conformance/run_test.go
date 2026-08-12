@@ -346,13 +346,13 @@ func TestSB010_RunPipeline(t *testing.T) {
 	})
 }
 
-// waitTerminal blocks until the job settles.
+// waitTerminal blocks until the job settles via the server-side
+// long-poll (D-23 R-5): one request, no client polling.
 func waitTerminal(t *testing.T, id string) {
 	t.Helper()
-	pollFor(t, "job "+id+" to settle", 90*time.Second, func() bool {
-		j, err := c.InspectJob(id)
-		return err == nil && j.State != "running"
-	})
+	if _, err := c.WaitJob(id, 90*time.Second); err != nil {
+		t.Fatalf("job %s did not settle: %v", id, err)
+	}
 }
 
 // latestJob returns the most recently started job of a pipeline.

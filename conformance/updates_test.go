@@ -81,10 +81,14 @@ func TestSB032_UpdatePipelineWithOnlyFailedJob(t *testing.T) {
 	exit1 := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "exit 1"}}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: exit1, Input: &client.Input{Repo: repo, Glob: "/*"}})
 	commitFiles(t, repo, "master", map[string]string{"file": "x"})
-	pollFor(t, "job failed", 30*time.Second, func() bool {
-		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
-		return err == nil && len(js) > 0 && js[0].State == "failure"
-	})
+	job := waitJobFor(t, name, 30*time.Second)
+	fj, err := c.WaitJob(job.ID, 30*time.Second)
+	if err != nil {
+		t.Fatalf("job did not settle: %v", err)
+	}
+	if fj.State != "failure" {
+		t.Fatalf("job state = %s, want failure (reason %q)", fj.State, fj.Reason)
+	}
 	// the update must not depend on any prior output commit
 	mustUpdate(t, name, exit1, &client.Input{Repo: repo, Glob: "/*"}, false)
 }
@@ -343,16 +347,20 @@ func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: exit1, Input: in})
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
-	pollFor(t, "job failed", 30*time.Second, func() bool {
-		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
-		return err == nil && len(js) == 1 && js[0].State == "failure"
-	})
+	job := waitJobFor(t, name, 30*time.Second)
+	if _, err := c.WaitJob(job.ID, 30*time.Second); err != nil {
+		t.Fatalf("job did not settle: %v", err)
+	}
+	js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+	if err != nil || len(js) != 1 || js[0].State != "failure" {
+		t.Fatalf("after settle: got %d jobs, want exactly 1 failed", len(js))
+	}
 
 	fixed := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "echo -n bar > ${OUT}/file"}}
 	mustUpdate(t, name, fixed, in, false) // no reprocess flag
 	flushOK(t, cm.ID)                     // the update's head job runs under the fix
 
-	js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+	js, err = c.ListJobsFiltered(client.JobFilter{Pipeline: name})
 	if err != nil {
 		t.Fatalf("list jobs: %v", err)
 	}

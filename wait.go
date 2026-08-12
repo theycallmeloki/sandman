@@ -58,13 +58,22 @@ const stabilityWindow = 250 * time.Millisecond
 // delays the response, it never fails the test (R-5).
 func (d *daemon) waitFor(deadline time.Time, cond func() bool) bool {
 	for {
+		// grab-then-check: register the broadcast channel BEFORE reading
+		// state, so a signal landing mid-read is not lost
+		ch := d.stateChanged.changed()
 		if cond() {
 			return true
 		}
-		ch := d.stateChanged.changed()
 		wait := time.Until(deadline)
 		if wait <= 0 {
 			return cond()
+		}
+		// a broadcast can still land between changed() and this select
+		// (the channel snapshot predates the signal): bound each wait
+		// with a short poll tick so settle latency is jitter, never the
+		// full remaining deadline
+		if wait > 100*time.Millisecond {
+			wait = 100 * time.Millisecond
 		}
 		t := time.NewTimer(wait)
 		select {
@@ -72,7 +81,6 @@ func (d *daemon) waitFor(deadline time.Time, cond func() bool) bool {
 			t.Stop()
 		case <-t.C:
 			t.Stop()
-			return cond()
 		}
 	}
 }

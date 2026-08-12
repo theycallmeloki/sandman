@@ -106,10 +106,9 @@ func TestSB017_SpecialOutputFileFails(t *testing.T) {
 	if len(js) != 1 {
 		t.Fatalf("got %d jobs, want exactly 1", len(js))
 	}
-	pollFor(t, "job to settle", 60*time.Second, func() bool {
-		j, err := c.InspectJob(js[0].ID)
-		return err == nil && j.State != "running"
-	})
+	if _, err := c.WaitJob(js[0].ID, 60*time.Second); err != nil {
+		t.Fatalf("job %s did not settle: %v", js[0].ID, err)
+	}
 	j, err := c.InspectJob(js[0].ID)
 	if err != nil {
 		t.Fatalf("inspect job: %v", err)
