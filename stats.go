@@ -38,6 +38,7 @@ type nodeStats struct {
 	Node        string          `json:"node"`
 	Addr        string          `json:"addr"`
 	Docker      string          `json:"docker,omitempty"`
+	Role        string          `json:"role,omitempty"` // "daemon" | "worker"
 	Error       string          `json:"error,omitempty"`
 	Containers  []containerInfo `json:"containers,omitempty"`
 	HostCpus    int             `json:"hostCpus,omitempty"`
@@ -50,6 +51,7 @@ type nodeStats struct {
 // fleetNode is one entry in the fleet view.
 type fleetNode struct {
 	Name, Addr, Docker, Source string
+	Role                       string // "daemon" | "worker" ("" = unknown)
 }
 
 // fleet collects the fleet: registry/peers files, plus a live mDNS browse
@@ -78,8 +80,12 @@ func fleet(state string, browseNow bool) []fleetNode {
 			if len(fields) > 3 {
 				src = fields[3]
 			}
+			role := ""
+			if len(fields) > 5 {
+				role = fields[5] // appended last: old files omit it
+			}
 			if _, ok := seen[fields[0]]; !ok || src == "mdns" {
-				seen[fields[0]] = fleetNode{fields[0], fields[1], docker, src}
+				seen[fields[0]] = fleetNode{fields[0], fields[1], docker, src, role}
 			}
 		}
 	}
@@ -89,16 +95,27 @@ func fleet(state string, browseNow bool) []fleetNode {
 		ch := make(chan *zeroconf.ServiceEntry, 32)
 		go browse(ctx, ch)
 		for e := range ch {
-			if ip := firstAddr(e); ip != "" {
-				seen[e.Instance] = fleetNode{e.Instance, net.JoinHostPort(ip, strconv.Itoa(e.Port)), textValue(e.Text, "docker"), "mdns"}
+			addr := textValue(e.Text, "addr")
+			if addr == "" {
+				if ip := firstAddr(e); ip != "" {
+					addr = net.JoinHostPort(ip, strconv.Itoa(e.Port))
+				}
 			}
+			if addr == "" {
+				continue
+			}
+			role := textValue(e.Text, "role")
+			if role == "" {
+				role = "daemon"
+			}
+			seen[e.Instance] = fleetNode{e.Instance, addr, textValue(e.Text, "docker"), "mdns", role}
 		}
 	}
 	// A node's own registry excludes itself (a peer list is for peers), so
 	// include the local daemon when it answers on the default port — the
 	// dashboard and stats must show the node you're sitting on.
 	if name, docker := probeLocalDaemon(DefaultPort); name != "" {
-		seen[name] = fleetNode{name, net.JoinHostPort("127.0.0.1", strconv.Itoa(DefaultPort)), docker, "local"}
+		seen[name] = fleetNode{name, net.JoinHostPort("127.0.0.1", strconv.Itoa(DefaultPort)), docker, "local", "daemon"}
 	}
 	out := make([]fleetNode, 0, len(seen))
 	for _, n := range seen {
@@ -153,7 +170,7 @@ func collectStats(state string, timeout time.Duration) []nodeStats {
 }
 
 func queryNodeStats(n fleetNode, timeout time.Duration) nodeStats {
-	ns := nodeStats{Node: n.Name, Addr: n.Addr}
+	ns := nodeStats{Node: n.Name, Addr: n.Addr, Role: n.Role}
 	conn, err := net.DialTimeout("tcp", n.Addr, timeout)
 	if err != nil {
 		ns.Error = err.Error()

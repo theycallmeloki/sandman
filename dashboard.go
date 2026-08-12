@@ -151,7 +151,11 @@ func drawTable(t *tview.Table, stats []nodeStats) int {
 			row++
 			continue
 		}
-		t.SetCell(row, 0, tview.NewTableCell(ns.Node).SetTextColor(tcell.ColorAqua).SetAttributes(tcell.AttrBold))
+		name := ns.Node
+		if ns.Role == "worker" {
+			name += " [::d](worker)[::-]"
+		}
+		t.SetCell(row, 0, tview.NewTableCell(name).SetTextColor(tcell.ColorAqua).SetAttributes(tcell.AttrBold))
 		t.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("%s · %d running", ns.Addr, len(ns.Containers))).SetTextColor(tcell.ColorGray))
 		// node-level utilization: host cpu (5s sample) and real memory
 		t.SetCell(row, 2, pctCell(ns.HostCpuPerc))

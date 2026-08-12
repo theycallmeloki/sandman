@@ -11,6 +11,7 @@ package main
 // files for the control plane to store into the output commit.
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -178,8 +179,39 @@ func cmdWorker(args []string) {
 		stopRemoteService(req.Name)
 		writeJSON(w, map[string]string{"ok": "true"})
 	})
-	server := &http.Server{Handler: mux}
-	go server.Serve(ln)
+	// The exec port multiplexes HTTP and the fabric text protocol, like the
+	// daemon's port: /exec and /service are HTTP; HELLO/STATS answer the
+	// fleet's nodes/stats/dashboard views, so a worker is a first-class
+	// fleet citizen (a loopback-bound worker advertises nothing and stays
+	// invisible until -advertise makes it reachable).
+	apiConns := make(chan net.Conn)
+	apiSrv := &http.Server{Handler: mux, ReadHeaderTimeout: 15 * time.Second}
+	go apiSrv.Serve(&chanListener{ch: apiConns})
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				continue
+			}
+			go routeConn(c, apiConns, func(c net.Conn, r *bufio.Reader) {
+				workerHandleConn(*name, c, r)
+			})
+		}
+	}()
+
+	// Advertise in mDNS only when the worker is reachable off-host
+	// (-advertise set): the fleet discovers execution hosts the same way it
+	// discovers control planes, and the advertised addr is what consumers
+	// dial (never a loopback/bridge browse address). A loopback worker has
+	// nothing to advertise.
+	if *advertise != "" {
+		srv, err := advertiseMDNS(*name, *port, "worker", *advertise)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandman worker %s: mDNS advertise failed: %v\n", *name, err)
+		} else {
+			defer srv.Shutdown()
+		}
+	}
 	fmt.Fprintf(os.Stderr, "sandman worker %s: exec endpoint %s, labels %v\n", *name, addr, labels)
 
 	// register, then heartbeat every few seconds: the control plane's
@@ -190,6 +222,42 @@ func cmdWorker(args []string) {
 			fmt.Fprintf(os.Stderr, "sandman worker %s: register: %v\n", *name, err)
 		}
 		time.Sleep(3 * time.Second)
+	}
+}
+
+// workerHandleConn serves the fabric text protocol on the worker's exec
+// port: HELLO/OK handshake, then STATS (the same docker/container reply the
+// daemon serves, so nodes/stats/dashboard treat a worker like any other
+// node). NODES returns empty — a worker has no peer registry — so the
+// daemon's registry-gossip dial completes harmlessly.
+func workerHandleConn(name string, c net.Conn, r *bufio.Reader) {
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(30 * time.Second)) // handshake window
+	w := bufio.NewWriter(c)
+
+	tok, err := readLine(r)
+	if err != nil || len(tok) == 0 || tok[0] != "HELLO" {
+		return
+	}
+	if err := writeLine(w, "OK", "node="+name, "docker="+dockerVersion()); err != nil {
+		return
+	}
+
+	tok, err = readLine(r)
+	if err != nil {
+		return
+	}
+	switch tok[0] {
+	case "NODES":
+		c.SetDeadline(time.Now().Add(10 * time.Second))
+		writeLine(w, "NODES", "0")
+	case "STATS":
+		c.SetDeadline(time.Now().Add(15 * time.Second))
+		// no background cpu ticker on the worker: sample a short window on
+		// demand so the dashboard's host-cpu column has a real number
+		prev := readCpu()
+		time.Sleep(300 * time.Millisecond)
+		writeStatsReply(w, cpuBusyDelta(prev, readCpu()))
 	}
 }
 

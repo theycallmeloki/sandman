@@ -130,6 +130,21 @@ func readCpu() cpuSample {
 	return cpuSample{idle: idle + ioWait, total: total}
 }
 
+// cpuBusyDelta computes host-wide cpu utilization (percent * 1000) between
+// two samples: 0 when the window is empty or not moving.
+func cpuBusyDelta(prev, cur cpuSample) uint64 {
+	if cur.total <= prev.total || cur.idle < prev.idle {
+		return 0
+	}
+	dIdle := cur.idle - prev.idle
+	dTotal := cur.total - prev.total
+	if dTotal == 0 {
+		return 0
+	}
+	busy := 100 * (1 - float64(dIdle)/float64(dTotal))
+	return uint64(busy*1000 + 0.5)
+}
+
 // readMem reads host memory totals from /proc/meminfo (kB -> bytes).
 // used = MemTotal - MemAvailable, the kernel's honest "in use" figure.
 func readMem() (total, used uint64) {
@@ -183,7 +198,7 @@ func cmdDaemon(args []string) {
 	pruneOrphans(*name)
 	d.markStaleJobsFailed() // jobs running in a previous daemon died with it
 
-	server, err := advertise(*name, *port)
+	server, err := advertiseMDNS(*name, *port, "daemon", "")
 	if err != nil {
 		log.Printf("mDNS advertise failed (continuing without): %v", err)
 	} else {
@@ -203,13 +218,8 @@ func cmdDaemon(args []string) {
 		for range t.C {
 			// host-wide cpu utilization, delta since the previous tick
 			cur := readCpu()
-			if haveLast && cur.total > last.total && cur.idle >= last.idle {
-				dIdle := cur.idle - last.idle
-				dTotal := cur.total - last.total
-				if dTotal > 0 {
-					busy := 100 * (1 - float64(dIdle)/float64(dTotal))
-					d.cpuBusy.Store(uint64(busy*1000 + 0.5))
-				}
+			if haveLast {
+				d.cpuBusy.Store(cpuBusyDelta(last, cur))
 			}
 			last, haveLast = cur, true
 
@@ -312,7 +322,11 @@ func (d *daemon) syncOnce() {
 		if len(tok) > 3 {
 			docker = tok[3]
 		}
-		d.reg.mergeSync(tok[1], tok[2], docker)
+		role := ""
+		if len(tok) > 5 {
+			role = tok[5] // appended last: old peers omit it
+		}
+		d.reg.mergeSync(tok[1], tok[2], docker, role)
 	}
 }
 
@@ -354,7 +368,7 @@ func (d *daemon) handleNodes(w *bufio.Writer) {
 		return
 	}
 	for _, p := range peers {
-		if err := writeLine(w, "NODE", p.Name, p.Addr, p.Docker, p.Source); err != nil {
+		if err := writeLine(w, "NODE", p.Name, p.Addr, p.Docker, p.Source, p.Role); err != nil {
 			return
 		}
 	}
@@ -365,6 +379,13 @@ func (d *daemon) handleNodes(w *bufio.Writer) {
 // container. The docker CLI supplies the numbers; this relays them as a
 // stable schema the fleet can consume (Rule of Representation).
 func (d *daemon) handleStats(w *bufio.Writer) {
+	writeStatsReply(w, d.cpuBusy.Load())
+}
+
+// writeStatsReply streams a node's STATS reply: "STATS <n> <hostJSON>" then
+// n container JSON lines. Shared by the daemon (which passes its tick-sampled
+// cpuBusy) and the worker's text protocol (which samples on demand).
+func writeStatsReply(w *bufio.Writer, cpuBusy uint64) {
 	// docker stats samples all running containers and takes a few seconds
 	// on a busy node — give each call its own generous deadline.
 	psCtx, psCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -425,7 +446,7 @@ func (d *daemon) handleStats(w *bufio.Writer) {
 		Cpus:     runtime.NumCPU(),
 		MemTotal: memTotal,
 		MemUsed:  memUsed,
-		CPUBusy:  float64(d.cpuBusy.Load()) / 1000,
+		CPUBusy:  float64(cpuBusy) / 1000,
 	})
 	if err := writeLine(w, "STATS", strconv.Itoa(len(conts)), string(host)); err != nil {
 		return

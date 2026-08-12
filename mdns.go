@@ -13,12 +13,20 @@ import (
 
 // advertise publishes this node as a _sandman._tcp service — the Bonjour side
 // of the fabric. Zero configuration: a node that runs `sandman daemon` is
-// visible to the fleet; nothing to register, nothing to configure.
-func advertise(name string, port int) (*zeroconf.Server, error) {
+// visible to the fleet; nothing to register, nothing to configure. role
+// distinguishes a control plane ("daemon") from an execution host
+// ("worker") in the fleet view; addr, when non-empty, is the host:port
+// consumers must dial (a worker advertises its -advertise address so the
+// fleet never falls back to a loopback interface address from the browse).
+func advertiseMDNS(name string, port int, role, addr string) (*zeroconf.Server, error) {
 	txt := []string{
 		"docker=" + dockerVersion(),
 		"arch=" + runtime.GOARCH,
 		"os=" + runtime.GOOS,
+		"role=" + role,
+	}
+	if addr != "" {
+		txt = append(txt, "addr="+addr)
 	}
 	return zeroconf.Register(name, ServiceType, "local.", port, txt, nil)
 }
@@ -69,14 +77,27 @@ func (r *registry) mergeMdns(e *zeroconf.ServiceEntry) {
 		delete(r.peers, e.Instance)
 		return
 	}
-	addr := firstAddr(e)
+	// A node that advertises an explicit addr (a worker's -advertise) is
+	// dialed there; the browse's interface addresses can be loopback or a
+	// docker bridge, which would make peers dial the wrong host.
+	addr := textValue(e.Text, "addr")
+	if addr == "" {
+		if ip := firstAddr(e); ip != "" {
+			addr = net.JoinHostPort(ip, strconv.Itoa(e.Port))
+		}
+	}
 	if addr == "" {
 		return
 	}
+	role := textValue(e.Text, "role")
+	if role == "" {
+		role = "daemon"
+	}
 	r.peers[e.Instance] = &peer{
 		Name:     e.Instance,
-		Addr:     net.JoinHostPort(addr, strconv.Itoa(e.Port)),
+		Addr:     addr,
 		Docker:   textValue(e.Text, "docker"),
+		Role:     role,
 		Source:   "mdns",
 		LastSeen: time.Now(),
 	}

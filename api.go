@@ -68,6 +68,14 @@ func (c replayConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // serveConn routes one accepted connection by its first four bytes.
 func (d *daemon) serveConn(c net.Conn, apiConns chan<- net.Conn) {
+	routeConn(c, apiConns, d.handleConn)
+}
+
+// routeConn splits one accepted connection by its first four bytes: HTTP
+// goes to the api server (via the channel listener), anything else is the
+// fabric text protocol and goes to the text handler. The daemon and the
+// worker share the splitter — both serve HTTP + text on one port.
+func routeConn(c net.Conn, apiConns chan<- net.Conn, text func(net.Conn, *bufio.Reader)) {
 	br := bufio.NewReader(c)
 	c.SetDeadline(time.Now().Add(30 * time.Second)) // handshake window
 	head, err := br.Peek(4)
@@ -80,7 +88,7 @@ func (d *daemon) serveConn(c net.Conn, apiConns chan<- net.Conn) {
 		apiConns <- replayConn{c, br}
 		return
 	}
-	d.handleConn(c, br)
+	text(c, br)
 }
 
 func (d *daemon) apiHandler() http.Handler {

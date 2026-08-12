@@ -15,7 +15,8 @@ type peer struct {
 	Name     string
 	Addr     string // host:port
 	Docker   string
-	Source   string // "mdns" (ephemeral) | "static" (hand-edited peers file)
+	Role     string // "daemon" (control plane) | "worker" (execution host)
+	Source   string // "mdns" (ephemeral) | "sync" (gossip) | "static" (hand-edited peers file)
 	LastSeen time.Time
 }
 
@@ -106,13 +107,13 @@ func (r *registry) writeSnapshot() {
 	defer r.mu.Unlock()
 	var b strings.Builder
 	b.WriteString("# sandman registry: mdns-discovered peers (ephemeral) + static peers (hand-edited)\n")
-	b.WriteString("# name addr docker source seen\n")
+	b.WriteString("# name addr docker source seen role\n")
 	for _, p := range r.peers {
 		seen := "-"
 		if p.Source == "mdns" {
 			seen = time.Since(p.LastSeen).Round(time.Second).String()
 		}
-		fmt.Fprintf(&b, "%s %s %s %s %s\n", p.Name, p.Addr, p.Docker, p.Source, seen)
+		fmt.Fprintf(&b, "%s %s %s %s %s %s\n", p.Name, p.Addr, p.Docker, p.Source, seen, p.Role)
 	}
 	tmp := filepath.Join(r.dir, "registry.tmp")
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
@@ -127,13 +128,16 @@ func (r *registry) writeSnapshot() {
 // kernel delivers multicast to one shared-5353 socket per packet, so a
 // specific peer pair can be starved; TCP pull of a peer's registry always
 // converges (Rule of Robustness).
-func (r *registry) mergeSync(name, addr, docker string) {
+func (r *registry) mergeSync(name, addr, docker, role string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if name == r.own {
 		return
 	}
-	r.peers[name] = &peer{Name: name, Addr: addr, Docker: docker, Source: "sync", LastSeen: time.Now()}
+	if role == "" {
+		role = "daemon"
+	}
+	r.peers[name] = &peer{Name: name, Addr: addr, Docker: docker, Role: role, Source: "sync", LastSeen: time.Now()}
 }
 
 // addStatic records a manual peer in the peers file (the attach verb).
