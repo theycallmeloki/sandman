@@ -26,6 +26,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -997,7 +998,21 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		req.Env = append(req.Env, sd.Name+"=/sandman/in/"+sd.Name)
 	}
 
-	code, errCode, tail, timedOut, outputs, err := d.execOnHost(jx.host, req)
+	// the attempt's HTTP call is cancelled when the job is cancelled: a
+	// remote attempt has no local container for cancelJob's kill loop, so
+	// the cancel must interrupt the in-flight request or it can never
+	// settle (SB-123)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-jx.rj.cancelCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	code, errCode, tail, timedOut, outputs, err := d.execOnHost(ctx, jx.host, req)
 	if err != nil {
 		// the host is unreachable or the attempt could not be produced:
 		// an environment problem, not a user-code failure — the pipeline

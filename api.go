@@ -167,11 +167,32 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
 	mux.HandleFunc("DELETE /api/v1/tags/{name}", hErr(d.deleteTagH))
 	mux.HandleFunc("GET /api/v1/tags", hErr(d.listTagsH))
+	// unknown paths get the uniform JSON error shape (mux's default
+	// text/plain "404 page not found" would break the client's error
+	// decode — and version-skew callers hitting a not-yet-existing
+	// endpoint most need a readable message)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusNotFound, "no such endpoint")
+	})
 	return mux
 }
 
 // hErr wraps a handler that returns a client error.
 type handler func(w http.ResponseWriter, r *http.Request) error
+
+// readBody reads up to maxBody bytes and rejects larger bodies instead
+// of silently truncating them: a truncated upload would be stored as if
+// it were the whole file.
+func readBody(r io.Reader, maxBody int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBody {
+		return nil, fmt.Errorf("body exceeds %d bytes", maxBody)
+	}
+	return data, nil
+}
 
 func hErr(h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +258,11 @@ func (d *daemon) inspectRepoH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) deleteRepoH(w http.ResponseWriter, r *http.Request) error {
-	return d.store.deleteRepo(r.PathValue("name"), r.URL.Query().Get("force") == "1")
+	if err := d.store.deleteRepo(r.PathValue("name"), r.URL.Query().Get("force") == "1"); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
 }
 
 // ---- commits ----
@@ -762,7 +787,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		if resp.StatusCode >= 300 {
 			return fmt.Errorf("fetch %s: status %d", u, resp.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<30))
+		data, err := readBody(resp.Body, 1<<30)
 		if err != nil {
 			return fmt.Errorf("read fetch: %v", err)
 		}
@@ -773,7 +798,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	defer r.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<30))
+	data, err := readBody(r.Body, 1<<30)
 	if err != nil {
 		return fmt.Errorf("read body: %v", err)
 	}
@@ -785,7 +810,15 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 	if q.Get("split") == "1" {
 		delim := q.Get("delimiter")
 		header := q.Get("header") == "1"
+		// a split with a header needs at least one delimiter occurrence:
+		// the body-less slice below (chunks[1:]) panics otherwise
+		if delim == "" {
+			return fmt.Errorf("split upload needs a non-empty delimiter")
+		}
 		chunks := strings.Split(string(data), delim)
+		if header && len(chunks) < 2 {
+			return fmt.Errorf("split upload with a header needs at least one delimiter in the body")
+		}
 		start := 0
 		if header {
 			start = 1
@@ -888,7 +921,12 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 	// Content type is detected from the bytes, not a stored label (SB-099).
 	w.Header().Set("Content-Type", http.DetectContentType(data))
 	if r.URL.Query().Get("download") == "true" {
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(r.PathValue("path"))))
+		// the basename is percent-decoded untrusted input: strip quotes,
+		// backslashes and CR/LF so it cannot break out of the quoted
+		// filename (net/http already rejects CR/LF in header values, but
+		// the header must also stay well-formed for download clients)
+		base := strings.NewReplacer(`"`, "", `\`, "", "\r", "", "\n", "").Replace(filepath.Base(r.PathValue("path")))
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, base))
 	}
 	_, _ = w.Write(data)
 	return nil
@@ -1229,7 +1267,7 @@ func (d *daemon) deleteJobH(w http.ResponseWriter, r *http.Request) error {
 
 func (d *daemon) putTagH(w http.ResponseWriter, r *http.Request) error {
 	defer r.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<30))
+	data, err := readBody(r.Body, 1<<30)
 	if err != nil {
 		return fmt.Errorf("read body: %v", err)
 	}

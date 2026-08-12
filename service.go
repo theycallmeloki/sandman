@@ -417,13 +417,21 @@ func (d *daemon) serviceViewFiles(side client.Input, headID string) ([]shipFile,
 
 // remoteServicePost sends a JSON body to a worker's service endpoint.
 // The worker replies 200 with an error field on failure — the body must
-// be checked, not just the status.
+// be checked, not just the status. The call is bounded (image pulls can
+// be slow, but a wedged worker must not hold the control plane's
+// goroutine forever).
 func remoteServicePost(host, path string, body any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	resp, err := http.Post("http://"+host+path, "application/json", bytes.NewReader(b))
+	req, err := http.NewRequest(http.MethodPost, "http://"+host+path, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

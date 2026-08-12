@@ -48,6 +48,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -80,6 +81,25 @@ func (c *Client) do(method, p string, in, out any) error {
 
 // doClient is do with a specific HTTP client (a long-poll needs a client
 // timeout that outlives the server's own deadline, D-23 R-5).
+// decodeError converts a non-2xx response into an Error. Handler errors
+// are {"error": msg} JSON; mux-generated 404/405 and any other non-JSON
+// body fall back to the raw text so callers print a readable message
+// instead of an empty one — the version-skew case (a new CLI hitting an
+// old daemon's missing endpoint) depends on this.
+func decodeError(status int, body []byte) *Error {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && e.Error != "" {
+		return &Error{Status: status, Message: e.Error}
+	}
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		msg = http.StatusText(status)
+	}
+	return &Error{Status: status, Message: msg}
+}
+
 func (c *Client) doClient(hc *http.Client, method, p string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -100,11 +120,8 @@ func (c *Client) doClient(hc *http.Client, method, p string, in, out any) error 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&e)
-		return &Error{Status: resp.StatusCode, Message: e.Error}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return decodeError(resp.StatusCode, b)
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
@@ -130,11 +147,7 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(b, &e)
-		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
+		return nil, decodeError(resp.StatusCode, b)
 	}
 	return b, nil
 }
@@ -155,11 +168,7 @@ func (c *Client) doRawHeaders(method, p string) (FileFetch, error) {
 		return FileFetch{}, err
 	}
 	if resp.StatusCode >= 400 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(b, &e)
-		return FileFetch{}, &Error{Status: resp.StatusCode, Message: e.Error}
+		return FileFetch{}, decodeError(resp.StatusCode, b)
 	}
 	return FileFetch{
 		Data:            b,

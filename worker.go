@@ -460,12 +460,30 @@ func runExec(nodeName string, req execRequest) execResult {
 }
 
 // execOnHost pushes one datum attempt to a worker and decodes the result.
-func (d *daemon) execOnHost(h *execHost, req execRequest) (code, errCode int, tail string, timedOut bool, outputs []shipFile, err error) {
+// The call is cancelled when the job is cancelled and bounded by a
+// deadline: a hung or partitioned worker must fail the attempt (crashing
+// the pipeline, SB-091/169) instead of wedging the job's gate forever
+// while cancelJob finds no local container to kill.
+func (d *daemon) execOnHost(ctx context.Context, h *execHost, req execRequest) (code, errCode int, tail string, timedOut bool, outputs []shipFile, err error) {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return 0, 0, "", false, nil, err
 	}
-	resp, err := http.Post("http://"+h.Addr+"/exec", "application/json", bytes.NewReader(b))
+	// the operator's DatumTimeout is the declared per-datum bound; without
+	// one, a generous cap keeps a black-holed worker from holding the
+	// pipeline gate indefinitely (legit long datums set DatumTimeout)
+	timeout := 1 * time.Hour
+	if d, err := time.ParseDuration(req.DatumTimeout); err == nil && d > 0 && d < timeout {
+		timeout = d
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+h.Addr+"/exec", bytes.NewReader(b))
+	if err != nil {
+		return 0, 0, "", false, nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return 0, 0, "", false, nil, err
 	}

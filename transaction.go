@@ -420,21 +420,31 @@ func (d *daemon) txUnhold(name string) {
 
 // waitJobSettled blocks until the named job's record is terminal. An
 // empty id (nothing was scheduled) settles immediately. The wait is
-// bounded: a deleted job record settles immediately (a deleted job cannot
-// run the head), and a job wedged in a broken gate or hung remote attempt
-// must not hold the transaction's trigger suppression forever.
+// bounded: a job wedged in a broken gate or hung remote attempt must not
+// hold the transaction's trigger suppression forever. A record that has
+// been absent for a grace window is treated as settled — the schedule
+// path returns the job id before the runJob goroutine writes the record
+// (async), so a missing record is first a not-yet-written race, and only
+// after the window a deletion (a deleted job cannot run the head).
 func (d *daemon) waitJobSettled(id string) {
 	if id == "" {
 		return
 	}
 	deadline := time.Now().Add(5 * time.Minute)
+	var missingSince time.Time
 	for time.Now().Before(deadline) {
 		rec, err := d.loadJobRec(id)
 		if err != nil {
-			return // record deleted: it cannot run the head
-		}
-		if rec.State != "running" {
-			return
+			if missingSince.IsZero() {
+				missingSince = time.Now()
+			} else if time.Since(missingSince) > 5*time.Second {
+				return // record deleted: it cannot run the head
+			}
+		} else {
+			missingSince = time.Time{}
+			if rec.State != "running" {
+				return
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
