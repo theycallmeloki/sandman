@@ -9,7 +9,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -38,19 +37,30 @@ func isHTTPMethod(head []byte) bool {
 	return false
 }
 
-// chanListener delivers pre-routed connections to http.Server.
+// chanListener delivers pre-routed connections to http.Server. The
+// routing channel is owned by the accept path, so Close cannot close it
+// (a send would panic); instead a done channel unblocks Accept with
+// net.ErrClosed, letting http.Server.Shutdown complete (its listener
+// WaitGroup counts the Serve goroutine, which only exits when Accept
+// returns).
 type chanListener struct {
-	ch chan net.Conn
+	ch   chan net.Conn
+	done chan struct{}
+	once sync.Once
 }
 
 func (l *chanListener) Accept() (net.Conn, error) {
-	c, ok := <-l.ch
-	if !ok {
-		return nil, errors.New("listener closed")
+	select {
+	case c := <-l.ch:
+		return c, nil
+	case <-l.done:
+		return nil, net.ErrClosed
 	}
-	return c, nil
 }
-func (l *chanListener) Close() error   { return nil }
+func (l *chanListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return nil
+}
 func (l *chanListener) Addr() net.Addr { return dummyAddr{} }
 
 type dummyAddr struct{}

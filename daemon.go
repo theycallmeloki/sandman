@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,6 +170,20 @@ func readMem() (total, used uint64) {
 	return memTotal * 1024, (memTotal - memAvail) * 1024
 }
 
+// guard runs a daemon-owned goroutine body with panic recovery: an
+// unrecovered panic in any of them would kill the process and every
+// in-flight job. The panic is logged with its stack and the goroutine
+// degrades locally (its connection or job is abandoned; the daemon
+// continues).
+func guard(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("sandmand: panic in daemon goroutine: %v\n%s", r, debug.Stack())
+		}
+	}()
+	fn()
+}
+
 func cmdDaemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	port := fs.Int("port", DefaultPort, "TCP listen port")
@@ -205,7 +221,7 @@ func cmdDaemon(args []string) {
 	// resolver in one process, transient clients churning) go stale after a
 	// while and silently stop receiving announcements; a fresh resolver per
 	// tick is cheap and always works.
-	go func() {
+	go guard(func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
 		var last cpuSample
@@ -230,25 +246,13 @@ func cmdDaemon(args []string) {
 			d.reg.writeSnapshot()
 			d.syncOnce()
 		}
-	}()
+	})
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("listen :%d: %v", *port, err)
 	}
 	log.Printf("sandmand %q on :%d docker=%s", *name, *port, dockerVersion())
-
-	// On SIGTERM/SIGINT, announce the mDNS goodbye so peers drop us
-	// immediately instead of waiting out the TTL.
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
-		if server != nil {
-			server.Shutdown()
-		}
-		os.Exit(0)
-	}()
 
 	// The HTTP API shares this port with the text protocol. HTTP conns are
 	// routed to http.Server (keep-alive friendly) via a channel listener;
@@ -257,15 +261,52 @@ func cmdDaemon(args []string) {
 	apiSrv := &http.Server{
 		Handler:           d.apiHandler(),
 		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
-	go apiSrv.Serve(&chanListener{ch: apiConns})
+	go apiSrv.Serve(&chanListener{ch: apiConns, done: make(chan struct{})})
+
+	// On SIGTERM/SIGINT, shut down gracefully: announce the mDNS goodbye
+	// (deferred srv.Shutdown on return), cancel every in-flight job so its
+	// containers are killed and its record settles as killed, drain the
+	// API server, close the listener, and return. A plain os.Exit would
+	// abandon running job containers — pruneOrphans docker rm -f's them at
+	// next start, destroying in-progress work on every restart.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		if n := d.countRunningJobs(); n > 0 {
+			log.Printf("sandmand: shutting down: cancelling %d in-flight jobs", n)
+		}
+		d.cancelAllRunningJobs()
+		// bounded settle window: cancelled jobs write their killed
+		// records; the containers are already dead, so a straggler only
+		// leaves a record marked failed at next start — never lost work
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) && d.countRunningJobs() > 0 {
+			time.Sleep(250 * time.Millisecond)
+		}
+		drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := apiSrv.Shutdown(drainCtx); err != nil {
+			log.Printf("sandmand: api drain: %v", err)
+		}
+		ln.Close()
+	}()
 
 	for {
 		c, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return // graceful shutdown closed the listener
+			}
+			// transient accept failure: log and back off rather than
+			// busy-spinning at 100% CPU with no diagnostic
+			log.Printf("sandmand: accept: %v", err)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		go d.serveConn(c, apiConns)
+		go guard(func() { d.serveConn(c, apiConns) })
 	}
 }
 

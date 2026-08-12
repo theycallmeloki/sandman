@@ -13,6 +13,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,10 +23,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"sandman/client"
@@ -184,16 +187,23 @@ func cmdWorker(args []string) {
 	// fleet citizen (a loopback-bound worker advertises nothing and stays
 	// invisible until -advertise makes it reachable).
 	apiConns := make(chan net.Conn)
-	apiSrv := &http.Server{Handler: mux, ReadHeaderTimeout: 15 * time.Second}
-	go apiSrv.Serve(&chanListener{ch: apiConns})
+	apiSrv := &http.Server{Handler: mux, ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 2 * time.Minute}
+	go apiSrv.Serve(&chanListener{ch: apiConns, done: make(chan struct{})})
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				fmt.Fprintf(os.Stderr, "sandman worker %s: accept: %v\n", *name, err)
+				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			go routeConn(c, apiConns, func(c net.Conn, r *bufio.Reader) {
-				workerHandleConn(*name, c, r)
+			go guard(func() {
+				routeConn(c, apiConns, func(c net.Conn, r *bufio.Reader) {
+					workerHandleConn(*name, c, r)
+				})
 			})
 		}
 	}()
@@ -213,6 +223,32 @@ func cmdWorker(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "sandman worker %s: exec endpoint %s, labels %v\n", *name, addr, labels)
 
+	// On SIGTERM/SIGINT, stop the tracked service containers (a bare exit
+	// leaves them running and holding their fixed names and published
+	// ports, so the next worker start fails with conflicts), drain the
+	// exec server, close the listener, and return so the mDNS goodbye
+	// defer runs.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		workerServicesMu.Lock()
+		names := make([]string, 0, len(workerServices))
+		for name := range workerServices {
+			names = append(names, name)
+		}
+		workerServicesMu.Unlock()
+		for _, name := range names {
+			stopRemoteService(name)
+		}
+		drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := apiSrv.Shutdown(drainCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "sandman worker %s: api drain: %v\n", *name, err)
+		}
+		ln.Close()
+	}()
+
 	// register, then heartbeat every few seconds: the control plane's
 	// host TTL expires a worker that stops reporting, so a vanished host
 	// stops receiving work on its own.
@@ -220,7 +256,11 @@ func cmdWorker(args []string) {
 		if err := registerHost(*control, *name, addr, labels); err != nil {
 			fmt.Fprintf(os.Stderr, "sandman worker %s: register: %v\n", *name, err)
 		}
-		time.Sleep(3 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 

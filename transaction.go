@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -418,18 +419,26 @@ func (d *daemon) txUnhold(name string) {
 }
 
 // waitJobSettled blocks until the named job's record is terminal. An
-// empty id (nothing was scheduled) settles immediately.
+// empty id (nothing was scheduled) settles immediately. The wait is
+// bounded: a deleted job record settles immediately (a deleted job cannot
+// run the head), and a job wedged in a broken gate or hung remote attempt
+// must not hold the transaction's trigger suppression forever.
 func (d *daemon) waitJobSettled(id string) {
 	if id == "" {
 		return
 	}
-	for {
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
 		rec, err := d.loadJobRec(id)
-		if err == nil && rec.State != "running" {
+		if err != nil {
+			return // record deleted: it cannot run the head
+		}
+		if rec.State != "running" {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	log.Printf("transaction: job %s did not settle within 5m; proceeding without it", id)
 }
 
 // ---- HTTP surface ----

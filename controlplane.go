@@ -597,7 +597,7 @@ func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, i
 	// not-yet-scheduled goroutine would otherwise escape the cancel and
 	// run the old version indefinitely (SB-045)
 	rj := registerRunning(id, rec.Pipeline.Name)
-	go d.runJob(*rec, heads, id, propagated, pre, rj)
+	go guard(func() { d.runJob(*rec, heads, id, propagated, pre, rj) })
 	return id
 }
 
@@ -2016,6 +2016,28 @@ func (d *daemon) recordProvenance(commitID string, inputs []string) {
 	}
 }
 
+// cancelAllRunningJobs cancels every in-flight job; the kill loops run
+// asynchronously (cancelJob spawns its own retry goroutine), so a
+// shutdown path calls this and then waits on countRunningJobs draining.
+func (d *daemon) cancelAllRunningJobs() {
+	jobsMu.Lock()
+	ids := make([]string, 0, len(running))
+	for id := range running {
+		ids = append(ids, id)
+	}
+	jobsMu.Unlock()
+	for _, id := range ids {
+		d.cancelJob(id)
+	}
+}
+
+// countRunningJobs reports the number of in-flight jobs (shutdown drain).
+func (d *daemon) countRunningJobs() int {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	return len(running)
+}
+
 // cancelJob kills a running job and waits for it to settle as KILLED. A
 // terminal job cancels to a no-op. The kill retries: a job can be cancelled
 // the instant it appears, before its container exists (docker run still
@@ -2431,13 +2453,17 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 	dir := d.jobDir(id)
 	outDir := filepath.Join(dir, "out")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return
-	}
+	// the defers must register before any failure path: spawnJob already
+	// put the job in the running map, and an early return without them
+	// leaks the running handle (a later cancel waits 30s and errors) and
+	// the standby activation count (the pipeline never returns to standby)
 	defer unregisterRunning(id, rj)
 	// a standby pipeline returns to standby once its work settles; the
 	// defer covers every terminal path (success, failure, killed)
 	defer d.standbySettle(pl.Pipeline.Name)
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return
+	}
 
 	rec := pre
 	if rec == nil {

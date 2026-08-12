@@ -77,7 +77,7 @@ func (d *daemon) startCronTicker(pipeline, name, schedule string, overwrite bool
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cronTickers[repo] = cancel
 	d.cronMu.Unlock()
-	go func() {
+	go guard(func() {
 		t := time.NewTicker(dur)
 		defer t.Stop()
 		for {
@@ -88,7 +88,7 @@ func (d *daemon) startCronTicker(pipeline, name, schedule string, overwrite bool
 				return
 			}
 		}
-	}()
+	})
 }
 
 // stopCronTickers stops every ticker whose cron repository belongs to the
