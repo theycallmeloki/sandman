@@ -40,3 +40,32 @@ func waitSpoutCommits(t *testing.T, pipe string, n int) []client.Commit {
 	})
 	return ch
 }
+
+// pollSpoutJobSettled waits until the spout pipeline's job leaves the
+// running state (the container exited and the daemon settled it).
+func pollSpoutJobSettled(t *testing.T, pipe string) {
+	t.Helper()
+	pollFor(t, "spout job settled", 60*time.Second, func() bool {
+		js, _ := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
+		if len(js) == 0 {
+			return false
+		}
+		j, err := c.InspectJob(js[0].ID)
+		return err == nil && j.State != "running"
+	})
+	j, err := c.InspectJob(mustJobID(t, pipe))
+	if err != nil || j.State != "success" {
+		t.Fatalf("spout job state = %s (reason %q), want success", j.State, j.Reason)
+	}
+}
+
+// mustJobID returns the pipeline's first job id (there is exactly one per
+// spout run).
+func mustJobID(t *testing.T, pipe string) string {
+	t.Helper()
+	js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
+	if err != nil || len(js) == 0 {
+		t.Fatalf("jobs for %s: %v", pipe, err)
+	}
+	return js[0].ID
+}

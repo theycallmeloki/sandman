@@ -442,6 +442,139 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		}
 	})
 
+	t.Run("rapid open/close keeps every cycle's file", func(t *testing.T) {
+		// clause 2: ten cycles at 50ms spacing — 20x faster than the
+		// accumulation test's 1s cadence but wider than the daemon's
+		// 250ms poll, so every cycle is caught separately; the trailing
+		// sleep keeps the container alive past the last write so the
+		// final poll commits it. Nothing may be lost or skipped.
+		pipe := uniq(t)
+		script := "for i in $(seq 1 10); do echo content-$i > ${OUT}/f$i; sleep 0.05; done; sleep 1"
+		mustPipeline(t, client.Pipeline{
+			Name:      pipe,
+			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", script}},
+			Spout:     &client.Spout{},
+		})
+		waitSpoutCommits(t, pipe, 1)
+		pollSpoutJobSettled(t, pipe)
+		ch, err := c.CommitHistory(pipe, "master")
+		if err != nil {
+			t.Fatalf("history: %v", err)
+		}
+		if len(ch) == 0 {
+			t.Fatalf("no spout commits at all")
+		}
+		head := ch[len(ch)-1]
+		for i := 1; i <= 10; i++ {
+			want := "content-" + itoa(i) + "\n"
+			b, err := c.GetFile(head.ID, "f"+itoa(i))
+			if err != nil || string(b) != want {
+				t.Fatalf("f%d = %q, err %v; want %q — a cycle was lost or skipped", i, b, err, want)
+			}
+		}
+		// no empty commit: every commit in the history carries files
+		for _, cm := range ch {
+			fs, err := c.ListFiles(cm.ID)
+			if err != nil {
+				t.Fatalf("list %s: %v", cm.ID, err)
+			}
+			if len(fs) == 0 {
+				t.Fatalf("commit %s is empty — an empty cycle surfaced a commit", cm.ID)
+			}
+		}
+	})
+
+	t.Run("busy-loop hammer yields strictly growing commits", func(t *testing.T) {
+		// clause 3: a no-delay-ish loop (30ms spacing, spanning ~1.2s)
+		// appends to one file; each poll-detected change is one commit
+		// with exactly one file and a strictly larger size; cycles with
+		// an empty payload (nothing changed) surface NO commit.
+		pipe := uniq(t)
+		script := "for i in $(seq 1 40); do echo x >> ${OUT}/file; sleep 0.03; done; sleep 1"
+		mustPipeline(t, client.Pipeline{
+			Name:      pipe,
+			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", script}},
+			Spout:     &client.Spout{},
+		})
+		waitSpoutCommits(t, pipe, 2)
+		pollSpoutJobSettled(t, pipe)
+		ch, err := c.CommitHistory(pipe, "master")
+		if err != nil {
+			t.Fatalf("history: %v", err)
+		}
+		sizes := make([]int, len(ch))
+		for i, cm := range ch {
+			fs, err := c.ListFiles(cm.ID)
+			if err != nil {
+				t.Fatalf("list %s: %v", cm.ID, err)
+			}
+			if len(fs) != 1 {
+				t.Fatalf("commit %s holds %d files, want exactly one", cm.ID, len(fs))
+			}
+			b, err := c.GetFile(cm.ID, "file")
+			if err != nil {
+				t.Fatalf("read file at %s: %v", cm.ID, err)
+			}
+			sizes[i] = len(b)
+		}
+		for i := 1; i < len(sizes); i++ {
+			if sizes[i] <= sizes[i-1] {
+				t.Fatalf("file size not strictly increasing: %v", sizes)
+			}
+		}
+		head := ch[len(ch)-1]
+		b, err := c.GetFile(head.ID, "file")
+		if err != nil || len(b) != 80 {
+			t.Fatalf("final file = %d bytes, err %v; want 80 (40 x \"x\\n\" appends committed)", len(b), err)
+		}
+		// after the job settles, the unchanged snapshot surfaces no
+		// extra/empty commit
+		n := len(ch)
+		time.Sleep(1500 * time.Millisecond)
+		after, err := c.CommitHistory(pipe, "master")
+		if err != nil {
+			t.Fatalf("history after settle: %v", err)
+		}
+		if len(after) != n {
+			t.Fatalf("commit count grew %d -> %d after settle; an empty cycle surfaced a commit", n, len(after))
+		}
+	})
+
+	t.Run("arbitrary programs drive the spout", func(t *testing.T) {
+		// clause 4: the mechanism is the output-directory watch, not a
+		// shell convention — a python program writes the output.
+		pipe := uniq(t)
+		script := "import time\nfor i in range(1, 6):\n    open('/sandman/out/py%d' % i, 'w').write('py%d' % i)\n    time.sleep(0.3)\ntime.sleep(1)\n"
+		mustPipeline(t, client.Pipeline{
+			Name:      pipe,
+			Transform: &client.Transform{Image: "python:3-alpine", Cmd: []string{"python3", "-c", script}},
+			Spout:     &client.Spout{},
+		})
+		waitSpoutCommits(t, pipe, 3)
+		pollSpoutJobSettled(t, pipe)
+		ch, err := c.CommitHistory(pipe, "master")
+		if err != nil {
+			t.Fatalf("history: %v", err)
+		}
+		head := ch[len(ch)-1]
+		for i := 1; i <= 5; i++ {
+			want := "py" + itoa(i)
+			b, err := c.GetFile(head.ID, "py"+itoa(i))
+			if err != nil || string(b) != want {
+				t.Fatalf("py%d = %q, err %v; want %q", i, b, err, want)
+			}
+		}
+		for _, cm := range ch {
+			fs, err := c.ListFiles(cm.ID)
+			if err != nil {
+				t.Fatalf("list %s: %v", cm.ID, err)
+			}
+			if len(fs) == 0 {
+				t.Fatalf("commit %s is empty", cm.ID)
+			}
+		}
+	})
+
 	t.Run("input and marker validation", func(t *testing.T) {
 		repo := uniq(t)
 		mustRepo(t, repo)
