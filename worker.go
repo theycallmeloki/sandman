@@ -89,7 +89,6 @@ func cmdWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	name := fs.String("name", "", "host name (required)")
 	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (required)")
-	token := fs.String("token", "", "join token the control plane authenticates with")
 	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
 	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
 	var labels strSliceFlag
@@ -218,7 +217,7 @@ func cmdWorker(args []string) {
 	// host TTL expires a worker that stops reporting, so a vanished host
 	// stops receiving work on its own.
 	for {
-		if err := registerHost(*control, *token, *name, addr, labels); err != nil {
+		if err := registerHost(*control, *name, addr, labels); err != nil {
 			fmt.Fprintf(os.Stderr, "sandman worker %s: register: %v\n", *name, err)
 		}
 		time.Sleep(3 * time.Second)
@@ -273,7 +272,7 @@ func (s *strSliceFlag) Set(v string) error {
 
 // registerHost joins (or refreshes) the worker in the control plane's
 // host registry.
-func registerHost(control, token, name, addr string, labels []string) error {
+func registerHost(control, name, addr string, labels []string) error {
 	body, err := json.Marshal(map[string]any{"name": name, "addr": addr, "labels": labels})
 	if err != nil {
 		return err
@@ -283,7 +282,6 @@ func registerHost(control, token, name, addr string, labels []string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Sandbox-Token", token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

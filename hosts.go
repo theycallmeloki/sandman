@@ -4,7 +4,7 @@ package main
 // with placement labels; a pipeline may require a label, and its jobs run
 // on a host that registered it. A host joins the cluster by establishing
 // contact with the control plane using configuration set at host setup
-// time (the worker's -control/-token flags) — the pipeline definition
+// time (the worker's -control/-advertise flags) — the pipeline definition
 // never enumerates a host address or identity.
 //
 // Hosts are ephemeral: registration carries a TTL that the worker's

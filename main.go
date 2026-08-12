@@ -26,8 +26,6 @@ var (
 	// addrFlag selects the control plane for the data-plane verbs
 	// (planectl.go); it defaults to the local daemon port.
 	addrFlag = flag.String("addr", defaultAddr(), "control-plane address (data-plane verbs)")
-	// tokenFlag is the credential sent with the data-plane verbs (SB-154).
-	tokenFlag = flag.String("token", "", "auth token for the control plane")
 	// versionFlag prints the binary and daemon versions and exits.
 	versionFlag = flag.Bool("version", false, "print binary and daemon versions")
 )
@@ -39,9 +37,6 @@ var (
 func printVersion() {
 	fmt.Printf("sandman %s\n", Version)
 	c := client.New(*addrFlag)
-	if *tokenFlag != "" {
-		c.SetToken(*tokenFlag)
-	}
 	ver, err := c.Version()
 	if err != nil {
 		fmt.Printf("daemon: not reachable at %s\n", *addrFlag)
@@ -124,7 +119,6 @@ usage: sandman [flags] <verb> [flags]
 
 global flags:
   -addr <host:port>   control-plane address (default $SANDBOX_ADDR or 127.0.0.1:4242)
-  -token <token>      auth token for the control plane
 
 verbs:
   daemon              run the node side (advertises via mDNS, serves jobs)

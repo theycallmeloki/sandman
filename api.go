@@ -575,25 +575,7 @@ func (d *daemon) collectGarbage() error {
 	return nil
 }
 
-// ---- secrets (SB-153/154) ----
-
-// requireAuth enforces the daemon's configured credential on the
-// management endpoints that require one: a request without the token is
-// rejected with "no authentication token"; a wrong token is rejected too
-// (SB-154). With no token configured, authentication is disabled.
-func (d *daemon) requireAuth(r *http.Request) error {
-	if d.authToken == "" {
-		return nil
-	}
-	got := r.Header.Get("X-Sandbox-Token")
-	if got == "" {
-		return fmt.Errorf("no authentication token")
-	}
-	if got != d.authToken {
-		return fmt.Errorf("invalid authentication token")
-	}
-	return nil
-}
+// ---- secrets (SB-153/051) ----
 
 // secretRec is a secret's durable record: a named metadata blob with a
 // type label and key/value data (SB-153, D-05 — durable, like every other
@@ -610,9 +592,6 @@ func (d *daemon) secretPath(name string) string {
 }
 
 func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.requireAuth(r); err != nil {
-		return err
-	}
 	var body struct {
 		Name string            `json:"name"`
 		Data map[string]string `json:"data"`
@@ -644,9 +623,6 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) inspectSecretH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.requireAuth(r); err != nil {
-		return err
-	}
 	rec, err := d.loadSecret(r.PathValue("name"))
 	if err != nil {
 		return err
@@ -668,9 +644,6 @@ func (d *daemon) loadSecret(name string) (*secretRec, error) {
 }
 
 func (d *daemon) listSecretsH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.requireAuth(r); err != nil {
-		return err
-	}
 	var out []client.SecretInfo
 	entries, err := os.ReadDir(filepath.Join(d.state, "secrets"))
 	if err == nil {
@@ -689,9 +662,6 @@ func (d *daemon) listSecretsH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.requireAuth(r); err != nil {
-		return err
-	}
 	os.Remove(d.secretPath(r.PathValue("name"))) // idempotent in effect (SB-153)
 	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
@@ -705,9 +675,6 @@ func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
 // pipelines onto registered hosts; a pipeline definition never names a
 // host address (SB-167).
 func (d *daemon) registerHostH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.requireAuth(r); err != nil {
-		return err
-	}
 	var body struct {
 		Name   string   `json:"name"`
 		Addr   string   `json:"addr"`
@@ -725,17 +692,11 @@ func (d *daemon) registerHostH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) listHostsH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.requireAuth(r); err != nil {
-		return err
-	}
 	writeJSON(w, d.hosts.list())
 	return nil
 }
 
 func (d *daemon) deleteHostH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.requireAuth(r); err != nil {
-		return err
-	}
 	d.hosts.drop(r.PathValue("name"))
 	writeJSON(w, map[string]string{"ok": "true"})
 	return nil

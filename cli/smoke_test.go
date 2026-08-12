@@ -26,7 +26,6 @@ import (
 var (
 	binPath   string
 	addr      string
-	token     = "cli-token"
 	daemonCmd *exec.Cmd
 )
 
@@ -51,7 +50,7 @@ func TestMain(m *testing.M) {
 
 	// the daemon runs its default container runner: the CLI smoke flow is
 	// a real end-to-end execution, not the deterministic process backend
-	cmd := exec.Command(binPath, "daemon", "-name", "cli-"+strconv.Itoa(port), "-port", strconv.Itoa(port), "-state", state, "-authToken", token)
+	cmd := exec.Command(binPath, "daemon", "-name", "cli-"+strconv.Itoa(port), "-port", strconv.Itoa(port), "-state", state)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -78,11 +77,11 @@ func dockerAvailable() bool {
 	return exec.Command("docker", "version").Run() == nil
 }
 
-// runCLI executes the binary with the global -addr/-token flags and the
+// runCLI executes the binary with the global -addr flag and the
 // verb args, returning stdout, stderr and the exit code.
 func runCLI(t *testing.T, stdin string, args ...string) (string, string, int) {
 	t.Helper()
-	full := append([]string{"-addr", addr, "-token", token}, args...)
+	full := append([]string{"-addr", addr}, args...)
 	cmd := exec.Command(binPath, full...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)

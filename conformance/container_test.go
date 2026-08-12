@@ -32,7 +32,7 @@ func withContainerDaemon(t *testing.T) {
 	os.RemoveAll(state)
 	os.MkdirAll(state, 0o755)
 	port := freePort()
-	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(port), "-state", state, "-authToken", conformanceToken)
+	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(port), "-state", state)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -44,7 +44,6 @@ func withContainerDaemon(t *testing.T) {
 
 	oldC, oldPort, oldState := c, daemonPort, daemonStateDir
 	c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
-	c.SetToken(conformanceToken)
 	daemonPort = port
 	daemonStateDir = state
 	t.Cleanup(func() {

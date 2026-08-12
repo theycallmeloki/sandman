@@ -199,7 +199,7 @@ func TestSB168_RemoteServiceReachable(t *testing.T) {
 	workerPort := freePort()
 	workerName := "w-" + uniq(t)
 	cmd := exec.Command(binPath, "worker", "-name", workerName, "-control", c.Base(),
-		"-token", conformanceToken, "-port", strconv.Itoa(workerPort), "-label", label)
+		"-port", strconv.Itoa(workerPort), "-label", label)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

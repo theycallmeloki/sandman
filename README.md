@@ -262,7 +262,7 @@ revisions, and jobs that run them.
 - **Placement** — a pipeline may require a placement label; its jobs run
   on an execution host that registered that label with the control plane.
   A host joins with configuration set at host setup time (`sandman worker
-  -control <url> -token <token> -label <label>`), and the pipeline
+  -control <url> -advertise <addr> -label <label>`), and the pipeline
   definition never names a host address. Work that no registered host can
   take surfaces as the pipeline's crashed state instead of hanging; when
   a host bearing the label registers, the pending job re-places on its
@@ -329,10 +329,9 @@ revisions, and jobs that run them.
   whole pairs (SB-076)
 - **Secrets** — named typed metadata blobs with create/inspect/list/delete
   (the type is reported as "Opaque", the creation timestamp is
-  system-assigned); every secret-management operation requires the
-  daemon's configured credential (`-authToken`, or `SANDBOX_TOKEN`), and
-  an unauthenticated request is rejected with "no authentication token"
-  (SB-153, SB-154)
+  system-assigned). The trusted-LAN model (no tokens; see below) means any
+  peer on the LAN can manage secrets and bind them into pipelines
+  (SB-153, SB-051)
 - **Runtime metrics** — `/api/v1/metrics` serves Prometheus-format
   invocation counters and latency sum/count aggregates for file reads
   (split by outcome — two series), file writes, and job listings (one

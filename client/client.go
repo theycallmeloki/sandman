@@ -63,17 +63,13 @@ func (e *Error) Error() string {
 
 // Client speaks Sandman's HTTP API.
 type Client struct {
-	base  string
-	hc    *http.Client
-	token string
+	base string
+	hc   *http.Client
 }
 
 func New(addr string) *Client {
 	return &Client{base: "http://" + addr, hc: &http.Client{Timeout: 60 * time.Second}}
 }
-
-// SetToken configures the credential sent with every request (SB-154).
-func (c *Client) SetToken(token string) { c.token = token }
 
 // Base returns the server URL (http://host:port).
 func (c *Client) Base() string { return c.base }
@@ -98,9 +94,6 @@ func (c *Client) doClient(hc *http.Client, method, p string, in, out any) error 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("X-Sandbox-Token", c.token)
-	}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return err
@@ -127,9 +120,6 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	if c.token != "" {
-		req.Header.Set("X-Sandbox-Token", c.token)
-	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, err

@@ -10,7 +10,7 @@ EnvironmentFile=-/etc/sandman/worker.env
 # the worker accepts): an unbraced $VAR drops empty words, which would make a
 # flag consume its neighbor and derail the command line. $SANDBOX_LABELS is
 # the exception — it must split on whitespace to repeat -label.
-ExecStart=/usr/local/bin/sandman worker -name ${SANDBOX_WORKER_NAME} -control ${SANDBOX_CONTROL} -token ${SANDBOX_TOKEN} -port ${SANDBOX_PORT} -advertise ${SANDBOX_ADVERTISE} $SANDBOX_LABELS
+ExecStart=/usr/local/bin/sandman worker -name ${SANDBOX_WORKER_NAME} -control ${SANDBOX_CONTROL} -port ${SANDBOX_PORT} -advertise ${SANDBOX_ADVERTISE} $SANDBOX_LABELS
 Restart=on-failure
 RestartSec=2
 

@@ -29,7 +29,7 @@ type workerProc struct {
 // given host name bearing the given placement labels.
 func startWorker(t *testing.T, name string, labels ...string) *workerProc {
 	t.Helper()
-	args := []string{"worker", "-name", name, "-control", fmt.Sprintf("http://127.0.0.1:%d", daemonPort), "-token", conformanceToken}
+	args := []string{"worker", "-name", name, "-control", fmt.Sprintf("http://127.0.0.1:%d", daemonPort)}
 	for _, l := range labels {
 		args = append(args, "-label", l)
 	}
@@ -55,7 +55,6 @@ func waitHostRegistered(t *testing.T, name string) {
 		if err != nil {
 			return false
 		}
-		req.Header.Set("X-Sandbox-Token", conformanceToken)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return false

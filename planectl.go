@@ -22,15 +22,12 @@ import (
 // no wire compatibility). The reference surface is tracked verb by verb
 // in sandman-behaviour-notes/implementation-review/CLI_SURFACE.md.
 //
-// The global flags -addr and -token (declared in main.go, parsed by the
-// std flag package before cobra sees the args) select the control plane
-// and credential for every verb.
+// The global flag -addr (declared in main.go, parsed by the
+// std flag package before cobra sees the args) selects the control plane
+// for every verb.
 
 func cliClient() *client.Client {
 	c := client.New(*addrFlag)
-	if *tokenFlag != "" {
-		c.SetToken(*tokenFlag)
-	}
 	return c
 }
 
