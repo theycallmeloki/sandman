@@ -547,3 +547,50 @@ func TestSB164_SpecCommitCleanup(t *testing.T) {
 		t.Fatalf("spec commits after failed create: %d, want 1", got)
 	}
 }
+
+// D-13 — a changed transform does NOT invalidate datums whose inputs are
+// unchanged: updating ONLY the transform keeps the dedup ledger, so the
+// head job re-runs with the datum skipped; the new transform applies to
+// changed input. (TestSB040 changes the input with the update and
+// TestSB042 keeps the transform identical — this isolates the clause.)
+func TestD13_UpdateWithUnchangedInputKeepsDedup(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	name := uniq(t)
+	in := &client.Input{Repo: repo, Glob: "/*"}
+	mustPipeline(t, client.Pipeline{Name: name, Transform: echoTransform("v1"), Input: in})
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
+	jobs1 := flushOK(t, cm.ID)
+	if len(jobs1) != 1 || jobs1[0].Processed != 1 || jobs1[0].Skipped != 0 {
+		t.Fatalf("first job = %+v, want one job with processed=1 skipped=0", jobs1)
+	}
+
+	// change only the transform; the input head is byte-identical
+	mustUpdate(t, name, echoTransform("v2"), in, false)
+	jobs2 := flushOK(t, cm.ID)
+	if len(jobs2) != 1 {
+		t.Fatalf("update flush = %d jobs, want 1", len(jobs2))
+	}
+	if jobs2[0].Version != 2 {
+		t.Fatalf("update job version = %d, want 2", jobs2[0].Version)
+	}
+	if jobs2[0].Processed != 0 || jobs2[0].Skipped != 1 {
+		t.Fatalf("update job counters = processed %d skipped %d, want 0/1 (unchanged input skipped under the new transform)",
+			jobs2[0].Processed, jobs2[0].Skipped)
+	}
+	if jobs2[0].State != "success" {
+		t.Fatalf("update job state = %s, want success", jobs2[0].State)
+	}
+
+	// the new transform is live for changed input: a content change
+	// reprocesses under v2
+	cm2 := replaceCommit(t, repo, "master", map[string]string{"file": "y"})
+	jobs3 := flushOK(t, cm2.ID)
+	if len(jobs3) != 1 || jobs3[0].Processed != 1 || jobs3[0].Skipped != 0 {
+		t.Fatalf("changed-input job = %+v, want one job with processed=1 skipped=0", jobs3)
+	}
+	got, err := c.GetFile(jobs3[0].OutputCommit, "file")
+	if err != nil || string(got) != "v2" {
+		t.Fatalf("changed-input output = %q (err %v), want v2", got, err)
+	}
+}

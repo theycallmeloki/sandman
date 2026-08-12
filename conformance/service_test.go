@@ -182,16 +182,12 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 // worker's internal port (SB-168). The worker is a sandman worker
 // process bearing the placement label; docker runs the service container.
 func TestSB168_RemoteServiceReachable(t *testing.T) {
+	// PARKED: the live assertion hangs (a GET through the external-port
+	// proxy blocks forever while a manual curl succeeds) — root cause
+	// under review, see implementation-review/SB168_D22_ISSUE.md. Run
+	// with SANDBOX_RUN_SB168=1 on a clean docker daemon to exercise it.
 	if os.Getenv("SANDBOX_RUN_SB168") == "" {
-		// parked: the placed-service machinery is implemented (worker
-		// /service endpoints, daemon forwarding, refresh), but the
-		// end-to-end test is unstable under the harness's daemon-kill
-		// lifecycle — a daemon killed mid-flight leaks its service
-		// container, which holds the external port and cascades into
-		// every later start failing. The reference gates flaky container
-		// tests too (RUN_BAD_TESTS). Run with SANDBOX_RUN_SB168=1 on a
-		// clean docker daemon to exercise it.
-		t.Skip("SB-168 container lifecycle flake parked; set SANDBOX_RUN_SB168=1")
+		t.Skip("SB-168 live assertion hangs; set SANDBOX_RUN_SB168=1")
 	}
 	if !dockerAvailable() {
 		t.Skip("docker not available")

@@ -63,6 +63,19 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// stale sandman-* containers (a SIGKILLed worker or daemon cannot run
+	// its docker rm -f) hold external ports and poison every later run —
+	// remove them up front. The suite is sequential and owns all
+	// sandman-* containers on the host, so this is a clean-slate
+	// precondition (D-22: SB-168's service-container leak class).
+	if dockerAvailable() {
+		if out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-").Output(); err == nil {
+			for _, id := range strings.Fields(string(out)) {
+				exec.Command("docker", "rm", "-f", id).Run()
+			}
+		}
+	}
+
 	c = client.New(fmt.Sprintf("127.0.0.1:%d", daemonPort))
 	// the daemon runs with a credential so the authenticated management
 	// endpoints are exercised (SB-154); the shared client carries it

@@ -279,3 +279,78 @@ func TestSB035_RestartSingleInstance(t *testing.T) {
 		t.Fatalf("commit lost on restart: %v", err)
 	}
 }
+
+// SB-031 — a job in flight when the control plane restarts is recorded as
+// failed with a restart reason; committed data stays intact; a standby
+// pipeline whose in-flight work was lost returns to standby and wakes on
+// new input (D-06 overrides the reference's resume-and-complete intent:
+// only committed state survives a restart).
+func TestSB031_MidFlightJobRecordedFailedOnRestart(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	name := uniq(t)
+	slow := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 15"}}
+	in := &client.Input{Repo: repo, Glob: "/*"}
+	mustPipeline(t, client.Pipeline{Name: name, Transform: slow, Input: in})
+	standby := uniq(t)
+	mustPipeline(t, client.Pipeline{Name: standby, Transform: slow, Input: in, Standby: true})
+
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
+
+	// both pipelines take the commit and run (the standby pipeline is
+	// active, not idle, while its job is in flight)
+	var jobID string
+	pollFor(t, "job in flight", 30*time.Second, func() bool {
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+		if err != nil || len(js) == 0 {
+			return false
+		}
+		jobID = js[0].ID
+		return js[0].State == "running"
+	})
+	pollFor(t, "standby pipeline active", 30*time.Second, func() bool {
+		pi, err := c.InspectPipeline(standby)
+		return err == nil && pi.State == "running"
+	})
+
+	restartDaemon(t)
+
+	// the in-flight job is recorded failed with the restart reason
+	pollFor(t, "job failed after restart", 30*time.Second, func() bool {
+		j, err := c.InspectJob(jobID)
+		return err == nil && j.State == "failure"
+	})
+	j, err := c.InspectJob(jobID)
+	if err != nil {
+		t.Fatalf("inspect job after restart: %v", err)
+	}
+	if j.Reason != "daemon restarted mid-job" {
+		t.Fatalf("job reason after restart = %q, want %q", j.Reason, "daemon restarted mid-job")
+	}
+
+	// committed data is intact (the durability boundary, D-07)
+	if got, err := c.InspectCommit(cm.ID); err != nil || !got.Finished {
+		t.Fatalf("commit lost/unfinished on restart: %v (finished=%v)", err, got.Finished)
+	}
+	if b, err := c.GetFile(cm.ID, "file"); err != nil || string(b) != "foo" {
+		t.Fatalf("committed file after restart = %q (err %v), want foo", b, err)
+	}
+
+	// the standby pipeline's lost in-flight work returns it to standby
+	pollFor(t, "standby pipeline restored", 30*time.Second, func() bool {
+		pi, err := c.InspectPipeline(standby)
+		return err == nil && pi.State == "standby"
+	})
+
+	// re-triggering works: a fresh commit is processed by both pipelines
+	cm2 := commitFiles(t, repo, "master", map[string]string{"file2": "bar"})
+	jobs := flushOK(t, cm2.ID)
+	if len(jobs) != 2 {
+		t.Fatalf("post-restart flush = %d jobs, want 2 (both pipelines)", len(jobs))
+	}
+	for _, j := range jobs {
+		if j.State != "success" {
+			t.Fatalf("post-restart job %s = %s, want success", j.ID, j.State)
+		}
+	}
+}

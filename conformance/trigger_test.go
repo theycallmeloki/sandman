@@ -173,3 +173,77 @@ func TestSB160_SizeTriggers(t *testing.T) {
 		t.Fatalf("final p2 flush = %d jobs, want 1 (the last firing)", len(last2))
 	}
 }
+
+// SB-160 — the trigger accumulation ledger is durable across a control-
+// plane restart: 500B before the restart plus 500B after crosses the 1K
+// threshold exactly once. A lost ledger would leave the second batch at
+// 500B and never fire.
+func TestSB160_SizeTriggerLedgerSurvivesRestart(t *testing.T) {
+	data := uniq(t)
+	mustRepo(t, data)
+	p1 := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name:      p1,
+		Transform: &client.Transform{Image: "alpine"},
+		Input:     &client.Input{Repo: data, Glob: "/*", Trigger: &client.Trigger{SizeBytes: 1000}},
+	})
+
+	writeBatch := func(prefix string, n int) {
+		t.Helper()
+		cm, err := c.StartCommit(data, "master", "")
+		if err != nil {
+			t.Fatalf("start commit: %v", err)
+		}
+		for i := 0; i < n; i++ {
+			if err := c.PutFile(cm.ID, fmt.Sprintf("%s-%02d", prefix, i), []byte(strings.Repeat("x", 100))); err != nil {
+				t.Fatalf("put file: %v", err)
+			}
+		}
+		if _, err := c.FinishCommit(cm.ID, "", false); err != nil {
+			t.Fatalf("finish commit: %v", err)
+		}
+	}
+	jobCount := func() int {
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: p1})
+		if err != nil {
+			t.Fatalf("list %s jobs: %v", p1, err)
+		}
+		return len(js)
+	}
+
+	// 500B: below the 1K threshold, no fire — but the ledger is written
+	writeBatch("a", 5)
+	if n := jobCount(); n != 0 {
+		t.Fatalf("jobs after 500B = %d, want 0 (threshold not reached)", n)
+	}
+
+	restartDaemon(t)
+
+	// another 500B after the restart: cumulative 1K fires exactly once
+	writeBatch("b", 5)
+	pollFor(t, "trigger fired after restart", 60*time.Second, func() bool {
+		return jobCount() == 1
+	})
+	if n := jobCount(); n != 1 {
+		t.Fatalf("jobs after 500B+restart+500B = %d, want exactly 1 (ledger survived)", n)
+	}
+
+	// the fired job completes and its output is the accumulated view
+	var head client.Commit
+	pollFor(t, "trigger branch head", 30*time.Second, func() bool {
+		h, err := c.HeadCommit(data, p1+"-0")
+		if err != nil {
+			return false
+		}
+		head = h
+		return true
+	})
+	jobs := flushOK(t, head.ID)
+	if len(jobs) != 1 || jobs[0].State != "success" {
+		t.Fatalf("triggered job = %+v, want one success", jobs)
+	}
+	fs, err := c.ListFiles(jobs[0].OutputCommit)
+	if err != nil || len(fs) != 10 {
+		t.Fatalf("triggered output has %d files (err %v), want 10 (both batches)", len(fs), err)
+	}
+}
