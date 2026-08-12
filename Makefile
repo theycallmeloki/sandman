@@ -1,7 +1,7 @@
 GO ?= go
 PREFIX ?= /usr/local
 
-.PHONY: build install uninstall clean daemon worker
+.PHONY: build install uninstall clean daemon worker release
 
 # Role selection: `make install daemon` (default) installs the control-plane
 # unit; `make install worker` installs the execution-host unit + a config
@@ -46,5 +46,18 @@ uninstall:
 	rm -f $(PREFIX)/bin/sandman /etc/systemd/system/sandman.service /etc/systemd/system/sandman-worker.service
 	systemctl daemon-reload || true
 
+# release: build the tagged version's release binary + sha256 asset.
+# VERSION defaults to the newest git tag (v stripped). Publishing (after
+# `git tag v$(VERSION) && git push origin v$(VERSION)`):
+#   gh release create v$(VERSION) sandman-linux-amd64 sandman-linux-amd64.sha256 --notes "..."
+VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+
+release:
+	@test -n "$(VERSION)" || (echo "no git tags yet — set VERSION=x.y.z" >&2; exit 1)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.Version=$(VERSION)" -o sandman-linux-amd64 .
+	sha256sum sandman-linux-amd64 > sandman-linux-amd64.sha256
+	@echo "built sandman-linux-amd64 ($(VERSION)) + checksum"
+	@echo "publish:  gh release create v$(VERSION) sandman-linux-amd64 sandman-linux-amd64.sha256 --notes ..."
+
 clean:
-	rm -f sandman
+	rm -f sandman sandman-linux-amd64 sandman-linux-amd64.sha256
