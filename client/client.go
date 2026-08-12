@@ -1335,6 +1335,12 @@ func (c *Client) ListTags() ([]TagInfo, error) {
 	return out, c.do("GET", "/api/v1/tags", nil, &out)
 }
 
+// DeleteTag removes the tag ref; the blob it pointed at becomes
+// unreferenced and is reclaimed by the next GC.
+func (c *Client) DeleteTag(name string) error {
+	return c.do("DELETE", "/api/v1/tags/"+url.PathEscape(name), nil, nil)
+}
+
 // ---- File copy and fetch ----
 
 // CopyFile copies a file (or a directory subtree) from one commit into an

@@ -50,6 +50,23 @@ type pipelineRec struct {
 
 var shIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// envName renders a shell-identifier from an arbitrary string: characters
+// that cannot appear in an environment variable name (e.g. hyphens in
+// repo names) become underscores. The datum env var is named after its
+// repo; pachctl allows hyphens in names throughout, so the derived name
+// is the sanitized form while the repo keeps its own spelling.
+func envName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
 // reservedEnv are the job environment variables owned by the system; a
 // custom environment variable may not shadow them (package client docs).
 var reservedEnv = map[string]bool{
@@ -146,7 +163,7 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 			}
 			name := s.Name
 			if name == "" {
-				name = gitRepoName(s.Git.URL)
+				name = envName(gitRepoName(s.Git.URL))
 			}
 			if !shIdent.MatchString(name) {
 				return fmt.Errorf("input name %q is not a valid environment variable name", name)
@@ -166,7 +183,7 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 			continue
 		}
 		if s.Name == "" {
-			s.Name = s.Repo // an input's environment variable is named after its repo
+			s.Name = envName(s.Repo) // an input's environment variable is named after its repo
 		}
 		if s.Name == "" {
 			return fmt.Errorf("input must specify a name")
@@ -352,7 +369,7 @@ func materializeInputDefaults(in *client.Input) {
 		return
 	}
 	if in.Name == "" {
-		in.Name = in.Repo
+		in.Name = envName(in.Repo) // the datum env var is named after its repo (hyphens sanitized)
 	}
 	if in.Branch == "" {
 		in.Branch = "master"

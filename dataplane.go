@@ -1128,6 +1128,22 @@ func (s *apiStore) getTag(name string) ([]byte, error) {
 	return s.readBlob(strings.TrimSpace(string(sha)))
 }
 
+// deleteTag removes the tag ref; the blob it pointed at becomes
+// unreferenced and is reclaimed by the next GC (SB-150's survival clause
+// covers referenced tags).
+func (s *apiStore) deleteTag(name string) error {
+	if !validName(name) {
+		return fmt.Errorf("invalid tag name %q", name)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.tagPath(name)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("tag %q not found", name)
+	}
+	return os.Remove(path)
+}
+
 func (s *apiStore) listTags() ([]tagInfo, error) {
 	entries, err := os.ReadDir(filepath.Dir(s.dir) + "/tags")
 	if err != nil {

@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -301,5 +302,34 @@ func TestD03_PipelineNamePathEscapeRejected(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("valid pipeline: %v", err)
+	}
+}
+
+// TestHyphenatedRepoName — a repo with a hyphen in its name is
+// consumable: the datum env var derives from the repo name with
+// non-identifier characters sanitized to underscores (pachctl allows
+// hyphens in names throughout; the transform references the sanitized
+// name).
+func TestHyphenatedRepoName(t *testing.T) {
+	repo := uniq(t) + "-data"
+	mustRepo(t, repo)
+	env := strings.ReplaceAll(repo, "-", "_")
+	name := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name: name,
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "cp ${" + env + "}/file ${OUT}/file"},
+		},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
+	})
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
+	jobs := flushOK(t, cm.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("hyphenated-repo flush = %d jobs, want 1", len(jobs))
+	}
+	b, err := c.GetFile(jobs[0].OutputCommit, "file")
+	if err != nil || string(b) != "x" {
+		t.Fatalf("output = %q, err %v; want x (the sanitized env name ${%s} resolves)", b, err, env)
 	}
 }

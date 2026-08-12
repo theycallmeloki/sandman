@@ -153,6 +153,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("POST /api/v1/reset", hErr(d.resetH))
 	mux.HandleFunc("PUT /api/v1/tags/{name}", hErr(d.putTagH))
 	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
+	mux.HandleFunc("DELETE /api/v1/tags/{name}", hErr(d.deleteTagH))
 	mux.HandleFunc("GET /api/v1/tags", hErr(d.listTagsH))
 	return mux
 }
@@ -1240,5 +1241,13 @@ func (d *daemon) listTagsH(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, tags)
+	return nil
+}
+
+func (d *daemon) deleteTagH(w http.ResponseWriter, r *http.Request) error {
+	if err := d.store.deleteTag(r.PathValue("name")); err != nil {
+		return err
+	}
+	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }

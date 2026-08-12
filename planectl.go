@@ -180,10 +180,22 @@ func newCommitCmd() *cobra.Command {
 			},
 		},
 		&cobra.Command{
-			Use:  "inspect <id>",
+			Use:  "inspect <id|repo@branch>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
-				cm, err := cliClient().InspectCommit(args[0])
+				id := args[0]
+				if strings.Contains(args[0], "@") {
+					repo, branch, _, err := parseRef(args[0])
+					if err != nil || repo == "" {
+						die("commit inspect: invalid ref "+args[0], 2)
+					}
+					head, err := cliClient().HeadCommit(repo, branch)
+					if err != nil {
+						die("commit inspect: "+err.Error(), 1)
+					}
+					id = head.ID
+				}
+				cm, err := cliClient().InspectCommit(id)
 				if err != nil {
 					die("commit inspect: "+err.Error(), 1)
 				}
@@ -279,6 +291,36 @@ func newBranchCmd() *cobra.Command {
 	return cmd
 }
 
+// newGetCmd is the reference's top-level `get file` verb: fetch a file
+// from a commit by ref, the canonical recovery path. Equivalent to
+// `file get` (same resolution), kept as its own command for parity.
+func newGetCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "get", Short: "fetch files from commits"}
+	cmd.AddCommand(&cobra.Command{
+		Use:  "file <repo@branch:path>",
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			repo, branch, path, err := parseRef(args[0])
+			if err != nil {
+				die(err.Error(), 2)
+			}
+			if path == "" {
+				die("get file: path required (repo@branch:path)", 2)
+			}
+			head, err := cliClient().HeadCommit(repo, branch)
+			if err != nil {
+				die("get file: "+err.Error(), 1)
+			}
+			data, err := cliClient().GetFile(head.ID, path)
+			if err != nil {
+				die("get file: "+err.Error(), 1)
+			}
+			_, _ = os.Stdout.Write(data)
+		},
+	})
+	return cmd
+}
+
 func newFileCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "file", Short: "manage files"}
 	put := &cobra.Command{
@@ -300,6 +342,11 @@ func newFileCmd() *cobra.Command {
 			}
 			if err != nil {
 				die("file put: "+err.Error(), 1)
+			}
+			// pachctl errors on puts into repos that do not exist — no
+			// silent auto-create (StartCommit would create the repo)
+			if _, err := cliClient().InspectRepo(repo); err != nil {
+				die("file put: repo "+repo+" not found", 1)
 			}
 			cm, err := cliClient().StartCommit(repo, branch, "")
 			if err != nil {
@@ -942,6 +989,16 @@ func newTagCmd() *cobra.Command {
 				for _, t := range ts {
 					fmt.Printf("%s\t%s\n", t.Name, t.Ref)
 				}
+			},
+		},
+		&cobra.Command{
+			Use:  "delete <name>",
+			Args: cobra.ExactArgs(1),
+			Run: func(_ *cobra.Command, args []string) {
+				if err := cliClient().DeleteTag(args[0]); err != nil {
+					die("tag delete: "+err.Error(), 1)
+				}
+				fmt.Printf("deleted tag %s\n", args[0])
 			},
 		},
 	)

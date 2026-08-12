@@ -361,6 +361,30 @@ func TestCLI_VerbCoverage(t *testing.T) {
 	}
 	mustCLI(t, "", "transaction", "stop")
 
+	// 6c. top-level `get file` recovers a file by ref (the nested `file
+	// get` is equivalent); commit inspect accepts repo@branch
+	if got := mustCLI(t, "", "get", "file", "r2@master:/a.txt"); got != "A" {
+		t.Fatalf("get file r2@master:/a.txt = %q, want A", got)
+	}
+	ci2 := mustCLI(t, "", "commit", "inspect", "r2@master")
+	if !strings.Contains(ci2, "repo: r2") {
+		t.Fatalf("commit inspect r2@master %q: want repo r2", ci2)
+	}
+
+	// 6d. file put into a missing repo errors (no silent auto-create)
+	errs := failCLI(t, "file", "put", "no-such-repo@master:x", "-")
+	if !strings.Contains(errs, "not found") {
+		t.Fatalf("file put into a missing repo: stderr %q, want not-found", errs)
+	}
+
+	// 6e. tag delete drops the ref
+	mustCLI(t, "payload", "tag", "put", "smoketag", "-")
+	mustCLI(t, "", "tag", "delete", "smoketag")
+	errs2 := failCLI(t, "tag", "get", "smoketag")
+	if !strings.Contains(errs2, "not found") {
+		t.Fatalf("tag get after delete: stderr %q, want not-found", errs2)
+	}
+
 	// 7. repo delete removes it from the listing
 	mustCLI(t, "", "repo", "delete", "r2")
 	rl := mustCLI(t, "", "repo", "list")

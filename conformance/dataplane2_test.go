@@ -346,3 +346,30 @@ func TestSB156_CopyOutToInWithOverwriteProtection(t *testing.T) {
 func httpPost(u, body string) (*http.Response, error) {
 	return http.Post(u, "application/json", strings.NewReader(body))
 }
+
+// TestTagDelete — tag delete (D-24's OUT item, now implemented at the
+// user's call): removing a tag drops the ref; the tag is gone from the
+// listing, reads error, and a missing tag errors.
+func TestTagDelete(t *testing.T) {
+	if err := c.PutTag("delme", []byte("payload")); err != nil {
+		t.Fatalf("put tag: %v", err)
+	}
+	if err := c.DeleteTag("delme"); err != nil {
+		t.Fatalf("delete tag: %v", err)
+	}
+	if _, err := c.GetTag("delme"); err == nil {
+		t.Fatalf("get deleted tag: want an error")
+	}
+	tags, err := c.ListTags()
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	for _, tg := range tags {
+		if tg.Name == "delme" {
+			t.Fatalf("deleted tag still listed")
+		}
+	}
+	if err := c.DeleteTag("no-such-tag"); err == nil {
+		t.Fatalf("delete missing tag: want an error")
+	}
+}

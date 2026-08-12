@@ -63,6 +63,10 @@ func newRootCmd() *cobra.Command {
 		root.AddCommand(c)
 	}
 	root.AddCommand(newDataPlaneCommands()...)
+	// the reference's top-level `get file <repo>@<branch>:<path>` verb —
+	// the canonical way to recover a file from a commit (the nested
+	// `file get` is equivalent)
+	root.AddCommand(newGetCmd())
 	root.AddCommand(&cobra.Command{
 		Use: "version",
 		Run: func(*cobra.Command, []string) { fmt.Printf("sandman %s\n", Version) },
