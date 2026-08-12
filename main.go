@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -12,6 +13,21 @@ const Version = "0.1.0"
 // One static binary, busybox-style: every verb is a subcommand, the daemon
 // is just another verb. Install sandman once, run `sandman daemon` (or the
 // systemd unit) and the node joins the fleet on its own.
+var (
+	// addrFlag selects the control plane for the data-plane verbs
+	// (planectl.go); it defaults to the local daemon port.
+	addrFlag = flag.String("addr", defaultAddr(), "control-plane address (data-plane verbs)")
+	// tokenFlag is the credential sent with the data-plane verbs (SB-154).
+	tokenFlag = flag.String("token", "", "auth token for the control plane")
+)
+
+func defaultAddr() string {
+	if a := os.Getenv("SANDBOX_ADDR"); a != "" {
+		return a
+	}
+	return "127.0.0.1:" + strconv.Itoa(DefaultPort)
+}
+
 func main() {
 	flag.Usage = usage
 	flag.Parse()
@@ -37,6 +53,18 @@ func main() {
 		cmdAttach(args[1:])
 	case "detach":
 		cmdDetach(args[1:])
+	case "repo":
+		cmdRepo(args[1:])
+	case "commit":
+		cmdCommit(args[1:])
+	case "file":
+		cmdFile(args[1:])
+	case "pipeline":
+		cmdPipeline(args[1:])
+	case "job":
+		cmdJob(args[1:])
+	case "flush":
+		cmdFlush(args[1:])
 	case "version":
 		fmt.Printf("sandman %s\n", Version)
 	default:
@@ -49,7 +77,11 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `sandman — a naive peer-to-peer docker fabric
 
-usage: sandman <verb> [flags]
+usage: sandman [flags] <verb> [flags]
+
+global flags:
+  -addr <host:port>   control-plane address (default $SANDBOX_ADDR or 127.0.0.1:4242)
+  -token <token>      auth token for the control plane
 
 verbs:
   daemon              run the node side (advertises via mDNS, serves jobs)
@@ -60,6 +92,12 @@ verbs:
   dashboard           live TUI overview: nodes, containers, cpu/mem
   attach <name> <addr>    remember a static peer (for non-mDNS networks)
   detach <name>       forget a static peer
+  repo                create/list/inspect/delete repositories
+  commit              list/inspect commits
+  file                put/get/list files (repo@branch:path)
+  pipeline            create/list/inspect/delete pipelines (spec via -f)
+  job                 list/inspect jobs
+  flush commit <repo@branch>   wait for a commit's downstream jobs
   version             print version
 
 flags:

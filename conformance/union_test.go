@@ -306,11 +306,6 @@ func TestSB078_UnionComposition(t *testing.T) {
 		}},
 	}
 	j = flushPipeline(t, c5)
-	c5f, _ := c.ListFiles(j.OutputCommit)
-	c5p := make([]string, 0, len(c5f))
-	for _, f := range c5f {
-		c5p = append(c5p, fmt.Sprintf("%s(%d)", f.Path, f.Size))
-	}
 	// SIZE DEVIATION (recorded in behaviors/SB-078.md): the reference's
 	// per-alias files are 4 bytes (each alias's file appears once per
 	// datum combination of its cross, twice in the reference's
