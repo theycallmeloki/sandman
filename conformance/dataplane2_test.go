@@ -3,11 +3,39 @@ package conformance
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"sandman/client"
 )
+
+// TestFetch_RejectsLinkLocal — the ?fetch= ingest rejects link-local
+// targets: the cloud-metadata range (169.254.169.254) and broadcast
+// addresses must not be reachable through the server-side fetch.
+func TestFetch_RejectsLinkLocal(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	commitFiles(t, repo, "master", map[string]string{"f": "x"})
+	head, err := c.HeadCommit(repo, "master")
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	target := "http://169.254.169.254/latest/meta-data/"
+	u := fmt.Sprintf("http://127.0.0.1:%d/api/v1/commits/%s/files/fetched?fetch=%s",
+		daemonPort, head.ID, url.QueryEscape(target))
+	resp, err := httpPost(u, "")
+	if err != nil {
+		t.Fatalf("put fetch: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 400 {
+		t.Fatalf("link-local fetch: status %d, want an error", resp.StatusCode)
+	}
+	if _, err := c.GetFile(head.ID, "fetched"); err == nil {
+		t.Fatalf("fetched file exists despite rejected fetch")
+	}
+}
 
 // SB-038 — a job that recursively copies whole input directories completes
 // and yields one output commit.

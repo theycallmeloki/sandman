@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -602,6 +603,9 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 	if body.Name == "" {
 		return fmt.Errorf("secret must specify a name")
 	}
+	if !validName(body.Name) {
+		return fmt.Errorf("invalid secret name %q", body.Name)
+	}
 	rec := secretRec{
 		Name:    body.Name,
 		Type:    "Opaque",
@@ -623,7 +627,11 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) inspectSecretH(w http.ResponseWriter, r *http.Request) error {
-	rec, err := d.loadSecret(r.PathValue("name"))
+	name := r.PathValue("name")
+	if !validName(name) {
+		return fmt.Errorf("invalid secret name %q", name)
+	}
+	rec, err := d.loadSecret(name)
 	if err != nil {
 		return err
 	}
@@ -662,7 +670,11 @@ func (d *daemon) listSecretsH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
-	os.Remove(d.secretPath(r.PathValue("name"))) // idempotent in effect (SB-153)
+	name := r.PathValue("name")
+	if !validName(name) {
+		return fmt.Errorf("invalid secret name %q", name)
+	}
+	os.Remove(d.secretPath(name)) // idempotent in effect (SB-153)
 	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
@@ -707,14 +719,37 @@ func (d *daemon) deleteHostH(w http.ResponseWriter, r *http.Request) error {
 func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
 	// fetch=URL: ingest a remote file (SB-088) — the URL's body becomes
-	// the file's content
+	// the file's content. The fetch is a server-side request to a
+	// caller-chosen URL, so it is constrained: http(s) only, link-local
+	// and broadcast destinations rejected (cloud-metadata ranges like
+	// 169.254.169.254 must not be reachable through the daemon), redirects
+	// not followed, bounded by the request context and a client timeout.
+	// Loopback stays allowed: the documented ingest story includes local
+	// HTTP servers (the conformance suite's own SB-088 fixture).
 	if u := q.Get("fetch"); u != "" {
-		resp, err := http.Get(u)
+		parsed, err := url.Parse(u)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("fetch %s: only http(s) URLs are allowed", u)
+		}
+		if ip := net.ParseIP(parsed.Hostname()); ip != nil {
+			if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+				return fmt.Errorf("fetch %s: link-local and broadcast addresses are not reachable", u)
+			}
+		}
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+		if err != nil {
+			return fmt.Errorf("fetch %s: %v", u, err)
+		}
+		client := &http.Client{
+			Timeout:       60 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return fmt.Errorf("fetch %s: %v", u, err)
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode >= 400 {
+		if resp.StatusCode >= 300 {
 			return fmt.Errorf("fetch %s: status %d", u, resp.StatusCode)
 		}
 		data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<30))

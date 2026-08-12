@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"sandman/client"
 )
@@ -129,18 +130,33 @@ func (d *daemon) accumulateTriggers(cm client.Commit) {
 	}
 }
 
+// triggerLedgerMu serializes each size-trigger's accumulate-fire-save
+// cycle: commit finishes and job outputs arrive from concurrent
+// goroutines, and an unserialized read-modify-write on the ledger file
+// double-fires (or drops) threshold units. The fire commits themselves
+// run outside the lock — fireOnce re-enters triggerForCommit (and thus
+// accumulateTriggers) for its own commit, so holding the lock across it
+// would deadlock; the ledger arithmetic is what must be atomic.
+var triggerLedgerMu sync.Mutex
+
 // fireTrigger accumulates the commit's delta and fires the trigger once
 // per completed threshold unit: each firing commits the watched branch's
 // accumulated view to the accumulation branch (the pipeline runs on it)
 // and deducts one threshold from the ledger.
 func (d *daemon) fireTrigger(pipeline string, pos int, in client.Input, cm client.Commit) {
 	key := triggerBranch(pipeline, pos)
+	triggerLedgerMu.Lock()
 	accum := d.loadTriggerAccum(pipeline, pos) + d.commitDelta(cm)
+	fires := 0
 	for accum >= in.Trigger.SizeBytes {
-		d.fireOnce(pipeline, key, in, cm)
+		fires++
 		accum -= in.Trigger.SizeBytes
 	}
 	d.saveTriggerAccum(pipeline, pos, accum)
+	triggerLedgerMu.Unlock()
+	for i := 0; i < fires; i++ {
+		d.fireOnce(pipeline, key, in, cm)
+	}
 }
 
 // fireOnce creates one trigger commit: the watched branch's current view

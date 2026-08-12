@@ -3,11 +3,47 @@
 package conformance
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"sandman/client"
 )
+
+// TestSecrets_NameValidation — a secret name must be a plain name: names
+// with path separators or traversal components are rejected before any
+// filesystem touch, so a crafted name cannot read, write, or delete
+// arbitrary files on the daemon host through the secrets handlers.
+func TestSecrets_NameValidation(t *testing.T) {
+	if err := c.CreateSecret("../escape", map[string]string{"k": "v"}); err == nil {
+		t.Fatalf("create with traversal name: expected error")
+	}
+	if err := c.CreateSecret("a/b", map[string]string{"k": "v"}); err == nil {
+		t.Fatalf("create with slash name: expected error")
+	}
+	// a delete with a traversal name must not remove anything: plant a
+	// victim file beside the secrets dir and confirm it survives
+	victim := filepath.Join(daemonStateDir, "victim.json")
+	if err := os.WriteFile(victim, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("plant victim: %v", err)
+	}
+	defer os.Remove(victim)
+	if err := c.DeleteSecret("../victim"); err == nil {
+		t.Fatalf("delete with traversal name: expected error")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("victim file removed by traversal delete: %v", err)
+	}
+	// a valid name still round-trips
+	name := uniq(t)
+	if err := c.CreateSecret(name, map[string]string{"k": "v"}); err != nil {
+		t.Fatalf("create valid secret: %v", err)
+	}
+	if err := c.DeleteSecret(name); err != nil {
+		t.Fatalf("delete valid secret: %v", err)
+	}
+}
 
 func TestSB153_SecretsCRUD(t *testing.T) {
 	// baseline listing

@@ -429,7 +429,11 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	}
 	for _, m := range p.Transform.Secrets {
 		// D-05: a pipeline consumes a secret only through an explicit
-		// reference to an existing secret
+		// reference to an existing secret; the reference must be a valid
+		// name (it becomes a path component at provisioning time)
+		if !validName(m.Name) {
+			return fmt.Errorf("invalid secret name %q", m.Name)
+		}
 		if _, err := d.loadSecret(m.Name); err != nil {
 			return fmt.Errorf("secret %q not found", m.Name)
 		}
@@ -614,6 +618,8 @@ func (d *daemon) standbySettle(name string) {
 	if standbyActive[name] > 0 {
 		return
 	}
+	pipelineRecMu.Lock()
+	defer pipelineRecMu.Unlock()
 	rec, err := d.loadPipeline(name)
 	if err != nil || !rec.Pipeline.Standby || rec.Stopped {
 		return
@@ -863,8 +869,10 @@ func (d *daemon) loadAllPipelineRecs() []*pipelineRec {
 // transient state reports "paused" (SB-028), and the input head at stop
 // time becomes the backlog watermark.
 func (d *daemon) stopPipeline(name string) error {
+	pipelineRecMu.Lock()
 	rec, err := d.loadPipeline(name)
 	if err != nil {
+		pipelineRecMu.Unlock()
 		return fmt.Errorf("pipeline %q not found", name)
 	}
 	rec.Stopped = true
@@ -876,7 +884,9 @@ func (d *daemon) stopPipeline(name string) error {
 	// processing, so garbage collection can proceed (SB-079) and the
 	// paused pipeline holds no containers
 	d.cancelPipelineJobs(name)
-	return d.savePipeline(rec)
+	err = d.savePipeline(rec)
+	pipelineRecMu.Unlock()
+	return err
 }
 
 // startPipeline resumes the pipeline and processes the backlog: the
@@ -886,18 +896,23 @@ func (d *daemon) stopPipeline(name string) error {
 // paused are consumed together" (a job already run for the head commit is
 // not re-run).
 func (d *daemon) startPipeline(name string) error {
+	pipelineRecMu.Lock()
 	rec, err := d.loadPipeline(name)
 	if err != nil {
+		pipelineRecMu.Unlock()
 		return fmt.Errorf("pipeline %q not found", name)
 	}
 	if !rec.Stopped {
+		pipelineRecMu.Unlock()
 		return nil // already running
 	}
 	stopAt := rec.StoppedAt
 	rec.Stopped = false
 	rec.State = "running"
 	rec.StoppedAt = ""
-	if err := d.savePipeline(rec); err != nil {
+	err = d.savePipeline(rec)
+	pipelineRecMu.Unlock()
+	if err != nil {
 		return err
 	}
 	if rec.Pipeline.Service != nil {
@@ -918,12 +933,28 @@ func (d *daemon) startPipeline(name string) error {
 	return nil
 }
 
+// pipelineRecMu serializes load-modify-save sequences on pipeline records:
+// state transitions arrive from concurrent goroutines (standby settle,
+// placement crash marking, stop/start), and an unserialized sequence loses
+// updates. savePipeline's tmp+rename makes each write atomic against
+// concurrent readers. Lock order: standbyMu → pipelineRecMu (standbySettle);
+// no path takes pipelineRecMu before standbyMu.
+var pipelineRecMu sync.Mutex
+
 func (d *daemon) savePipeline(rec *pipelineRec) error {
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(d.pipelinePath(rec.Pipeline.Name), b, 0o644); err != nil {
+	p := d.pipelinePath(rec.Pipeline.Name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
 		return err
 	}
 	// a pipeline state change can settle an empty flush (consumers
@@ -1740,6 +1771,8 @@ func (d *daemon) cancelPipelineJobs(pipeline string) {
 // markPipelineFailed records a pipeline-level failure with a reason; the
 // pipeline stops scheduling until repaired (D-10).
 func (d *daemon) markPipelineFailed(name, reason string) {
+	pipelineRecMu.Lock()
+	defer pipelineRecMu.Unlock()
 	if rec, err := d.loadPipeline(name); err == nil && !rec.Stopped {
 		rec.State = "failure"
 		rec.Reason = reason
@@ -1750,6 +1783,8 @@ func (d *daemon) markPipelineFailed(name, reason string) {
 // markPipelineCrashed records that a pipeline's execution environment could
 // not be provisioned (SB-043, SB-091).
 func (d *daemon) markPipelineCrashed(name, reason string) {
+	pipelineRecMu.Lock()
+	defer pipelineRecMu.Unlock()
 	if rec, err := d.loadPipeline(name); err == nil && !rec.Stopped {
 		rec.State = "crashed"
 		rec.Reason = reason
@@ -1761,6 +1796,8 @@ func (d *daemon) markPipelineCrashed(name, reason string) {
 // the pipeline's label has registered: the crashed state was only the
 // unplaced outage, and placement has become possible again (SB-169).
 func (d *daemon) markPipelineRunning(name string) {
+	pipelineRecMu.Lock()
+	defer pipelineRecMu.Unlock()
 	if rec, err := d.loadPipeline(name); err == nil && rec.State == "crashed" {
 		rec.State = "running"
 		rec.Reason = ""
@@ -1843,8 +1880,13 @@ func (g *jobGate) enter(rj *runningJob) bool {
 		case <-n.ch:
 		case <-rj.cancelCh:
 			// cancelled while queued: unlink so the slot reaches the next
-			// waiter when the current holder releases it
-			g.remove(n)
+			// waiter when the current holder releases it. If the holder
+			// released at the same instant (both channels ready and the
+			// select picked us), the node is already unlinked and the slot
+			// was handed to THIS job: pass it on instead of dropping it.
+			if !g.remove(n) {
+				g.release()
+			}
 			return false
 		}
 	}
@@ -1857,8 +1899,10 @@ func (g *jobGate) enter(rj *runningJob) bool {
 	return true
 }
 
-// remove unlinks a still-queued node; the jobs behind it move up.
-func (g *jobGate) remove(n *jobGateNode) {
+// remove unlinks a still-queued node; the jobs behind it move up. It
+// reports whether the node was still queued — false means the slot had
+// already been handed to it (release popped it).
+func (g *jobGate) remove(n *jobGateNode) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var prev *jobGateNode
@@ -1872,10 +1916,11 @@ func (g *jobGate) remove(n *jobGateNode) {
 			if g.tail == cur {
 				g.tail = prev
 			}
-			return
+			return true
 		}
 		prev = cur
 	}
+	return false
 }
 
 // release hands the slot to the next queued job, or frees it when the
@@ -2735,6 +2780,11 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// var, so secret values reach the execution environment before the
 	// job starts
 	for i, m := range pl.Pipeline.Transform.Secrets {
+		if !validName(m.Name) {
+			fail("invalid secret name: " + m.Name)
+			d.finishOutput(pl, outCommit, "", true)
+			return
+		}
 		srec, err := d.loadSecret(m.Name)
 		if err != nil {
 			fail("secret: " + err.Error())

@@ -500,12 +500,15 @@ func (jx *jobExec) canceled() bool {
 
 // setDatum records one datum's state and persists the pipeline's dedup
 // table: the datum API reads it live, so an in-flight job's records — the
-// datum currently being processed included — are queryable (SB-114).
+// datum currently being processed included — are queryable (SB-114). The
+// marshal and the tmp+rename run under dedupMu: every worker of the job
+// writes the same shared tmp path, and an unlocked write could interleave
+// two marshals into a torn file (the file is small; contention is nil).
 func (jx *jobExec) setDatum(id string, st datumState) {
 	jx.dedupMu.Lock()
+	defer jx.dedupMu.Unlock()
 	jx.dedup[id] = st
 	b, err := json.Marshal(jx.dedup)
-	jx.dedupMu.Unlock()
 	if err != nil {
 		return
 	}
