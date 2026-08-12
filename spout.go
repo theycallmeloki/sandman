@@ -180,7 +180,7 @@ func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo
 	d.commitRevision(repo, branch, func(commitID string) bool {
 		for _, p := range sortedStringKeys(changed) {
 			if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
-				d.store.overwriteFile(commitID, p, data)
+				d.store.OverwriteFile(commitID, p, data)
 			}
 		}
 		return true

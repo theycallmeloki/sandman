@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // serviceRec is a service pipeline's running record: the declared ports,
@@ -151,7 +152,7 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 	// materialize the current input head; a missing head serves an empty
 	// directory until the first commit lands
 	lastID := ""
-	if h, err := d.store.headCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished {
+	if h, err := d.store.HeadCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished {
 		lastID = h.ID
 		syncServeDir(d.store, serveRoot, lastID)
 	}
@@ -267,7 +268,7 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 		// naive per-iteration registration would lose it — SB-100 clause
 		// 5 must not miss a revision)
 		ch := d.stateChanged.changed()
-		if h, err := d.store.headCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished && h.ID != lastID {
+		if h, err := d.store.HeadCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished && h.ID != lastID {
 			lastID = h.ID
 			if remote == "" {
 				syncServeDir(d.store, serveRoot, lastID)
@@ -307,10 +308,10 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string) {
 // syncServeDir re-materializes a commit's view into the served directory,
 // replacing the previous revision's files (the running process reads from
 // disk per request, so the new revision is served immediately).
-func syncServeDir(s *apiStore, serveRoot, commitID string) {
+func syncServeDir(s *store.Store, serveRoot, commitID string) {
 	os.RemoveAll(serveRoot)
 	os.MkdirAll(serveRoot, 0o755)
-	if err := s.materializeInput(commitID, serveRoot); err != nil {
+	if err := s.MaterializeInput(commitID, serveRoot); err != nil {
 		log.Printf("service materialize %s: %v", commitID, err)
 	}
 }
@@ -400,13 +401,13 @@ func (d *daemon) serviceViewFiles(side client.Input, headID string) ([]shipFile,
 	if name == "" {
 		name = side.Repo
 	}
-	view, err := d.store.resolveViewByID(headID)
+	view, err := d.store.ResolveViewByID(headID)
 	if err != nil {
 		return nil, err
 	}
 	files := make([]shipFile, 0, len(view))
 	for p, f := range view {
-		data, err := f.bytes(d.store)
+		data, err := f.Bytes(d.store)
 		if err != nil {
 			return nil, err
 		}
@@ -453,7 +454,7 @@ func remoteServicePost(host, path string, body any) error {
 // serve the input's current head.
 func (d *daemon) remoteServiceStart(host string, spec JobSpec, internalPort int, side client.Input) error {
 	var files []shipFile
-	if h, err := d.store.headCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished {
+	if h, err := d.store.HeadCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished {
 		if files, err = d.serviceViewFiles(side, h.ID); err != nil {
 			return err
 		}
@@ -472,7 +473,7 @@ func (d *daemon) remoteServiceStart(host string, spec JobSpec, internalPort int,
 // remoteServiceRefresh ships the side's new head view to the running
 // service — served without restarting the process (SB-100 clause 5).
 func (d *daemon) remoteServiceRefresh(host, name string, side client.Input) error {
-	h, err := d.store.headCommitRec(side.Repo, inputBranch(side))
+	h, err := d.store.HeadCommitRec(side.Repo, inputBranch(side))
 	if err != nil {
 		return err
 	}

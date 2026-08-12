@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // execRequest is the wire contract between the control plane and a worker
@@ -409,7 +410,7 @@ func runExec(nodeName string, req execRequest) execResult {
 			return ""
 		}
 		var outputs []shipFile
-		if err := walkFiles(outDir, link, func(rel string, data []byte) error {
+		if err := store.WalkFiles(outDir, link, func(rel string, data []byte) error {
 			outputs = append(outputs, shipFile{Path: rel, Data: data})
 			return nil
 		}); err != nil {

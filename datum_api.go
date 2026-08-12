@@ -23,7 +23,7 @@ func (d *daemon) writeStatsCommit(pl pipelineRec, dedup map[string]datumState, d
 	m := d.repoLock(pl.Pipeline.Name)
 	m.Lock()
 	defer m.Unlock()
-	cm, err := d.store.startCommit(pl.Pipeline.Name, "stats", "")
+	cm, err := d.store.StartCommit(pl.Pipeline.Name, "stats", "")
 	if err != nil {
 		return ""
 	}
@@ -32,12 +32,12 @@ func (d *daemon) writeStatsCommit(pl pipelineRec, dedup map[string]datumState, d
 		if err != nil {
 			continue
 		}
-		if err := d.store.overwriteFile(cm.ID, fmt.Sprintf("%06d", i), b); err != nil {
-			d.store.finishCommit(cm.ID, "", true)
+		if err := d.store.OverwriteFile(cm.ID, fmt.Sprintf("%06d", i), b); err != nil {
+			d.store.FinishCommit(cm.ID, "", true)
 			return ""
 		}
 	}
-	fin, err := d.store.finishCommit(cm.ID, "", false)
+	fin, err := d.store.FinishCommit(cm.ID, "", false)
 	if err != nil {
 		return ""
 	}

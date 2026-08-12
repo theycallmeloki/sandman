@@ -196,7 +196,7 @@ func (d *daemon) finishTransaction(id string) error {
 			if _, pending := txState[s.Repo]; pending {
 				continue
 			}
-			if _, err := os.Stat(d.store.repoDir(s.Repo)); err != nil {
+			if _, err := os.Stat(d.store.RepoDir(s.Repo)); err != nil {
 				return notFound("input repo %q not found", s.Repo)
 			}
 		}

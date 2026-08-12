@@ -48,7 +48,7 @@ func (d *daemon) deriveCronRepos(p *client.Pipeline) {
 			if in.Glob == "" {
 				in.Glob = "/*"
 			}
-			d.store.createRepo(in.Repo)
+			d.store.CreateRepo(in.Repo)
 		}
 	}
 	if p.Input != nil {
@@ -113,14 +113,14 @@ func (d *daemon) cronTick(repo string, overwrite bool) {
 	name := time.Now().UTC().Format(time.RFC3339)
 	d.commitRevision(repo, defaultBranch, func(commitID string) bool {
 		if overwrite {
-			if view, err := d.store.resolveViewByID(commitID); err == nil {
+			if view, err := d.store.ResolveViewByID(commitID); err == nil {
 				for p := range view {
-					d.store.deleteFile(commitID, p)
+					d.store.DeleteFile(commitID, p)
 				}
 			}
 		}
 		// an unreadable tick never publishes a partial revision
-		return d.store.putFile(commitID, name, []byte(name)) == nil
+		return d.store.PutFile(commitID, name, []byte(name)) == nil
 	}, nil)
 }
 

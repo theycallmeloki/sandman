@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // isHTTPMethod reports whether the peeked head of a connection is an HTTP
@@ -200,7 +201,7 @@ func hErr(h handler) http.HandlerFunc {
 		if err := h(w, r); err != nil {
 			code := http.StatusBadRequest
 			switch {
-			case errors.Is(err, errNotFound):
+			case errors.Is(err, errNotFound) || errors.Is(err, store.ErrNotFound):
 				code = http.StatusNotFound
 			case errors.Is(err, errInternal):
 				code = http.StatusInternalServerError
@@ -235,7 +236,7 @@ func (d *daemon) createRepoH(w http.ResponseWriter, r *http.Request) error {
 	if err := decodeBody(r, &body); err != nil {
 		return fmt.Errorf("invalid request body")
 	}
-	if err := d.store.createRepo(body.Name); err != nil {
+	if err := d.store.CreateRepo(body.Name); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"name": body.Name})
@@ -243,7 +244,7 @@ func (d *daemon) createRepoH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) listReposH(w http.ResponseWriter, r *http.Request) error {
-	repos, err := d.store.listRepos()
+	repos, err := d.store.ListRepos()
 	if err != nil {
 		return err
 	}
@@ -252,7 +253,7 @@ func (d *daemon) listReposH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) inspectRepoH(w http.ResponseWriter, r *http.Request) error {
-	repo, err := d.store.inspectRepo(r.PathValue("name"))
+	repo, err := d.store.InspectRepo(r.PathValue("name"))
 	if err != nil {
 		return err
 	}
@@ -261,7 +262,7 @@ func (d *daemon) inspectRepoH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) deleteRepoH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.store.deleteRepo(r.PathValue("name"), r.URL.Query().Get("force") == "1"); err != nil {
+	if err := d.store.DeleteRepo(r.PathValue("name"), r.URL.Query().Get("force") == "1"); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
@@ -278,7 +279,7 @@ func (d *daemon) startCommitH(w http.ResponseWriter, r *http.Request) error {
 	if err := decodeBody(r, &body); err != nil {
 		return fmt.Errorf("invalid request body")
 	}
-	cm, err := d.store.startCommit(r.PathValue("name"), body.Branch, body.Description)
+	cm, err := d.store.StartCommit(r.PathValue("name"), body.Branch, body.Description)
 	if err != nil {
 		return err
 	}
@@ -287,7 +288,7 @@ func (d *daemon) startCommitH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) headCommitH(w http.ResponseWriter, r *http.Request) error {
-	cm, err := d.store.headCommitRec(r.PathValue("name"), r.PathValue("branch"))
+	cm, err := d.store.HeadCommitRec(r.PathValue("name"), r.PathValue("branch"))
 	if err != nil {
 		return err
 	}
@@ -313,7 +314,7 @@ func (d *daemon) createBranchH(w http.ResponseWriter, r *http.Request) error {
 
 // listBranchesH lists the repo's branches with their head commit ids.
 func (d *daemon) listBranchesH(w http.ResponseWriter, r *http.Request) error {
-	bs, err := d.store.branchRefs(r.PathValue("name"))
+	bs, err := d.store.BranchRefs(r.PathValue("name"))
 	if err != nil {
 		return err
 	}
@@ -323,7 +324,7 @@ func (d *daemon) listBranchesH(w http.ResponseWriter, r *http.Request) error {
 
 // inspectBranchH returns the named branch's head commit id.
 func (d *daemon) inspectBranchH(w http.ResponseWriter, r *http.Request) error {
-	head, err := d.store.branchHead(r.PathValue("name"), r.PathValue("branch"))
+	head, err := d.store.BranchHead(r.PathValue("name"), r.PathValue("branch"))
 	if err != nil {
 		return err
 	}
@@ -333,7 +334,7 @@ func (d *daemon) inspectBranchH(w http.ResponseWriter, r *http.Request) error {
 
 // deleteBranchH removes the branch ref (the default branch is protected).
 func (d *daemon) deleteBranchH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.store.deleteBranch(r.PathValue("name"), r.PathValue("branch")); err != nil {
+	if err := d.store.DeleteBranch(r.PathValue("name"), r.PathValue("branch")); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
@@ -348,17 +349,17 @@ func (d *daemon) createBranch(repo, branch, head string) error {
 	if branch == "" {
 		return fmt.Errorf("branch must specify a name")
 	}
-	rec, err := d.store.loadCommitByID(head)
+	rec, err := d.store.LoadCommitByID(head)
 	if err != nil {
 		return notFound("commit %q not found", head)
 	}
 	if rec.Repo != repo {
 		return fmt.Errorf("commit %s is not in repo %q", head, repo)
 	}
-	if err := d.store.setHead(repo, branch, head); err != nil {
+	if err := d.store.SetHead(repo, branch, head); err != nil {
 		return err
 	}
-	cm := rec.commit()
+	cm := rec.Commit()
 	cm.Branch = branch // the trigger keys off the watched branch, not the commit's origin
 	d.triggerForCommit(cm)
 	return nil
@@ -372,7 +373,7 @@ func (d *daemon) finishCommitH(w http.ResponseWriter, r *http.Request) error {
 	if err := decodeBody(r, &body); err != nil {
 		return fmt.Errorf("invalid request body")
 	}
-	cm, err := d.store.finishCommit(r.PathValue("id"), body.Description, body.Empty)
+	cm, err := d.store.FinishCommit(r.PathValue("id"), body.Description, body.Empty)
 	if err != nil {
 		return err
 	}
@@ -382,7 +383,7 @@ func (d *daemon) finishCommitH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) inspectCommitH(w http.ResponseWriter, r *http.Request) error {
-	cm, err := d.store.inspectCommit(r.PathValue("id"))
+	cm, err := d.store.InspectCommit(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
@@ -641,7 +642,7 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 	if body.Name == "" {
 		return fmt.Errorf("secret must specify a name")
 	}
-	if !validName(body.Name) {
+	if !store.ValidName(body.Name) {
 		return fmt.Errorf("invalid secret name %q", body.Name)
 	}
 	rec := secretRec{
@@ -666,7 +667,7 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 
 func (d *daemon) inspectSecretH(w http.ResponseWriter, r *http.Request) error {
 	name := r.PathValue("name")
-	if !validName(name) {
+	if !store.ValidName(name) {
 		return fmt.Errorf("invalid secret name %q", name)
 	}
 	rec, err := d.loadSecret(name)
@@ -709,7 +710,7 @@ func (d *daemon) listSecretsH(w http.ResponseWriter, r *http.Request) error {
 
 func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
 	name := r.PathValue("name")
-	if !validName(name) {
+	if !store.ValidName(name) {
 		return fmt.Errorf("invalid secret name %q", name)
 	}
 	os.Remove(d.secretPath(name)) // idempotent in effect (SB-153)
@@ -794,7 +795,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return internal("read fetch: %v", err)
 		}
-		if err := d.store.putFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+		if err := d.store.PutFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 			return err
 		}
 		writeJSON(w, map[string]string{"ok": "true"})
@@ -830,7 +831,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		prefix := r.PathValue("path") + "/"
 		base := 0
 		var firstHeader string
-		if view, err := d.store.resolveViewByID(r.PathValue("id")); err == nil {
+		if view, err := d.store.ResolveViewByID(r.PathValue("id")); err == nil {
 			for p := range view {
 				if strings.HasPrefix(p, prefix) {
 					base++
@@ -843,7 +844,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		// record count or numbering), so all are reprocessed (SB-138)
 		changed := false
 		if header && base > 0 {
-			if first, err := d.store.getFile(r.PathValue("id"), prefix+"0"); err == nil {
+			if first, err := d.store.GetFile(r.PathValue("id"), prefix+"0"); err == nil {
 				firstHeader = string(first)
 				if i := strings.IndexByte(firstHeader, '\n'); i >= 0 {
 					firstHeader = firstHeader[:i]
@@ -856,7 +857,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 			// (record content after the first delimiter); the upload's own
 			// records only supply extra records beyond the existing count
 			for i := 0; i < base; i++ {
-				stored, err := d.store.getFile(r.PathValue("id"), prefix+strconv.Itoa(i))
+				stored, err := d.store.GetFile(r.PathValue("id"), prefix+strconv.Itoa(i))
 				if err != nil {
 					return err
 				}
@@ -864,7 +865,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 				if j := strings.Index(rec, delim); j >= 0 {
 					rec = rec[j+len(delim):]
 				}
-				if err := d.store.overwriteFile(r.PathValue("id"), prefix+strconv.Itoa(i), []byte(chunks[0]+delim+rec)); err != nil {
+				if err := d.store.OverwriteFile(r.PathValue("id"), prefix+strconv.Itoa(i), []byte(chunks[0]+delim+rec)); err != nil {
 					return err
 				}
 			}
@@ -878,7 +879,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 			if header {
 				content = chunks[0] + delim + content
 			}
-			if err := d.store.putFile(r.PathValue("id"), prefix+strconv.Itoa(off+i), []byte(content)); err != nil {
+			if err := d.store.PutFile(r.PathValue("id"), prefix+strconv.Itoa(off+i), []byte(content)); err != nil {
 				return err
 			}
 		}
@@ -886,13 +887,13 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	if q.Get("overwrite") == "1" {
-		if err := d.store.overwriteFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+		if err := d.store.OverwriteFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 			return err
 		}
 		writeJSON(w, map[string]string{"ok": "true"})
 		return nil
 	}
-	if err := d.store.putFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+	if err := d.store.PutFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
@@ -917,7 +918,7 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 		writeJSON(w, hist)
 		return nil
 	}
-	data, err := d.store.getFile(r.PathValue("id"), r.PathValue("path"))
+	data, err := d.store.GetFile(r.PathValue("id"), r.PathValue("path"))
 	if err != nil {
 		return err
 	}
@@ -940,18 +941,18 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 // first, capped at limit (negative = every revision). A cross input's
 // multi-commit provenance is just more ancestry to walk (SB-145).
 func (d *daemon) fileHistory(commitID, path string, limit int) ([]client.FileInfo, error) {
-	rec, err := d.store.loadCommitByID(commitID)
+	rec, err := d.store.LoadCommitByID(commitID)
 	if err != nil {
 		return nil, err
 	}
 	var out []client.FileInfo
 	for cur := rec; cur != nil; {
-		if f, ok := d.store.resolveView(cur)[path]; ok {
-			h, err := f.hash(d.store)
+		if f, ok := d.store.ResolveView(cur)[path]; ok {
+			h, err := f.Hash(d.store)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, client.FileInfo{Path: path, Size: f.size(), Hash: h})
+			out = append(out, client.FileInfo{Path: path, Size: f.Size(), Hash: h})
 			if limit >= 0 && len(out) >= limit {
 				break
 			}
@@ -959,7 +960,7 @@ func (d *daemon) fileHistory(commitID, path string, limit int) ([]client.FileInf
 		if cur.ParentID == "" {
 			break
 		}
-		parent, err := d.store.loadCommit(cur.Repo, cur.ParentID)
+		parent, err := d.store.LoadCommit(cur.Repo, cur.ParentID)
 		if err != nil {
 			break
 		}
@@ -977,7 +978,7 @@ func (d *daemon) copyFileH(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("invalid request body")
 	}
 	overwrite := r.URL.Query().Get("overwrite") == "1"
-	if err := d.store.copyFile(r.PathValue("id"), r.PathValue("path"), body.SrcCommit, body.SrcPath, overwrite); err != nil {
+	if err := d.store.CopyFile(r.PathValue("id"), r.PathValue("path"), body.SrcCommit, body.SrcPath, overwrite); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
@@ -985,7 +986,7 @@ func (d *daemon) copyFileH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) deleteFileH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.store.deleteFile(r.PathValue("id"), r.PathValue("path")); err != nil {
+	if err := d.store.DeleteFile(r.PathValue("id"), r.PathValue("path")); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
@@ -1020,11 +1021,11 @@ func (d *daemon) enumerateInputDatums(in *client.Input) ([]client.Datum, error) 
 	sides := inputSides(in)
 	sideLists := make([][]datumSide, len(sides))
 	for i, s := range sides {
-		head, err := d.store.headCommitRec(s.Repo, inputBranch(s))
+		head, err := d.store.HeadCommitRec(s.Repo, inputBranch(s))
 		if err != nil || !head.Finished {
 			continue
 		}
-		view, err := d.store.resolveViewByID(head.ID)
+		view, err := d.store.ResolveViewByID(head.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -1057,7 +1058,7 @@ func (d *daemon) enumerateInputDatums(in *client.Input) ([]client.Datum, error) 
 }
 
 func (d *daemon) listFilesH(w http.ResponseWriter, r *http.Request) error {
-	files, err := d.store.listFiles(r.PathValue("id"))
+	files, err := d.store.ListFiles(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
@@ -1274,7 +1275,7 @@ func (d *daemon) putTagH(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return fmt.Errorf("read body: %v", err)
 	}
-	if err := d.store.putTag(r.PathValue("name"), data); err != nil {
+	if err := d.store.PutTag(r.PathValue("name"), data); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})
@@ -1282,7 +1283,7 @@ func (d *daemon) putTagH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) getTagH(w http.ResponseWriter, r *http.Request) error {
-	data, err := d.store.getTag(r.PathValue("name"))
+	data, err := d.store.GetTag(r.PathValue("name"))
 	if err != nil {
 		return err
 	}
@@ -1292,7 +1293,7 @@ func (d *daemon) getTagH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) listTagsH(w http.ResponseWriter, r *http.Request) error {
-	tags, err := d.store.listTags()
+	tags, err := d.store.ListTags()
 	if err != nil {
 		return err
 	}
@@ -1301,7 +1302,7 @@ func (d *daemon) listTagsH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) deleteTagH(w http.ResponseWriter, r *http.Request) error {
-	if err := d.store.deleteTag(r.PathValue("name")); err != nil {
+	if err := d.store.DeleteTag(r.PathValue("name")); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})

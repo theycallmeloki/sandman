@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // pipelineRec is the persisted form of a pipeline. State (P7) is durable so
@@ -248,7 +249,7 @@ func validatePipelineSpec(p client.Pipeline) error {
 	if p.Name == "" {
 		return fmt.Errorf("pipeline must specify a name")
 	}
-	if !validName(p.Name) {
+	if !store.ValidName(p.Name) {
 		// a pipeline name is a state-dir path component (pipelines/<name>,
 		// versions/, spout markers) and the output repo's name: a name with
 		// a separator or ".." would escape the pipelines directory (D-03)
@@ -415,7 +416,7 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		if p.Spout == nil {
 			return fmt.Errorf("no input set")
 		}
-	} else if _, err := os.Stat(d.store.repoDir(p.Input.Repo)); err != nil {
+	} else if _, err := os.Stat(d.store.RepoDir(p.Input.Repo)); err != nil {
 		return notFound("input repo %q not found", p.Input.Repo)
 	}
 	if p.Service != nil && d.externalPortTaken(p.Service.ExternalPort, p.Name) {
@@ -425,7 +426,7 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		// D-05: a pipeline consumes a secret only through an explicit
 		// reference to an existing secret; the reference must be a valid
 		// name (it becomes a path component at provisioning time)
-		if !validName(m.Name) {
+		if !store.ValidName(m.Name) {
 			return fmt.Errorf("invalid secret name %q", m.Name)
 		}
 		if _, err := d.loadSecret(m.Name); err != nil {
@@ -488,8 +489,8 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	// defined against it before it has any commits (SB-086's stats branch).
 	// An existing repo (a keepRepo delete followed by a recreate, SB-157)
 	// is reused as-is.
-	if _, err := os.Stat(d.store.repoDir(p.Name)); err != nil {
-		if err := d.store.createRepo(p.Name); err != nil {
+	if _, err := os.Stat(d.store.RepoDir(p.Name)); err != nil {
+		if err := d.store.CreateRepo(p.Name); err != nil {
 			return nil, err
 		}
 	}
@@ -540,7 +541,7 @@ func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 	nestedAny = func(in *client.Input) bool {
 		for _, s := range inputSides(in) {
 			if s.Repo != "" {
-				if _, err := d.store.headCommitRec(s.Repo, inputBranch(s)); err == nil {
+				if _, err := d.store.HeadCommitRec(s.Repo, inputBranch(s)); err == nil {
 					return true
 				}
 			} else if len(s.Cross) > 0 || len(s.Union) > 0 {
@@ -651,7 +652,7 @@ func (d *daemon) runPipeline(name string, provenance []string, jobID string) (cl
 	heads := make([]client.Commit, len(sides))
 	seenBranch := map[string]bool{}
 	for _, pid := range provenance {
-		cm, err := d.store.loadCommitByID(pid)
+		cm, err := d.store.LoadCommitByID(pid)
 		if err != nil {
 			return client.Job{}, notFound("provenance commit %s: not found", pid)
 		}
@@ -803,14 +804,14 @@ func (d *daemon) writeSpecCommit(name string, spec client.Pipeline, version int)
 	if err != nil {
 		return ""
 	}
-	cm, err := d.store.startCommit("spec", defaultBranch, fmt.Sprintf("pipeline %s v%d", name, version))
+	cm, err := d.store.StartCommit("spec", defaultBranch, fmt.Sprintf("pipeline %s v%d", name, version))
 	if err != nil {
 		return ""
 	}
-	if err := d.store.overwriteFile(cm.ID, "spec.json", b); err != nil {
+	if err := d.store.OverwriteFile(cm.ID, "spec.json", b); err != nil {
 		return ""
 	}
-	if _, err := d.store.finishCommit(cm.ID, "", false); err != nil {
+	if _, err := d.store.FinishCommit(cm.ID, "", false); err != nil {
 		return ""
 	}
 	return cm.ID
@@ -871,7 +872,7 @@ func (d *daemon) stopPipeline(name string) error {
 	}
 	rec.Stopped = true
 	rec.State = statePaused
-	if head, err := d.store.headCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil {
+	if head, err := d.store.HeadCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil {
 		rec.StoppedAt = head.ID
 	}
 	// a paused pipeline's in-flight work stops: stopping ends active
@@ -915,7 +916,7 @@ func (d *daemon) startPipeline(name string) error {
 		d.spawnServiceJob(rec)
 		return nil
 	}
-	chain := d.store.chainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt)
+	chain := d.store.ChainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt)
 	if len(chain) == 0 {
 		return nil
 	}
@@ -1147,8 +1148,8 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 	os.Remove(d.dedupPath(name))
 	os.RemoveAll(filepath.Join(d.state, "pipelines", "versions", name))
 	if !keepRepo {
-		if _, err := os.Stat(d.store.repoDir(name)); err == nil {
-			d.store.deleteRepo(name, true) // internal: the pipeline is gone
+		if _, err := os.Stat(d.store.RepoDir(name)); err == nil {
+			d.store.DeleteRepo(name, true) // internal: the pipeline is gone
 		}
 	}
 	return nil

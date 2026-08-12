@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // runJob coordinates one job: enumerate the input sides' datums, take
@@ -88,7 +89,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		rec.Reason = propagated
 		rec.Finished = now()
 		d.saveJob(rec) // terminal state durable before the commit finishes
-		if oc, err := d.store.startCommit(pl.Pipeline.Name, outputBranch(pl), ""); err == nil {
+		if oc, err := d.store.StartCommit(pl.Pipeline.Name, outputBranch(pl), ""); err == nil {
 			rec.OutputCommit = oc.ID
 			d.saveJob(rec)
 			d.finishOutput(pl, oc, "", true)
@@ -140,7 +141,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// cartesian product (SB-063), a join pairs files by their join key
 	// (SB-074/075), a group collects files by their group key (SB-076). A
 	// side without a head contributes no datums, so the product is empty.
-	views := map[string]map[string]viewEntry{}
+	views := map[string]map[string]store.ViewEntry{}
 	sideLists := make([][]datumSide, len(sides))
 	in := pl.Pipeline.Input
 	// Resolve every consumed repo's head into the views: union branches
@@ -174,7 +175,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 				return
 			}
 			if h := d.finishedHead(s.Repo, inputBranch(s)); h.ID != "" && !seenInput[h.ID] {
-				if v, err := d.store.resolveViewByID(h.ID); err == nil {
+				if v, err := d.store.ResolveViewByID(h.ID); err == nil {
 					views[key] = v
 					seenInput[h.ID] = true
 					rec.InputCommits = append(rec.InputCommits, h.ID)
@@ -251,7 +252,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		if head.ID == "" {
 			continue
 		}
-		view, err := d.store.resolveViewByID(head.ID)
+		view, err := d.store.ResolveViewByID(head.ID)
 		if err != nil {
 			fail("materialize input: " + err.Error())
 			return
@@ -298,7 +299,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		if head.ID == "" {
 			continue
 		}
-		if vd, err := d.store.viewDatums(head.ID); err == nil {
+		if vd, err := d.store.ViewDatums(head.ID); err == nil {
 			logDatums = append(logDatums, vd...)
 		}
 	}
@@ -319,10 +320,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// The job's container output is captured into the log store as it is
 	// produced. A capture failure degrades to no logs, never to a broken
 	// job: execution is the control plane's job, logs are the meta plane's.
-	outCommit, err := d.store.startCommit(pl.Pipeline.Name, outputBranch(pl), "")
+	outCommit, err := d.store.StartCommit(pl.Pipeline.Name, outputBranch(pl), "")
 	if err != nil {
 		fail("start output commit: " + err.Error())
-		if errors.Is(err, errNotFound) {
+		if errors.Is(err, errNotFound) || errors.Is(err, store.ErrNotFound) {
 			// the output repository vanished (D-10): the pipeline fails with
 			// a recorded reason and stops scheduling
 			d.markPipelineFailed(pl.Pipeline.Name, "output repository missing")
@@ -354,8 +355,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			for _, sd := range dt.Sides {
 				for _, f := range sd.Files {
 					e := views[sd.Name][f]
-					if h, err := e.hash(d.store); err == nil {
-						inputFiles = append(inputFiles, fileRef{Path: f, Hash: h, Size: e.size()})
+					if h, err := e.Hash(d.store); err == nil {
+						inputFiles = append(inputFiles, fileRef{Path: f, Hash: h, Size: e.Size()})
 					}
 				}
 			}
@@ -396,7 +397,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// var, so secret values reach the execution environment before the
 	// job starts
 	for i, m := range pl.Pipeline.Transform.Secrets {
-		if !validName(m.Name) {
+		if !store.ValidName(m.Name) {
 			fail("invalid secret name: " + m.Name)
 			d.finishOutput(pl, outCommit, "", true)
 			return
@@ -501,7 +502,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			// output is not a processing event — stopping a pipeline must
 			// not create spurious downstream commits (SB-020); neither is a
 			// manual run's (SB-010).
-			if fin, err := d.store.inspectCommit(outCommit.ID); err == nil {
+			if fin, err := d.store.InspectCommit(outCommit.ID); err == nil {
 				d.triggerForCommit(fin)
 			}
 		}
@@ -514,7 +515,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		}
 		d.saveDedup(pl.Pipeline.Name, dedup)
 		if rec.StatsCommit != "" {
-			if sc, err := d.store.inspectCommit(rec.StatsCommit); err == nil {
+			if sc, err := d.store.InspectCommit(rec.StatsCommit); err == nil {
 				d.triggerForCommit(sc)
 			}
 		}
@@ -534,7 +535,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// may trigger downstream pipelines). The output repository may have
 	// been force-deleted while the job ran (SB-146): that fails the job and
 	// the pipeline rather than silently resurrecting the repo.
-	if _, err := os.Stat(d.store.repoDir(pl.Pipeline.Name)); err != nil {
+	if _, err := os.Stat(d.store.RepoDir(pl.Pipeline.Name)); err != nil {
 		d.finishOutput(pl, outCommit, "", true)
 		fail("output repository missing: " + err.Error())
 		d.markPipelineFailed(pl.Pipeline.Name, "output repository deleted while running")
@@ -581,7 +582,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 	d.triggerForCommit(fin)
 	if rec.StatsCommit != "" {
-		if sc, err := d.store.inspectCommit(rec.StatsCommit); err == nil {
+		if sc, err := d.store.InspectCommit(rec.StatsCommit); err == nil {
 			d.triggerForCommit(sc)
 		}
 	}

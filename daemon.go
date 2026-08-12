@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
+	"sandman/internal/store"
 )
 
 var (
@@ -70,7 +71,7 @@ type daemon struct {
 	reg     *registry
 	state   string
 	name    string
-	store   *apiStore
+	store   *store.Store
 	syncIdx uint64
 	cpuBusy atomic.Uint64 // host cpu busy percent * 1000, sampled each tick
 
@@ -203,9 +204,9 @@ func cmdDaemon(args []string) {
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
-	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: newAPIStore(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}, running: map[string]*runningJob{}}
+	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: store.New(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}, running: map[string]*runningJob{}}
 	d.text = textBackend{nodeName: *name, handleNodes: d.handleNodes, handleStats: d.handleStats, handleRun: d.handleRun}
-	d.store.onFinish = func() { d.stateChanged.signal() }
+	d.store.SetOnFinish(func() { d.stateChanged.signal() })
 	if *runner == "process" {
 		d.runner = processRunner{}
 	}
@@ -214,7 +215,7 @@ func cmdDaemon(args []string) {
 	}
 	// the internal pipeline-specification repository (SB-127) exists for
 	// the life of the daemon; a restart finds it already there
-	d.store.createRepo("spec")
+	d.store.CreateRepo("spec")
 	pruneOrphans(*name)
 	d.markStaleJobsFailed() // jobs running in a previous daemon died with it
 

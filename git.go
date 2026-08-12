@@ -103,7 +103,7 @@ func (d *daemon) deriveGitRepos(p *client.Pipeline) {
 				in.Glob = "/"
 			}
 			in.Branch = gitTrackedBranch(in.Git)
-			d.store.createRepo(name)
+			d.store.CreateRepo(name)
 		}
 	}
 	if p.Input != nil {
@@ -216,7 +216,7 @@ func (d *daemon) gitPush(ev gitPushEvent) {
 				if p == ".git/HEAD" {
 					content = ev.Revision
 				}
-				if err := d.store.overwriteFile(commitID, p, []byte(content)); err != nil {
+				if err := d.store.OverwriteFile(commitID, p, []byte(content)); err != nil {
 					// a failed write abandons the revision rather than
 					// publishing a partial tree
 					return false

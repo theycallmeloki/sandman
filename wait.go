@@ -214,7 +214,7 @@ func (d *daemon) flushSet(commitIDs []string, timeout time.Duration) ([]client.J
 		if len(relevant) == 0 {
 			if len(repos) == 0 {
 				for _, id := range commitIDs {
-					if cm, err := d.store.inspectCommit(id); err == nil {
+					if cm, err := d.store.InspectCommit(id); err == nil {
 						repos = append(repos, cm.Repo)
 						branches[cm.Repo] = cm.Branch
 					}
@@ -291,7 +291,7 @@ func (d *daemon) triggerPending(jobs []client.Job) bool {
 		if j.OutputCommit == "" {
 			continue // no output commit, no downstream trigger
 		}
-		cm, err := d.store.inspectCommit(j.OutputCommit)
+		cm, err := d.store.InspectCommit(j.OutputCommit)
 		if err != nil || !cm.Finished {
 			// a terminal failure job's unfinished commit is orphaned (its
 			// output repo was deleted mid-job, SB-146): no trigger comes

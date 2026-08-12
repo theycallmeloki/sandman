@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // triggerBranch is a trigger input's deterministic accumulation branch:
@@ -77,24 +78,24 @@ func (d *daemon) saveTriggerAccum(pipeline string, pos int, accum int64) {
 // commitDelta is a commit's newly committed bytes: the sizes of files
 // that are new or grew versus the parent's view.
 func (d *daemon) commitDelta(cm client.Commit) int64 {
-	view, err := d.store.resolveViewByID(cm.ID)
+	view, err := d.store.ResolveViewByID(cm.ID)
 	if err != nil {
 		return 0
 	}
-	var parent map[string]viewEntry
+	var parent map[string]store.ViewEntry
 	if cm.ParentID != "" {
-		parent, _ = d.store.resolveViewByID(cm.ParentID)
+		parent, _ = d.store.ResolveViewByID(cm.ParentID)
 	}
 	var delta int64
 	for p, f := range view {
 		pf, ok := parent[p]
 		if !ok {
-			delta += int64(f.size())
+			delta += int64(f.Size())
 		} else {
-			fh, _ := f.hash(d.store)
-			ph, _ := pf.hash(d.store)
-			if fh != ph && f.size() > pf.size() {
-				delta += int64(f.size() - pf.size())
+			fh, _ := f.Hash(d.store)
+			ph, _ := pf.Hash(d.store)
+			if fh != ph && f.Size() > pf.Size() {
+				delta += int64(f.Size() - pf.Size())
 			}
 		}
 	}
@@ -163,14 +164,14 @@ func (d *daemon) fireTrigger(pipeline string, pos int, in client.Input, cm clien
 // (all accumulated data, not just the newest delta — SB-160 clause 2) on
 // the accumulation branch.
 func (d *daemon) fireOnce(pipeline, branch string, in client.Input, cm client.Commit) {
-	snapshot, err := d.store.resolveViewByID(cm.ID)
+	snapshot, err := d.store.ResolveViewByID(cm.ID)
 	if err != nil {
 		return
 	}
 	d.commitRevision(in.Repo, branch, func(commitID string) bool {
 		for p, f := range snapshot {
-			if b, err := f.bytes(d.store); err == nil {
-				d.store.overwriteFile(commitID, p, b)
+			if b, err := f.Bytes(d.store); err == nil {
+				d.store.OverwriteFile(commitID, p, b)
 			}
 		}
 		return true

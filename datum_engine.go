@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // datum is one unit of work: one input-side contribution per declared
@@ -70,7 +71,7 @@ type datumSide struct {
 // and files at the same path merge by concatenation in branch order — one
 // datum per distinct path. The merged content hash is computed from the
 // copies, so dedup tracks the union's merged state.
-func (d *daemon) unionDatums(views map[string]map[string]viewEntry, union *client.Input) []datum {
+func (d *daemon) unionDatums(views map[string]map[string]store.ViewEntry, union *client.Input) []datum {
 	merged := map[string][]fileRef{}
 	var order []string
 	seen := map[string]bool{}
@@ -116,7 +117,7 @@ func (d *daemon) unionDatums(views map[string]map[string]viewEntry, union *clien
 
 // unionBranchPaths exposes one union branch's files at their namespaced
 // paths, one copy per contributing datum combination.
-func (d *daemon) unionBranchPaths(views map[string]map[string]viewEntry, branch client.Input) map[string][]fileRef {
+func (d *daemon) unionBranchPaths(views map[string]map[string]store.ViewEntry, branch client.Input) map[string][]fileRef {
 	out := map[string][]fileRef{}
 	switch {
 	case len(branch.Cross) > 0:
@@ -150,7 +151,7 @@ func (d *daemon) unionBranchPaths(views map[string]map[string]viewEntry, branch 
 				m := branch.Cross[j]
 				path := m.Name + "/" + f
 				e := views[m.Name][f]
-				out[path] = append(out[path], fileRef{Path: path, Size: e.size(), Parts: e.parts})
+				out[path] = append(out[path], fileRef{Path: path, Size: e.Size(), Parts: e.Parts()})
 			}
 		}
 	case len(branch.Union) > 0:
@@ -169,7 +170,7 @@ func (d *daemon) unionBranchPaths(views map[string]map[string]viewEntry, branch 
 		for p := range v {
 			if globMatches(branch.Glob, p) {
 				e := v[p]
-				out[p] = append(out[p], fileRef{Path: p, Size: e.size(), Parts: e.parts})
+				out[p] = append(out[p], fileRef{Path: p, Size: e.Size(), Parts: e.Parts()})
 			}
 		}
 	}
@@ -211,7 +212,7 @@ type fileRef struct {
 	// content is not a stored blob, so consumers concatenate the parts
 	// instead. Never persisted — refs written to records carry Hash of a
 	// stored blob.
-	Parts []viewPart `json:"-"`
+	Parts []store.ViewPart `json:"-"`
 }
 
 // appendLogLine writes one timestamped line to a job's log (the same
@@ -252,7 +253,7 @@ func globMatches(pattern, path string) bool {
 // subtree, and files swallowed by a directory datum are not separate
 // datums. Datums are ordered by id (D-14: execution order is not
 // contractual, but the output merge must be deterministic).
-func enumerateDatums(view map[string]viewEntry, glob string) []datumSide {
+func enumerateDatums(view map[string]store.ViewEntry, glob string) []datumSide {
 	// candidate paths: every file path and every ancestor directory; the
 	// root "" is always a candidate, so glob "/" selects the whole commit
 	// as one datum (SB-015)
@@ -340,7 +341,7 @@ func crossDatums(sideLists [][]datumSide) []datum {
 // datumHash digests a datum's files across all sides: the sorted
 // "side:path:hash" triples, so the hash changes exactly when the datum's
 // content changes.
-func datumHash(s *apiStore, views map[string]map[string]viewEntry, dt datum) string {
+func datumHash(s *store.Store, views map[string]map[string]store.ViewEntry, dt datum) string {
 	h := sha256.New()
 	for _, sd := range dt.Sides {
 		if sd.Merge != nil {
@@ -379,7 +380,7 @@ func datumHash(s *apiStore, views map[string]map[string]viewEntry, dt datum) str
 			h.Write([]byte(f))
 			h.Write([]byte{0})
 			e := views[sd.Name][f]
-			if hsh, err := e.hash(s); err == nil {
+			if hsh, err := e.Hash(s); err == nil {
 				h.Write([]byte(hsh))
 			}
 			h.Write([]byte{0})
@@ -433,8 +434,8 @@ type jobExec struct {
 	pl     pipelineRec
 	id     string
 	outDir string
-	views  map[string]map[string]viewEntry // per input side: its view
-	env    []string                        // job-scoped environment; the input dir vars are per datum
+	views  map[string]map[string]store.ViewEntry // per input side: its view
+	env    []string                              // job-scoped environment; the input dir vars are per datum
 	rj     *runningJob
 
 	// customization: the pipeline's pod-spec/pod-patch application
@@ -661,8 +662,8 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 	for _, sd := range dt.Sides {
 		for _, f := range sd.Files {
 			e := jx.views[sd.Name][f]
-			if h, err := e.hash(jx.d.store); err == nil {
-				inputFiles = append(inputFiles, fileRef{Path: f, Hash: h, Size: e.size()})
+			if h, err := e.Hash(jx.d.store); err == nil {
+				inputFiles = append(inputFiles, fileRef{Path: f, Hash: h, Size: e.Size()})
 			}
 		}
 	}
@@ -929,7 +930,7 @@ func (d *daemon) sideFileData(jx *jobExec, sd datumSide, f string) ([]byte, erro
 				// a view-derived ref: concatenate its ordered parts (the
 				// accumulated content is not a stored blob)
 				for _, part := range r.Parts {
-					b, err := d.store.readBlob(part.SHA)
+					b, err := d.store.ReadBlob(part.SHA)
 					if err != nil {
 						return nil, err
 					}
@@ -937,7 +938,7 @@ func (d *daemon) sideFileData(jx *jobExec, sd datumSide, f string) ([]byte, erro
 				}
 				continue
 			}
-			b, err := d.store.readBlob(r.Hash)
+			b, err := d.store.ReadBlob(r.Hash)
 			if err != nil {
 				return nil, err
 			}
@@ -945,7 +946,7 @@ func (d *daemon) sideFileData(jx *jobExec, sd datumSide, f string) ([]byte, erro
 		}
 		return buf, nil
 	}
-	return jx.views[sd.Name][f].bytes(d.store)
+	return jx.views[sd.Name][f].Bytes(d.store)
 }
 
 // runRemoteAttempt executes one datum attempt on the job's execution host
@@ -1024,7 +1025,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 	if code == 0 || accepted || errCode == 0 {
 		for _, f := range outputs {
 			sum := sha256.Sum256(f.Data)
-			d.store.writeBlob(f.Data)
+			d.store.WriteBlob(f.Data)
 			files = append(files, fileRef{Path: f.Path, Hash: hex.EncodeToString(sum[:]), Size: uint64(len(f.Data))})
 		}
 		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
@@ -1059,7 +1060,7 @@ func (d *daemon) ensureView(jx *jobExec, side string) string {
 		return dir
 	}
 	dir := filepath.Join(d.jobDir(jx.id), "view", side)
-	if d.store.materializeView(jx.views[side], dir) != nil {
+	if d.store.MaterializeView(jx.views[side], dir) != nil {
 		return ""
 	}
 	jx.viewDirs[side] = dir
@@ -1124,7 +1125,7 @@ func captureKey(glob, selector, path string) (string, bool) {
 // yields the cross product of the members' file lists for that key; an
 // outer member's unmatched keys each form a datum carrying only that
 // member's file (the absent members' directories are not exposed).
-func joinDatums(views map[string]map[string]viewEntry, members []client.Input) []datum {
+func joinDatums(views map[string]map[string]store.ViewEntry, members []client.Input) []datum {
 	buckets := make([]map[string][]datumSide, len(members))
 	keySet := map[string]bool{}
 	for i, m := range members {
@@ -1203,7 +1204,7 @@ func joinProduct(key string, buckets []map[string][]datumSide) []datum {
 // member (union, never a cross product). A member with a join-on joins
 // first: its files pair with the other join members by their join keys,
 // and the whole pairs are then grouped.
-func groupDatums(views map[string]map[string]viewEntry, members []client.Input) []datum {
+func groupDatums(views map[string]map[string]store.ViewEntry, members []client.Input) []datum {
 	// group of join: pair first, then bucket the whole pairs
 	joined := false
 	for _, m := range members {
@@ -1243,7 +1244,7 @@ func groupDatums(views map[string]map[string]viewEntry, members []client.Input) 
 // joinUnits pairs the join members by their join keys (inner semantics,
 // cross product within a key), returning one unit per pair — the unit is
 // the members' files of that pair.
-func joinUnits(views map[string]map[string]viewEntry, members []client.Input) [][]datumSide {
+func joinUnits(views map[string]map[string]store.ViewEntry, members []client.Input) [][]datumSide {
 	buckets := make([]map[string][]datumSide, len(members))
 	keySet := map[string]bool{}
 	for i, m := range members {
@@ -1342,9 +1343,9 @@ func sortedSideKeys(m map[string][]datumSide) []string {
 // maps container-internal symlink targets to host paths (SB-054).
 func (d *daemon) storeOutput(dir string, linkTarget func(string) string) ([]fileRef, error) {
 	var out []fileRef
-	walkErr := walkFiles(dir, linkTarget, func(rel string, data []byte) error {
+	walkErr := store.WalkFiles(dir, linkTarget, func(rel string, data []byte) error {
 		sum := sha256.Sum256(data)
-		d.store.writeBlob(data)
+		d.store.WriteBlob(data)
 		out = append(out, fileRef{Path: rel, Hash: hex.EncodeToString(sum[:]), Size: uint64(len(data))})
 		return nil
 	})
@@ -1365,7 +1366,7 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum) error {
 			continue // failed datums contribute nothing
 		}
 		for _, f := range st.Files {
-			data, err := d.store.readBlob(f.Hash)
+			data, err := d.store.ReadBlob(f.Hash)
 			if err != nil {
 				return err
 			}
@@ -1404,10 +1405,10 @@ func mergeSides(sides []datumSide) datumSide {
 }
 
 // sideSize sums a side datum's file sizes.
-func sideSize(s datumSide, view map[string]viewEntry) uint64 {
+func sideSize(s datumSide, view map[string]store.ViewEntry) uint64 {
 	var n uint64
 	for _, f := range s.Files {
-		n += view[f].size()
+		n += view[f].Size()
 	}
 	return n
 }
@@ -1416,7 +1417,7 @@ func sideSize(s datumSide, view map[string]viewEntry) uint64 {
 // datum count (number) or a target chunk size in bytes. Files are never
 // split; the grouped datum's identity joins its members', so dedup keys
 // stay stable across jobs with the same chunking.
-func chunkSideDatums(sd []datumSide, spec *client.ChunkSpec, view map[string]viewEntry) []datumSide {
+func chunkSideDatums(sd []datumSide, spec *client.ChunkSpec, view map[string]store.ViewEntry) []datumSide {
 	if spec == nil || (spec.Number <= 0 && spec.SizeBytes <= 0) {
 		return sd
 	}

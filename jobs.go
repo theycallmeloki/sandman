@@ -18,17 +18,15 @@ import (
 	"time"
 
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // ---- jobs ----
 
 // datumRef is one input file of a job — its path and content hash — the
 // per-datum handle for log filters (SB-060). A job's datum set is the
-// input revision's full view.
-type datumRef struct {
-	Path string `json:"path"`
-	Hash string `json:"hash"`
-}
+// input revision's full view. The type is the store's DatumRef.
+type datumRef = store.DatumRef
 
 // jobRec is the persisted form of a job. Version, Transform, and Input are
 // snapshots of the pipeline version that created the job: historical jobs
@@ -317,21 +315,21 @@ func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
 // never triggers. Provenance (optional) is stamped before the trigger
 // (spout's epoch anchor, SB-139 clause 7).
 func (d *daemon) commitRevision(repo, branch string, write func(commitID string) bool, provenance []string) bool {
-	cm, err := d.store.startCommit(repo, branch, "")
+	cm, err := d.store.StartCommit(repo, branch, "")
 	if err != nil {
 		return false
 	}
 	if write != nil && !write(cm.ID) {
 		return false
 	}
-	fin, err := d.store.finishCommit(cm.ID, "", false)
+	fin, err := d.store.FinishCommit(cm.ID, "", false)
 	if err != nil {
 		return false
 	}
 	if len(provenance) > 0 {
-		if rec, err := d.store.loadCommitByID(fin.ID); err == nil {
+		if rec, err := d.store.LoadCommitByID(fin.ID); err == nil {
 			rec.Provenance = provenance
-			d.store.saveCommit(rec)
+			d.store.SaveCommit(rec)
 		}
 	}
 	d.triggerForCommit(fin)
@@ -423,7 +421,7 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 // input enumeration. The shared query shape: headCommitRec + Finished
 // check.
 func (d *daemon) finishedHead(repo, branch string) client.Commit {
-	if h, err := d.store.headCommitRec(repo, branch); err == nil && h.Finished {
+	if h, err := d.store.HeadCommitRec(repo, branch); err == nil && h.Finished {
 		return h
 	}
 	return client.Commit{}
@@ -557,7 +555,7 @@ func (d *daemon) crossPairingConsistent(heads []client.Commit) bool {
 			continue // an empty side contributes no source
 		}
 		for _, leaf := range d.provenanceOf(h.ID, map[string]bool{}) {
-			rec, err := d.store.loadCommitByID(leaf)
+			rec, err := d.store.LoadCommitByID(leaf)
 			if err != nil {
 				continue
 			}
@@ -876,23 +874,23 @@ func (d *daemon) finishOutput(pl pipelineRec, outCommit client.Commit, outDir st
 	m.Lock()
 	defer m.Unlock()
 	outBranch := outputBranch(pl)
-	if head := d.store.headCommit(pl.Pipeline.Name, outBranch); head != "" && head != outCommit.ParentID {
-		if err := d.store.reparent(outCommit.ID, head); err != nil {
+	if head := d.store.HeadCommit(pl.Pipeline.Name, outBranch); head != "" && head != outCommit.ParentID {
+		if err := d.store.Reparent(outCommit.ID, head); err != nil {
 			return client.Commit{}, err
 		}
 	}
 	if !empty {
-		if err := d.store.addFilesFromDir(outCommit.ID, outDir); err != nil {
+		if err := d.store.AddFilesFromDir(outCommit.ID, outDir); err != nil {
 			// all-or-nothing: a failed upload closes the commit empty
-			d.store.finishCommit(outCommit.ID, "", true)
+			d.store.FinishCommit(outCommit.ID, "", true)
 			return client.Commit{}, err
 		}
 		// deletions propagate to the output revision: paths that were in
 		// the parent's view and are gone from this output are tombstoned
 		// (SB-007 — a deleted input file is absent, not stale)
-		d.store.tombstoneRemoved(outCommit.ID, outDir)
+		d.store.TombstoneRemoved(outCommit.ID, outDir)
 	}
-	return d.store.finishCommit(outCommit.ID, "", empty)
+	return d.store.FinishCommit(outCommit.ID, "", empty)
 }
 
 // recordProvenance stamps a finished output commit with its derivation:
@@ -915,7 +913,7 @@ func (d *daemon) recordProvenance(commitID string, inputs []string) {
 		}
 		seen[id] = true
 		prov = append(prov, id)
-		if cm, err := d.store.loadCommitByID(id); err == nil {
+		if cm, err := d.store.LoadCommitByID(id); err == nil {
 			for _, p := range cm.Provenance {
 				expand(p)
 			}
@@ -927,9 +925,9 @@ func (d *daemon) recordProvenance(commitID string, inputs []string) {
 	if len(prov) == 0 {
 		return
 	}
-	if cm, err := d.store.loadCommitByID(commitID); err == nil {
+	if cm, err := d.store.LoadCommitByID(commitID); err == nil {
 		cm.Provenance = prov
-		d.store.saveCommit(cm)
+		d.store.SaveCommit(cm)
 	}
 }
 
@@ -1086,7 +1084,7 @@ func (d *daemon) reset() error {
 		return err
 	}
 	// the spec repository is internal and recreated empty (SB-127)
-	return d.store.createRepo("spec")
+	return d.store.CreateRepo("spec")
 }
 
 func (d *daemon) loadPipeline(name string) (*pipelineRec, error) {
@@ -1154,23 +1152,23 @@ func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 
 // resolveCommitRef resolves a commit reference: a commit id, or
 // repo@branch meaning that branch's head.
-func (d *daemon) resolveCommitRef(ref string) (*commitRec, error) {
+func (d *daemon) resolveCommitRef(ref string) (*store.CommitRec, error) {
 	if repo, branch, ok := strings.Cut(ref, "@"); ok {
-		head, err := d.store.headCommitRec(repo, branch)
+		head, err := d.store.HeadCommitRec(repo, branch)
 		if err != nil {
 			return nil, err
 		}
-		return d.store.loadCommitByID(head.ID)
+		return d.store.LoadCommitByID(head.ID)
 	}
-	return d.store.loadCommitByID(ref)
+	return d.store.LoadCommitByID(ref)
 }
 
 // allCommitRecs enumerates every commit record in every repository,
 // including the internal spec repository (its commits reference spec
 // blobs that garbage collection must keep — SB-079).
-func (d *daemon) allCommitRecs() []*commitRec {
-	var out []*commitRec
-	repos, _ := d.store.listRepos()
+func (d *daemon) allCommitRecs() []*store.CommitRec {
+	var out []*store.CommitRec
+	repos, _ := d.store.ListRepos()
 	for _, r := range repos {
 		out = append(out, d.repoCommitRecs(r.Name)...)
 	}
@@ -1180,9 +1178,9 @@ func (d *daemon) allCommitRecs() []*commitRec {
 	return out
 }
 
-func (d *daemon) repoCommitRecs(repo string) []*commitRec {
-	var out []*commitRec
-	dir := filepath.Join(d.store.repoDir(repo), "commits")
+func (d *daemon) repoCommitRecs(repo string) []*store.CommitRec {
+	var out []*store.CommitRec
+	dir := filepath.Join(d.store.RepoDir(repo), "commits")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -1192,7 +1190,7 @@ func (d *daemon) repoCommitRecs(repo string) []*commitRec {
 			continue
 		}
 		if b, err := os.ReadFile(filepath.Join(dir, e.Name())); err == nil {
-			var rec commitRec
+			var rec store.CommitRec
 			if json.Unmarshal(b, &rec) == nil {
 				out = append(out, &rec)
 			}
@@ -1264,25 +1262,25 @@ func (d *daemon) deleteCommit(ref string) error {
 	// every repo directory — including the internal "spec" definition
 	// repository, which listRepos hides (SB-127): a deleted spec commit
 	// must not leave a stale branch head (SB-164 abort cleanup)
-	repoDirs, err := os.ReadDir(d.store.dir)
+	repoDirs, err := os.ReadDir(d.store.Dir())
 	if err == nil {
 		for _, rd := range repoDirs {
 			if !rd.IsDir() || strings.HasPrefix(rd.Name(), ".") {
 				continue
 			}
-			refsDir := filepath.Join(d.store.repoDir(rd.Name()), "refs")
+			refsDir := filepath.Join(d.store.RepoDir(rd.Name()), "refs")
 			entries, err := os.ReadDir(refsDir)
 			if err != nil {
 				continue
 			}
 			for _, e := range entries {
-				head := d.store.headCommit(rd.Name(), e.Name())
+				head := d.store.HeadCommit(rd.Name(), e.Name())
 				if head == "" || !deleted[head] {
 					continue
 				}
 				newHead := ""
 				for cur := head; ; {
-					cm, err := d.store.loadCommit(rd.Name(), cur)
+					cm, err := d.store.LoadCommit(rd.Name(), cur)
 					if err != nil || cm.ParentID == "" {
 						break
 					}
@@ -1301,7 +1299,7 @@ func (d *daemon) deleteCommit(ref string) error {
 	// branch chain stays connected. The walk needs the removed commits'
 	// records, so the fixes are captured before they are removed.
 	type parentFix struct {
-		cm     *commitRec
+		cm     *store.CommitRec
 		newPar string
 	}
 	var pfixes []parentFix
@@ -1316,7 +1314,7 @@ func (d *daemon) deleteCommit(ref string) error {
 					newPar = cur
 					break
 				}
-				prec, err := d.store.loadCommit(cm.Repo, cur)
+				prec, err := d.store.LoadCommit(cm.Repo, cur)
 				if err != nil || prec.ParentID == "" {
 					break
 				}
@@ -1328,19 +1326,19 @@ func (d *daemon) deleteCommit(ref string) error {
 	// remove the commit records, then apply the parent repairs
 	for _, cm := range d.allCommitRecs() {
 		if deleted[cm.ID] {
-			os.Remove(d.store.commitPath(cm.Repo, cm.ID))
+			os.Remove(d.store.CommitPath(cm.Repo, cm.ID))
 		}
 	}
 	for _, pf := range pfixes {
 		pf.cm.ParentID = pf.newPar
-		d.store.saveCommit(pf.cm)
+		d.store.SaveCommit(pf.cm)
 	}
 	// apply the captured head repairs
 	for _, fx := range fixes {
 		if fx.newHead == "" {
-			os.Remove(filepath.Join(d.store.repoDir(fx.repo), "refs", fx.branch))
+			os.Remove(filepath.Join(d.store.RepoDir(fx.repo), "refs", fx.branch))
 		} else {
-			d.store.setHead(fx.repo, fx.branch, fx.newHead)
+			d.store.SetHead(fx.repo, fx.branch, fx.newHead)
 		}
 	}
 	return nil

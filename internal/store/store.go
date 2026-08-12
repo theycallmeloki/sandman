@@ -1,10 +1,10 @@
-package main
+package store
 
-// Data plane: repositories, revisions (commits), and files, stored as plain
-// files under <state>/repos/<repo>/ — Rule of Transparency. The layout is
-// git-like: branch refs are one-line files, every commit is a JSON record
-// listing the files written in it, and file content is stored once,
-// content-addressed by sha256.
+// The data store: repositories, revisions (commits), and files, stored as
+// plain files under <state>/repos/<repo>/ — Rule of Transparency. The
+// layout is git-like: branch refs are one-line files, every commit is a
+// JSON record listing the files written in it, and file content is stored
+// once, content-addressed by sha256.
 //
 //	repos/<repo>/default          primary branch name (first committed)
 //	repos/<repo>/refs/<branch>    commit id at the branch head
@@ -15,12 +15,12 @@ package main
 // commit merges its parents' files (child wins). A commit finished with the
 // empty flag has no view at all: nothing is readable through it, even at
 // the branch head (SB-118).
-
 import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,10 +32,10 @@ import (
 	"sandman/client"
 )
 
-// apiStore is the daemon's data-plane store. One global mutex is plenty:
+// Store is the daemon's data-plane store. One global mutex is plenty:
 // the API surface is a single writer and readers resolve views from
 // immutable commit records.
-type apiStore struct {
+type Store struct {
 	dir string
 	mu  sync.RWMutex
 	// onFinish, when set, is called after every commit finish — the
@@ -64,26 +64,30 @@ type fileOp struct {
 	Delete    bool   `json:"delete,omitempty"`    // tombstone (FS-4)
 }
 
-// viewPart is one contribution to a path's accumulated content in the
+// ViewPart is one contribution to a path's accumulated content in the
 // resolved view: an append contributes its bytes, an overwrite resets the
 // accumulation and starts a new one (FS-2/FS-3).
-type viewPart struct {
+type ViewPart struct {
 	SHA       string
 	Size      uint64
 	Overwrite bool
 }
 
-// viewEntry is a path's accumulated content in a resolved view. Content
+// ViewEntry is a path's accumulated content in a resolved view. Content
 // is resolved lazily (bytes/hash on demand): the view itself only records
 // the ordered contributions, so path-only consumers (globs, sizes) never
 // pay for concatenation.
-type viewEntry struct {
-	parts []viewPart
+type ViewEntry struct {
+	parts []ViewPart
 }
+
+// Parts is the entry's write history: the file parts (overwrite/append
+// segments) that produced its current content, in order.
+func (e ViewEntry) Parts() []ViewPart { return e.parts }
 
 // size is the accumulated byte count: an overwrite resets the sum, an
 // append adds to it (zero-byte parts are no-ops either way, FS-8).
-func (e viewEntry) size() uint64 {
+func (e ViewEntry) Size() uint64 {
 	var n uint64
 	for _, p := range e.parts {
 		if p.Overwrite {
@@ -97,10 +101,10 @@ func (e viewEntry) size() uint64 {
 
 // bytes concatenates the accumulated content in order, resetting the
 // buffer at each overwrite contribution.
-func (e viewEntry) bytes(s *apiStore) ([]byte, error) {
+func (e ViewEntry) Bytes(s *Store) ([]byte, error) {
 	var buf []byte
 	for _, p := range e.parts {
-		b, err := s.readBlob(p.SHA)
+		b, err := s.ReadBlob(p.SHA)
 		if err != nil {
 			return nil, err
 		}
@@ -114,8 +118,8 @@ func (e viewEntry) bytes(s *apiStore) ([]byte, error) {
 
 // hash is the hex sha256 of the accumulated content — the path's content
 // identity at this revision (datum dedup keys, SB-054 hash equality).
-func (e viewEntry) hash(s *apiStore) (string, error) {
-	b, err := e.bytes(s)
+func (e ViewEntry) Hash(s *Store) (string, error) {
+	b, err := e.Bytes(s)
 	if err != nil {
 		return "", err
 	}
@@ -123,8 +127,8 @@ func (e viewEntry) hash(s *apiStore) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// commitRec is the persisted form of a commit.
-type commitRec struct {
+// CommitRec is the persisted form of a commit.
+type CommitRec struct {
 	ID          string `json:"id"`
 	Repo        string `json:"repo"`
 	Branch      string `json:"branch"`
@@ -150,44 +154,49 @@ type commitRec struct {
 	Deleted []string    `json:"deleted,omitempty"`
 }
 
-const defaultBranch = "master"
+const DefaultBranch = "master"
 
-func newAPIStore(stateDir string) *apiStore {
-	return &apiStore{dir: filepath.Join(stateDir, "repos")}
+func New(stateDir string) *Store {
+	return &Store{dir: filepath.Join(stateDir, "repos")}
 }
+
+// SetOnFinish installs the callback invoked after every commit finish
+// (the daemon's state-change broadcast for the blocking waits, D-23 R-5).
+func (s *Store) SetOnFinish(fn func()) { s.onFinish = fn }
+
+// Dir is the store's root: the parent of every repo directory, including
+// the hidden internal repositories (the consistency check walks all of
+// them, not just the visible listing).
+func (s *Store) Dir() string { return s.dir }
 
 // ---- name and path validation ----
 
-// now returns the current UTC time in the wire format every durable
-// record timestamp uses (RFC3339Nano). One spelling, applied everywhere,
-// so a format change is one line.
-func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+// ErrNotFound marks a store error as "the named resource does not exist".
+// The daemon's HTTP classifier maps it to 404 by type (errors.Is), never
+// by message text.
+var ErrNotFound = errors.New("not found")
 
-// The closed state and reason vocabularies are consts, not literals:
-// these strings are persisted in JSON records and asserted byte-for-byte
-// by the conformance suite, so one spelling per vocabulary prevents a
-// silent desync (a typo in a literal would change the wire contract).
-const (
-	stateRunning   = "running"
-	stateStandby   = "standby"
-	statePaused    = "paused"
-	stateFailure   = "failure"
-	stateCrashed   = "crashed"
-	stateStopped   = "stopped"
-	stateSuccess   = "success"
-	stateKilled    = "killed"
-	stateFailed    = "failed"
-	stateSkipped   = "skipped"
-	stateRecovered = "recovered"
+// notFound marks a store error as not-found. The returned error's message
+// is the caller's message, byte-identical to an unwrapped fmt.Errorf.
+func notFound(format string, args ...any) error {
+	return &markerError{msg: fmt.Sprintf(format, args...), marker: ErrNotFound}
+}
 
-	reasonJobCancelled    = "job cancelled"
-	reasonDaemonRestarted = "daemon restarted mid-job"
-	reasonNoCommandStdin  = "no command specified but stdin lines provided"
-)
+type markerError struct {
+	msg    string
+	marker error
+}
 
-// validName rejects names that could escape the store directory or collide
+func (e *markerError) Error() string { return e.msg }
+func (e *markerError) Unwrap() error { return e.marker }
+
+// Now returns the current UTC time in the wire format every durable
+// record timestamp uses (RFC3339Nano).
+func Now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// ValidName rejects names that could escape the store directory or collide
 // with store internals.
-func validName(name string) bool {
+func ValidName(name string) bool {
 	return name != "" && name != "." && name != ".." &&
 		!strings.HasPrefix(name, ".") &&
 		!strings.ContainsAny(name, `/\`)
@@ -209,15 +218,15 @@ func validPath(p string) bool {
 
 // ---- low-level record I/O ----
 
-func (s *apiStore) repoDir(name string) string {
+func (s *Store) RepoDir(name string) string {
 	return filepath.Join(s.dir, name)
 }
 
-func (s *apiStore) commitPath(repo, id string) string {
-	return filepath.Join(s.repoDir(repo), "commits", id+".json")
+func (s *Store) CommitPath(repo, id string) string {
+	return filepath.Join(s.RepoDir(repo), "commits", id+".json")
 }
 
-func (s *apiStore) objectPath(sha string) string {
+func (s *Store) ObjectPath(sha string) string {
 	return filepath.Join(s.dir, ".objects", sha[:2], sha[2:])
 }
 
@@ -225,12 +234,12 @@ func (s *apiStore) objectPath(sha string) string {
 // model (Files + Deleted) to the ordered-ops model on the way in: old
 // records wrote child-wins, which the op model expresses as overwrites
 // with the deletions applied first (matching the old resolveView order).
-func (s *apiStore) loadCommit(repo, id string) (*commitRec, error) {
-	b, err := os.ReadFile(s.commitPath(repo, id))
+func (s *Store) LoadCommit(repo, id string) (*CommitRec, error) {
+	b, err := os.ReadFile(s.CommitPath(repo, id))
 	if err != nil {
 		return nil, err
 	}
-	var rec commitRec
+	var rec CommitRec
 	if err := json.Unmarshal(b, &rec); err != nil {
 		return nil, err
 	}
@@ -247,12 +256,12 @@ func (s *apiStore) loadCommit(repo, id string) (*commitRec, error) {
 	return &rec, nil
 }
 
-func (s *apiStore) saveCommit(rec *commitRec) error {
+func (s *Store) SaveCommit(rec *CommitRec) error {
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(s.repoDir(rec.Repo), "commits")
+	dir := filepath.Join(s.RepoDir(rec.Repo), "commits")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -260,14 +269,14 @@ func (s *apiStore) saveCommit(rec *commitRec) error {
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.commitPath(rec.Repo, rec.ID))
+	return os.Rename(tmp, s.CommitPath(rec.Repo, rec.ID))
 }
 
 // writeBlob stores content under its sha256 and returns the hex digest.
-func (s *apiStore) writeBlob(data []byte) (string, error) {
+func (s *Store) WriteBlob(data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	sha := hex.EncodeToString(sum[:])
-	p := s.objectPath(sha)
+	p := s.ObjectPath(sha)
 	if _, err := os.Stat(p); err == nil {
 		return sha, nil // already stored (dedupe)
 	}
@@ -280,27 +289,27 @@ func (s *apiStore) writeBlob(data []byte) (string, error) {
 	return sha, nil
 }
 
-func (s *apiStore) readBlob(sha string) ([]byte, error) {
-	return os.ReadFile(s.objectPath(sha))
+func (s *Store) ReadBlob(sha string) ([]byte, error) {
+	return os.ReadFile(s.ObjectPath(sha))
 }
 
 // ---- repositories ----
 
-func (s *apiStore) createRepo(name string) error {
-	if !validName(name) {
+func (s *Store) CreateRepo(name string) error {
+	if !ValidName(name) {
 		return fmt.Errorf("invalid repo name %q", name)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dir := s.repoDir(name)
+	dir := s.RepoDir(name)
 	if _, err := os.Stat(dir); err == nil {
 		return fmt.Errorf("repo %q already exists", name)
 	}
 	return os.MkdirAll(dir, 0o755)
 }
 
-func (s *apiStore) deleteRepo(name string, force bool) error {
-	if !validName(name) {
+func (s *Store) DeleteRepo(name string, force bool) error {
+	if !ValidName(name) {
 		return fmt.Errorf("invalid repo name %q", name)
 	}
 	if name == "spec" {
@@ -310,7 +319,7 @@ func (s *apiStore) deleteRepo(name string, force bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := os.Stat(s.repoDir(name)); err != nil {
+	if _, err := os.Stat(s.RepoDir(name)); err != nil {
 		return notFound("repo %q not found", name)
 	}
 	if !force {
@@ -320,12 +329,12 @@ func (s *apiStore) deleteRepo(name string, force bool) error {
 			return fmt.Errorf("repo %q is the output of pipeline %q; force required", name, name)
 		}
 	}
-	return os.RemoveAll(s.repoDir(name))
+	return os.RemoveAll(s.RepoDir(name))
 }
 
 // branches lists the branch names of a repo from its refs directory.
-func (s *apiStore) branches(name string) []string {
-	entries, err := os.ReadDir(filepath.Join(s.repoDir(name), "refs"))
+func (s *Store) Branches(name string) []string {
+	entries, err := os.ReadDir(filepath.Join(s.RepoDir(name), "refs"))
 	if err != nil {
 		return nil
 	}
@@ -340,28 +349,28 @@ func (s *apiStore) branches(name string) []string {
 }
 
 // inspectRepo reports the repo with its primary branch's head size.
-func (s *apiStore) inspectRepo(name string) (client.Repo, error) {
-	if !validName(name) {
+func (s *Store) InspectRepo(name string) (client.Repo, error) {
+	if !ValidName(name) {
 		return client.Repo{}, fmt.Errorf("invalid repo name %q", name)
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	dir := s.repoDir(name)
+	dir := s.RepoDir(name)
 	if _, err := os.Stat(dir); err != nil {
 		return client.Repo{}, notFound("repo %q not found", name)
 	}
-	r := client.Repo{Name: name, Branches: s.branches(name)}
-	if headID := s.primaryHead(name); headID != "" {
-		if rec, err := s.loadCommit(name, headID); err == nil {
-			for _, f := range s.resolveView(rec) {
-				r.SizeBytes += f.size()
+	r := client.Repo{Name: name, Branches: s.Branches(name)}
+	if headID := s.PrimaryHead(name); headID != "" {
+		if rec, err := s.LoadCommit(name, headID); err == nil {
+			for _, f := range s.ResolveView(rec) {
+				r.SizeBytes += f.Size()
 			}
 		}
 	}
 	return r, nil
 }
 
-func (s *apiStore) listRepos() ([]client.Repo, error) {
+func (s *Store) ListRepos() ([]client.Repo, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -374,7 +383,7 @@ func (s *apiStore) listRepos() ([]client.Repo, error) {
 		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != "spec" {
 			// "spec" is the internal pipeline-definition repository and is
 			// not a user repository (SB-127)
-			if r, err := s.inspectRepo(e.Name()); err == nil {
+			if r, err := s.InspectRepo(e.Name()); err == nil {
 				out = append(out, r)
 			}
 		}
@@ -384,16 +393,16 @@ func (s *apiStore) listRepos() ([]client.Repo, error) {
 }
 
 // primaryHead returns the id of the head commit of the primary branch.
-func (s *apiStore) primaryHead(repo string) string {
-	b, err := os.ReadFile(filepath.Join(s.repoDir(repo), "default"))
+func (s *Store) PrimaryHead(repo string) string {
+	b, err := os.ReadFile(filepath.Join(s.RepoDir(repo), "default"))
 	if err != nil {
 		return ""
 	}
-	return s.headCommit(repo, strings.TrimSpace(string(b)))
+	return s.HeadCommit(repo, strings.TrimSpace(string(b)))
 }
 
-func (s *apiStore) headCommit(repo, branch string) string {
-	b, err := os.ReadFile(filepath.Join(s.repoDir(repo), "refs", branch))
+func (s *Store) HeadCommit(repo, branch string) string {
+	b, err := os.ReadFile(filepath.Join(s.RepoDir(repo), "refs", branch))
 	if err != nil {
 		return ""
 	}
@@ -402,16 +411,16 @@ func (s *apiStore) headCommit(repo, branch string) string {
 
 // setHead moves a branch ref, creating the refs dir and default marker on
 // the first commit.
-func (s *apiStore) setHead(repo, branch, id string) error {
-	refs := filepath.Join(s.repoDir(repo), "refs")
+func (s *Store) SetHead(repo, branch, id string) error {
+	refs := filepath.Join(s.RepoDir(repo), "refs")
 	if err := os.MkdirAll(refs, 0o755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(refs, branch), []byte(id+"\n"), 0o644); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(s.repoDir(repo), "default")); os.IsNotExist(err) {
-		if err := os.WriteFile(filepath.Join(s.repoDir(repo), "default"), []byte(branch+"\n"), 0o644); err != nil {
+	if _, err := os.Stat(filepath.Join(s.RepoDir(repo), "default")); os.IsNotExist(err) {
+		if err := os.WriteFile(filepath.Join(s.RepoDir(repo), "default"), []byte(branch+"\n"), 0o644); err != nil {
 			return err
 		}
 	}
@@ -427,16 +436,16 @@ func validBranchName(b string) bool {
 // branchRefs lists the repo's branches with their head commit ids (one
 // ref file per branch). A fresh repo with no finished commit has no refs
 // dir and lists empty.
-func (s *apiStore) branchRefs(repo string) ([]client.Branch, error) {
-	if !validName(repo) {
+func (s *Store) BranchRefs(repo string) ([]client.Branch, error) {
+	if !ValidName(repo) {
 		return nil, fmt.Errorf("invalid repo name %q", repo)
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if _, err := os.Stat(s.repoDir(repo)); err != nil {
+	if _, err := os.Stat(s.RepoDir(repo)); err != nil {
 		return nil, notFound("repo %q not found", repo)
 	}
-	entries, err := os.ReadDir(filepath.Join(s.repoDir(repo), "refs"))
+	entries, err := os.ReadDir(filepath.Join(s.RepoDir(repo), "refs"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -448,7 +457,7 @@ func (s *apiStore) branchRefs(repo string) ([]client.Branch, error) {
 		if e.IsDir() {
 			continue
 		}
-		id, err := os.ReadFile(filepath.Join(s.repoDir(repo), "refs", e.Name()))
+		id, err := os.ReadFile(filepath.Join(s.RepoDir(repo), "refs", e.Name()))
 		if err != nil {
 			continue
 		}
@@ -459,8 +468,8 @@ func (s *apiStore) branchRefs(repo string) ([]client.Branch, error) {
 }
 
 // branchHead reads one branch's head commit id.
-func (s *apiStore) branchHead(repo, branch string) (string, error) {
-	if !validName(repo) {
+func (s *Store) BranchHead(repo, branch string) (string, error) {
+	if !ValidName(repo) {
 		return "", fmt.Errorf("invalid repo name %q", repo)
 	}
 	if !validBranchName(branch) {
@@ -468,10 +477,10 @@ func (s *apiStore) branchHead(repo, branch string) (string, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if _, err := os.Stat(s.repoDir(repo)); err != nil {
+	if _, err := os.Stat(s.RepoDir(repo)); err != nil {
 		return "", notFound("repo %q not found", repo)
 	}
-	id, err := os.ReadFile(filepath.Join(s.repoDir(repo), "refs", branch))
+	id, err := os.ReadFile(filepath.Join(s.RepoDir(repo), "refs", branch))
 	if err != nil {
 		return "", notFound("branch %q not found", branch)
 	}
@@ -481,8 +490,8 @@ func (s *apiStore) branchHead(repo, branch string) (string, error) {
 // deleteBranch removes the branch ref. The repo's default branch is
 // protected: the default marker must keep pointing at an existing ref.
 // The branch's commits stay addressable by id.
-func (s *apiStore) deleteBranch(repo, branch string) error {
-	if !validName(repo) {
+func (s *Store) DeleteBranch(repo, branch string) error {
+	if !ValidName(repo) {
 		return fmt.Errorf("invalid repo name %q", repo)
 	}
 	if !validBranchName(branch) {
@@ -490,13 +499,13 @@ func (s *apiStore) deleteBranch(repo, branch string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := os.Stat(s.repoDir(repo)); err != nil {
+	if _, err := os.Stat(s.RepoDir(repo)); err != nil {
 		return notFound("repo %q not found", repo)
 	}
-	if def, err := os.ReadFile(filepath.Join(s.repoDir(repo), "default")); err == nil && strings.TrimSpace(string(def)) == branch {
+	if def, err := os.ReadFile(filepath.Join(s.RepoDir(repo), "default")); err == nil && strings.TrimSpace(string(def)) == branch {
 		return fmt.Errorf("cannot delete the default branch %q", branch)
 	}
-	path := filepath.Join(s.repoDir(repo), "refs", branch)
+	path := filepath.Join(s.RepoDir(repo), "refs", branch)
 	if _, err := os.Stat(path); err != nil {
 		return notFound("branch %q not found", branch)
 	}
@@ -511,97 +520,84 @@ func newCommitID() string {
 	return hex.EncodeToString(b)
 }
 
-// newID generates a unique id with a node prefix, an optional kind, and
-// a random component. crypto/rand never fails (Go 1.24+), so the read is
-// unchecked; the fabric RUN verb uses the same scheme (its old
-// pid+nanos%1e6 id was a six-digit collision space).
-func newID(node, kind string) string {
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	if kind == "" {
-		return node + "-" + hex.EncodeToString(b)
-	}
-	return node + "-" + kind + "-" + hex.EncodeToString(b)
-}
-
 // startCommit opens a new revision on the branch. The repo is created if it
 // does not exist (pipeline output repos are born this way). The parent is
 // the branch's finished head at start time.
-func (s *apiStore) startCommit(repo, branch, description string) (client.Commit, error) {
-	if !validName(repo) {
+func (s *Store) StartCommit(repo, branch, description string) (client.Commit, error) {
+	if !ValidName(repo) {
 		return client.Commit{}, fmt.Errorf("invalid repo name %q", repo)
 	}
 	if branch == "" {
-		branch = defaultBranch
+		branch = DefaultBranch
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.repoDir(repo), 0o755); err != nil {
+	if err := os.MkdirAll(s.RepoDir(repo), 0o755); err != nil {
 		return client.Commit{}, err
 	}
-	rec := &commitRec{
+	rec := &CommitRec{
 		ID:          newCommitID(),
 		Repo:        repo,
 		Branch:      branch,
 		Description: description,
-		ParentID:    s.headCommit(repo, branch),
+		ParentID:    s.HeadCommit(repo, branch),
 		Started:     true,
-		CreatedAt:   now(),
+		CreatedAt:   Now(),
 	}
-	if err := s.saveCommit(rec); err != nil {
+	if err := s.SaveCommit(rec); err != nil {
 		return client.Commit{}, err
 	}
-	return rec.commit(), nil
+	return rec.Commit(), nil
 }
 
 // putFile writes one file into an open commit as an append (FS-1): a
 // path already holding content — in this commit or its ancestry — grows
 // by the new bytes at this revision. Replacing content is an explicit
 // overwrite (overwriteFile, FS-3) or a delete-then-write (FS-4).
-func (s *apiStore) putFile(commitID, p string, data []byte) error {
+func (s *Store) PutFile(commitID, p string, data []byte) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return notFound("commit %q not found", commitID)
 	}
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
-	sha, err := s.writeBlob(data)
+	sha, err := s.WriteBlob(data)
 	if err != nil {
 		return err
 	}
 	rec.Ops = append(rec.Ops, fileOp{Path: p, SHA: sha, Size: uint64(len(data))})
-	return s.saveCommit(rec)
+	return s.SaveCommit(rec)
 }
 
 // overwriteFile writes one file into an open commit replacing any
 // accumulated content at the path (FS-3): the path's prior content — in
 // this commit or its ancestry — is removed and the new bytes become the
 // entire content at this revision.
-func (s *apiStore) overwriteFile(commitID, p string, data []byte) error {
+func (s *Store) OverwriteFile(commitID, p string, data []byte) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return notFound("commit %q not found", commitID)
 	}
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
-	sha, err := s.writeBlob(data)
+	sha, err := s.WriteBlob(data)
 	if err != nil {
 		return err
 	}
 	rec.Ops = append(rec.Ops, fileOp{Path: p, SHA: sha, Size: uint64(len(data)), Overwrite: true})
-	return s.saveCommit(rec)
+	return s.SaveCommit(rec)
 }
 
 // deleteFile tombstones a path in an open commit (FS-4): the path is
@@ -609,13 +605,13 @@ func (s *apiStore) overwriteFile(commitID, p string, data []byte) error {
 // came from this commit or the ancestry. Write order within the commit
 // decides conflicts — a later write recreates the path with only its own
 // content; a later delete removes it again.
-func (s *apiStore) deleteFile(commitID, p string) error {
+func (s *Store) DeleteFile(commitID, p string) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return notFound("commit %q not found", commitID)
 	}
@@ -623,28 +619,28 @@ func (s *apiStore) deleteFile(commitID, p string) error {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
 	rec.Ops = append(rec.Ops, fileOp{Path: p, Delete: true})
-	return s.saveCommit(rec)
+	return s.SaveCommit(rec)
 }
 
 // tombstoneRemoved records in a commit the paths that vanished from its
 // parent's view: the output side of a deletion (SB-007 — a pipeline's
 // output revision reflects the deletion, so the deleted file is genuinely
 // absent, not stale).
-func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
+func (s *Store) TombstoneRemoved(commitID, outDir string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return err
 	}
-	var parent map[string]viewEntry
+	var parent map[string]ViewEntry
 	if rec.ParentID != "" {
-		if p, err := s.loadCommit(rec.Repo, rec.ParentID); err == nil {
-			parent = s.resolveView(p)
+		if p, err := s.LoadCommit(rec.Repo, rec.ParentID); err == nil {
+			parent = s.ResolveView(p)
 		}
 	}
 	newPaths := map[string]bool{}
-	_ = walkFiles(outDir, nil, func(rel string, _ []byte) error {
+	_ = WalkFiles(outDir, nil, func(rel string, _ []byte) error {
 		newPaths[rel] = true
 		return nil
 	})
@@ -658,7 +654,7 @@ func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
 	for _, p := range removed {
 		rec.Ops = append(rec.Ops, fileOp{Path: p, Delete: true})
 	}
-	return s.saveCommit(rec)
+	return s.SaveCommit(rec)
 }
 
 // walkFiles visits every file under dir with its content, following
@@ -668,7 +664,7 @@ func (s *apiStore) tombstoneRemoved(commitID, outDir string) error {
 // depth cap breaks link cycles. linkTarget maps a symlink's target to a
 // host path when the target is container-internal (e.g. /sandman/in/...);
 // an empty result falls back to the native resolution.
-func walkFiles(dir string, linkTarget func(string) string, visit func(rel string, data []byte) error) error {
+func WalkFiles(dir string, linkTarget func(string) string, visit func(rel string, data []byte) error) error {
 	return walkFilesDepth(dir, "", 0, linkTarget, visit)
 }
 
@@ -734,10 +730,10 @@ func walkFilesDepth(p, rel string, depth int, linkTarget func(string) string, vi
 // unchanged datums' paths are absent from the job's output and carry
 // forward through the ancestry). The directory holds the fully assembled
 // output, so it must not accumulate over the parent's.
-func (s *apiStore) addFilesFromDir(commitID, dir string) error {
+func (s *Store) AddFilesFromDir(commitID, dir string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return notFound("commit %q not found", commitID)
 	}
@@ -745,8 +741,8 @@ func (s *apiStore) addFilesFromDir(commitID, dir string) error {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
 	var entries []fileOp
-	walkErr := walkFiles(dir, nil, func(rel string, data []byte) error {
-		sha, err := s.writeBlob(data)
+	walkErr := WalkFiles(dir, nil, func(rel string, data []byte) error {
+		sha, err := s.WriteBlob(data)
 		if err != nil {
 			return err
 		}
@@ -757,7 +753,7 @@ func (s *apiStore) addFilesFromDir(commitID, dir string) error {
 		return walkErr
 	}
 	rec.Ops = append(rec.Ops, entries...)
-	return s.saveCommit(rec)
+	return s.SaveCommit(rec)
 }
 
 // copyFile copies a file or directory subtree from srcCommit into an open
@@ -766,20 +762,20 @@ func (s *apiStore) addFilesFromDir(commitID, dir string) error {
 // overwrite protection (SB-156); with overwrite the copy replaces the
 // destination's accumulated content (FS-3). A directory copy lands each
 // contained file at dstPath/<relative path>.
-func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string, overwrite bool) error {
+func (s *Store) CopyFile(dstCommitID, dstPath, srcCommitID, srcPath string, overwrite bool) error {
 	if !validPath(dstPath) {
 		return fmt.Errorf("invalid file path %q", dstPath)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dstRec, err := s.loadCommitByID(dstCommitID)
+	dstRec, err := s.LoadCommitByID(dstCommitID)
 	if err != nil {
 		return notFound("commit %q not found", dstCommitID)
 	}
 	if !dstRec.Started || dstRec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", dstCommitID)
 	}
-	srcView, err := s.resolveViewByID(srcCommitID)
+	srcView, err := s.ResolveViewByID(srcCommitID)
 	if err != nil {
 		return err
 	}
@@ -801,7 +797,7 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string, o
 			return notFound("path %q not found", srcPath)
 		}
 	}
-	dstView := s.resolveView(dstRec)
+	dstView := s.ResolveView(dstRec)
 	for _, m := range moves {
 		if _, exists := dstView[m.dst]; exists && !overwrite {
 			return fmt.Errorf("path %q already exists in commit %q", m.dst, dstCommitID)
@@ -809,21 +805,21 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string, o
 	}
 	for _, m := range moves {
 		e := srcView[m.src]
-		data, err := e.bytes(s)
+		data, err := e.Bytes(s)
 		if err != nil {
 			return err
 		}
-		sha, err := s.writeBlob(data) // dedupes: identical content, same object
+		sha, err := s.WriteBlob(data) // dedupes: identical content, same object
 		if err != nil {
 			return err
 		}
-		op := fileOp{Path: m.dst, SHA: sha, Size: e.size()}
+		op := fileOp{Path: m.dst, SHA: sha, Size: e.Size()}
 		if overwrite {
 			op.Overwrite = true
 		}
 		dstRec.Ops = append(dstRec.Ops, op)
 	}
-	return s.saveCommit(dstRec)
+	return s.SaveCommit(dstRec)
 }
 
 // finishCommit closes the commit, advances the branch ref, and reports the
@@ -833,13 +829,13 @@ func (s *apiStore) copyFile(dstCommitID, dstPath, srcCommitID, srcPath string, o
 // Output commits are opened at job start, before the head is final; the
 // last writer must re-parent so the branch stays linear and no finished
 // commit is orphaned off the chain (concurrent jobs of one pipeline).
-func (s *apiStore) reparent(commitID, parentID string) error {
+func (s *Store) Reparent(commitID, parentID string) error {
 	if parentID == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return err
 	}
@@ -850,15 +846,15 @@ func (s *apiStore) reparent(commitID, parentID string) error {
 		return nil
 	}
 	rec.ParentID = parentID
-	return s.saveCommit(rec)
+	return s.SaveCommit(rec)
 }
 
 // finishCommit closes a commit as a real revision or as an explicit empty
 // barrier (SB-118), advancing the branch head.
-func (s *apiStore) finishCommit(commitID, description string, empty bool) (client.Commit, error) {
+func (s *Store) FinishCommit(commitID, description string, empty bool) (client.Commit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return client.Commit{}, notFound("commit %q not found", commitID)
 	}
@@ -873,55 +869,55 @@ func (s *apiStore) finishCommit(commitID, description string, empty bool) (clien
 	}
 	// a path that is both a file and a directory prefix of another path is
 	// a type conflict; finishing fails (FS-1/FS-5 edges — "x" then "x/y")
-	if conflict := s.pathConflict(rec); conflict != "" {
+	if conflict := s.PathConflict(rec); conflict != "" {
 		return client.Commit{}, fmt.Errorf("type conflict at path %q", conflict)
 	}
 	rec.Empty = empty
 	rec.Finished = true
-	if err := s.saveCommit(rec); err != nil {
+	if err := s.SaveCommit(rec); err != nil {
 		return client.Commit{}, err
 	}
-	if err := s.setHead(rec.Repo, rec.Branch, rec.ID); err != nil {
+	if err := s.SetHead(rec.Repo, rec.Branch, rec.ID); err != nil {
 		return client.Commit{}, err
 	}
 	if s.onFinish != nil {
 		s.onFinish()
 	}
-	return rec.commit(), nil
+	return rec.Commit(), nil
 }
 
-func (s *apiStore) inspectCommit(commitID string) (client.Commit, error) {
+func (s *Store) InspectCommit(commitID string) (client.Commit, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rec, err := s.loadCommitByID(commitID)
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return client.Commit{}, notFound("commit %q not found", commitID)
 	}
-	return rec.commit(), nil
+	return rec.Commit(), nil
 }
 
-func (s *apiStore) headCommitRec(repo, branch string) (client.Commit, error) {
-	if !validName(repo) {
+func (s *Store) HeadCommitRec(repo, branch string) (client.Commit, error) {
+	if !ValidName(repo) {
 		return client.Commit{}, fmt.Errorf("invalid repo name %q", repo)
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if _, err := os.Stat(s.repoDir(repo)); err != nil {
+	if _, err := os.Stat(s.RepoDir(repo)); err != nil {
 		return client.Commit{}, notFound("repo %q not found", repo)
 	}
-	id := s.headCommit(repo, branch)
+	id := s.HeadCommit(repo, branch)
 	if id == "" {
 		return client.Commit{}, fmt.Errorf("branch %q has no head", branch)
 	}
-	rec, err := s.loadCommit(repo, id)
+	rec, err := s.LoadCommit(repo, id)
 	if err != nil {
 		return client.Commit{}, err
 	}
-	return rec.commit(), nil
+	return rec.Commit(), nil
 }
 
 // loadCommitByID finds a commit record across all repos by id.
-func (s *apiStore) loadCommitByID(commitID string) (*commitRec, error) {
+func (s *Store) LoadCommitByID(commitID string) (*CommitRec, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
@@ -930,14 +926,14 @@ func (s *apiStore) loadCommitByID(commitID string) (*commitRec, error) {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if rec, err := s.loadCommit(e.Name(), commitID); err == nil {
+		if rec, err := s.LoadCommit(e.Name(), commitID); err == nil {
 			return rec, nil
 		}
 	}
 	return nil, notFound("commit %q not found", commitID)
 }
 
-func (rec *commitRec) commit() client.Commit {
+func (rec *CommitRec) Commit() client.Commit {
 	return client.Commit{
 		ID:          rec.ID,
 		Repo:        rec.Repo,
@@ -956,8 +952,8 @@ func (rec *commitRec) commit() client.Commit {
 // of another path in the commit's resolved view — a type conflict that
 // must fail finishing (FS-1 edge: writing "x" then "x/y" in one commit;
 // FS-2: a child writing "x/y" over an inherited file "x").
-func (s *apiStore) pathConflict(rec *commitRec) string {
-	view := s.resolveView(rec)
+func (s *Store) PathConflict(rec *CommitRec) string {
+	view := s.ResolveView(rec)
 	paths := make([]string, 0, len(view))
 	for p := range view {
 		paths = append(paths, p)
@@ -978,30 +974,30 @@ func (s *apiStore) pathConflict(rec *commitRec) string {
 // inherited content too). An explicitly empty commit is a barrier: its
 // view is nothing and nothing below it merges in — a child of an empty
 // commit shows only its own ops (SB-118).
-func (s *apiStore) resolveView(rec *commitRec) map[string]viewEntry {
-	var chain []*commitRec
+func (s *Store) ResolveView(rec *CommitRec) map[string]ViewEntry {
+	var chain []*CommitRec
 	for cur := rec; cur != nil && !cur.Empty; {
 		chain = append(chain, cur)
 		if cur.ParentID == "" {
 			break
 		}
-		parent, err := s.loadCommit(cur.Repo, cur.ParentID)
+		parent, err := s.LoadCommit(cur.Repo, cur.ParentID)
 		if err != nil {
 			break
 		}
 		cur = parent
 	}
-	view := map[string]viewEntry{}
+	view := map[string]ViewEntry{}
 	for i := len(chain) - 1; i >= 0; i-- { // oldest first, so the newest ops apply last
 		for _, op := range chain[i].Ops {
 			switch {
 			case op.Delete:
 				delete(view, op.Path)
 			case op.Overwrite:
-				view[op.Path] = viewEntry{parts: []viewPart{{SHA: op.SHA, Size: op.Size, Overwrite: true}}}
+				view[op.Path] = ViewEntry{parts: []ViewPart{{SHA: op.SHA, Size: op.Size, Overwrite: true}}}
 			default:
 				e := view[op.Path]
-				e.parts = append(e.parts, viewPart{SHA: op.SHA, Size: op.Size})
+				e.parts = append(e.parts, ViewPart{SHA: op.SHA, Size: op.Size})
 				view[op.Path] = e
 			}
 		}
@@ -1011,39 +1007,39 @@ func (s *apiStore) resolveView(rec *commitRec) map[string]viewEntry {
 
 // resolveViewByID is resolveView for a commit id (must be called under the
 // store lock).
-func (s *apiStore) resolveViewByID(commitID string) (map[string]viewEntry, error) {
-	rec, err := s.loadCommitByID(commitID)
+func (s *Store) ResolveViewByID(commitID string) (map[string]ViewEntry, error) {
+	rec, err := s.LoadCommitByID(commitID)
 	if err != nil {
 		return nil, err
 	}
-	return s.resolveView(rec), nil
+	return s.ResolveView(rec), nil
 }
 
 // ---- file access ----
 
-func (s *apiStore) listFiles(commitID string) ([]client.FileInfo, error) {
+func (s *Store) ListFiles(commitID string) ([]client.FileInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	view, err := s.resolveViewByID(commitID)
+	view, err := s.ResolveViewByID(commitID)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]client.FileInfo, 0, len(view))
 	for p, f := range view {
-		h, err := f.hash(s)
+		h, err := f.Hash(s)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, client.FileInfo{Path: p, Size: f.size(), Hash: h})
+		out = append(out, client.FileInfo{Path: p, Size: f.Size(), Hash: h})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
 }
 
-func (s *apiStore) getFile(commitID, p string) ([]byte, error) {
+func (s *Store) GetFile(commitID, p string) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	view, err := s.resolveViewByID(commitID)
+	view, err := s.ResolveViewByID(commitID)
 	if err != nil {
 		return nil, err
 	}
@@ -1051,25 +1047,25 @@ func (s *apiStore) getFile(commitID, p string) ([]byte, error) {
 	if !ok {
 		return nil, notFound("file %q not found", p)
 	}
-	return f.bytes(s)
+	return f.Bytes(s)
 }
 
 // materializeInput writes the full view of a commit into dir, preserving
 // relative paths — the job's view of its input.
-func (s *apiStore) materializeInput(commitID, dir string) error {
+func (s *Store) MaterializeInput(commitID, dir string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	view, err := s.resolveViewByID(commitID)
+	view, err := s.ResolveViewByID(commitID)
 	if err != nil {
 		return err
 	}
-	return s.materializeView(view, dir)
+	return s.MaterializeView(view, dir)
 }
 
 // materializeView writes an already-resolved view into dir.
-func (s *apiStore) materializeView(view map[string]viewEntry, dir string) error {
+func (s *Store) MaterializeView(view map[string]ViewEntry, dir string) error {
 	for p, f := range view {
-		data, err := f.bytes(s)
+		data, err := f.Bytes(s)
 		if err != nil {
 			return err
 		}
@@ -1084,23 +1080,31 @@ func (s *apiStore) materializeView(view map[string]viewEntry, dir string) error 
 	return nil
 }
 
-// viewDatums lists the input files of a commit with their content hashes —
+// DatumRef is one input file of a revision — its path and content hash —
+// the per-file handle for log filters (SB-060). A job's datum set is the
+// input revision's full view.
+type DatumRef struct {
+	Path string `json:"path"`
+	Hash string `json:"hash"`
+}
+
+// ViewDatums lists the input files of a commit with their content hashes —
 // the datum set of a job processing that commit (SB-060 log filters). The
 // whole view is the datum set: a job runs over the full input revision.
-func (s *apiStore) viewDatums(commitID string) ([]datumRef, error) {
+func (s *Store) ViewDatums(commitID string) ([]DatumRef, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	view, err := s.resolveViewByID(commitID)
+	view, err := s.ResolveViewByID(commitID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]datumRef, 0, len(view))
+	out := make([]DatumRef, 0, len(view))
 	for p, f := range view {
-		h, err := f.hash(s)
+		h, err := f.Hash(s)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, datumRef{Path: p, Hash: h})
+		out = append(out, DatumRef{Path: p, Hash: h})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
@@ -1109,12 +1113,12 @@ func (s *apiStore) viewDatums(commitID string) ([]datumRef, error) {
 // chainFromHead lists the commit ids of a branch from the head down to
 // (excluding) stopAt, oldest first — the backlog a stopped pipeline must
 // process on restart (SB-048).
-func (s *apiStore) chainFromHead(repo, branch, stopAt string) []string {
+func (s *Store) ChainFromHead(repo, branch, stopAt string) []string {
 	var chain []string
-	id := s.headCommit(repo, branch)
+	id := s.HeadCommit(repo, branch)
 	for id != "" && id != stopAt {
 		chain = append(chain, id)
-		rec, err := s.loadCommit(repo, id)
+		rec, err := s.LoadCommit(repo, id)
 		if err != nil {
 			break
 		}
@@ -1138,53 +1142,53 @@ type tagInfo struct {
 	Ref  string `json:"ref"`
 }
 
-func (s *apiStore) tagPath(name string) string {
+func (s *Store) TagPath(name string) string {
 	return filepath.Join(filepath.Dir(s.dir), "tags", name)
 }
 
-func (s *apiStore) putTag(name string, data []byte) error {
-	if !validName(name) {
+func (s *Store) PutTag(name string, data []byte) error {
+	if !ValidName(name) {
 		return fmt.Errorf("invalid tag name %q", name)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sha, err := s.writeBlob(data)
+	sha, err := s.WriteBlob(data)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.tagPath(name)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.TagPath(name)), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(s.tagPath(name), []byte(sha), 0o644)
+	return os.WriteFile(s.TagPath(name), []byte(sha), 0o644)
 }
 
-func (s *apiStore) getTag(name string) ([]byte, error) {
+func (s *Store) GetTag(name string) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	sha, err := os.ReadFile(s.tagPath(name))
+	sha, err := os.ReadFile(s.TagPath(name))
 	if err != nil {
 		return nil, notFound("tag %q not found", name)
 	}
-	return s.readBlob(strings.TrimSpace(string(sha)))
+	return s.ReadBlob(strings.TrimSpace(string(sha)))
 }
 
 // deleteTag removes the tag ref; the blob it pointed at becomes
 // unreferenced and is reclaimed by the next GC (SB-150's survival clause
 // covers referenced tags).
-func (s *apiStore) deleteTag(name string) error {
-	if !validName(name) {
+func (s *Store) DeleteTag(name string) error {
+	if !ValidName(name) {
 		return fmt.Errorf("invalid tag name %q", name)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	path := s.tagPath(name)
+	path := s.TagPath(name)
 	if _, err := os.Stat(path); err != nil {
 		return notFound("tag %q not found", name)
 	}
 	return os.Remove(path)
 }
 
-func (s *apiStore) listTags() ([]tagInfo, error) {
+func (s *Store) ListTags() ([]tagInfo, error) {
 	entries, err := os.ReadDir(filepath.Dir(s.dir) + "/tags")
 	if err != nil {
 		if os.IsNotExist(err) {

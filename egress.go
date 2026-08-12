@@ -44,7 +44,7 @@ func (d *daemon) runEgress(pl pipelineRec, outCommit client.Commit) error {
 				return fmt.Errorf("clear egress destination: %w", err)
 			}
 		}
-		if err := d.store.materializeInput(outCommit.ID, dir); err != nil {
+		if err := d.store.MaterializeInput(outCommit.ID, dir); err != nil {
 			return fmt.Errorf("copy output to egress destination: %w", err)
 		}
 		return nil

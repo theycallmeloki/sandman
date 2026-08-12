@@ -67,13 +67,13 @@ linters:
         - (*sandman.daemon).finishOutput
         - (*sandman.daemon).deleteCommit
         - (sandman.Runner).Kill
-        - (*sandman.apiStore).saveCommit
-        - (*sandman.apiStore).createRepo
-        - (*sandman.apiStore).deleteFile
-        - (*sandman.apiStore).overwriteFile
-        - (*sandman.apiStore).writeBlob
+        - (*sandman/internal/store.Store).SaveCommit
+        - (*sandman/internal/store.Store).CreateRepo
+        - (*sandman/internal/store.Store).DeleteFile
+        - (*sandman/internal/store.Store).OverwriteFile
+        - (*sandman/internal/store.Store).WriteBlob
+        - (*sandman/internal/store.Store).SetHead
+        - (*sandman/internal/store.Store).FinishCommit
+        - (*sandman/internal/store.Store).TombstoneRemoved
+        - (*sandman/internal/store.Store).DeleteRepo
         - (*sandman.registry).loadStatic
-        - (*sandman.apiStore).setHead
-        - (*sandman.apiStore).finishCommit
-        - (*sandman.apiStore).tombstoneRemoved
-        - (*sandman.apiStore).deleteRepo
