@@ -183,8 +183,16 @@ func (d *daemon) flushSet(commitIDs []string, timeout time.Duration) ([]client.J
 				continue // the graph changed: re-evaluate
 			case <-t.C:
 				t.Stop()
-				return relevant, false, nil
 			}
+			// the trigger watcher is asynchronous: a terminal job's
+			// finished output commit may not have spawned its downstream
+			// job yet (the watcher goroutine can lag under load). A flush
+			// returning now would miss that growth (SB-021: 4 of 5
+			// stages returned). Wait while a trigger is still owed.
+			if d.triggerPending(relevant) {
+				continue
+			}
+			return relevant, false, nil
 		}
 		if len(relevant) == 0 {
 			if len(repos) == 0 {
@@ -253,4 +261,59 @@ func (d *daemon) consumersSettled(repo, branch string) bool {
 		}
 	}
 	return true
+}
+
+// triggerPending reports whether the trigger watcher still owes the
+// flush's closure a job: some relevant job's output commit is unfinished
+// (its finish will fire the downstream trigger), or an active (running or
+// standby) consumer of a relevant finished commit has no job for that
+// pairing yet. The watcher processes commit finishes asynchronously, so
+// the flush must not return while a spawn is pending (SB-021).
+func (d *daemon) triggerPending(jobs []client.Job) bool {
+	for _, j := range jobs {
+		if j.OutputCommit == "" {
+			continue // no output commit, no downstream trigger
+		}
+		cm, err := d.store.inspectCommit(j.OutputCommit)
+		if err != nil || !cm.Finished {
+			return true // the commit is still being finalized
+		}
+		pipes, err := d.listPipelinesFiltered(nil, "", false)
+		if err != nil {
+			return true
+		}
+		for _, p := range pipes {
+			if p.Input == nil || (p.State != "running" && p.State != "standby") {
+				continue // settled consumers spawn nothing
+			}
+			rec, err := d.loadPipeline(p.Name)
+			if err != nil || rec.Pipeline.Service != nil {
+				continue // services never spawn per commit (SB-100)
+			}
+			if !pipelineConsumes(rec.Pipeline.Input, cm.Repo, cm.Branch) {
+				continue
+			}
+			if d.hasJobForPairing(p.Name, j.OutputCommit) {
+				continue // the pairing job already exists
+			}
+			return true // the watcher will spawn this pairing
+		}
+	}
+	return false
+}
+
+// hasJobForPairing reports whether any job of the pipeline lists the
+// commit among its input commits — the trigger's dedup view.
+func (d *daemon) hasJobForPairing(pipeline, commitID string) bool {
+	for _, j := range d.mustListJobs() {
+		if j.Pipeline != pipeline {
+			continue
+		}
+		for _, ic := range j.InputCommits {
+			if ic == commitID {
+				return true
+			}
+		}
+	}
+	return false
 }
