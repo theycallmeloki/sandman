@@ -6,6 +6,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/rivo/tview v0.42.0
+	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.45.0
 )
 
@@ -17,7 +18,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/miekg/dns v1.1.27 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/crypto v0.23.0 // indirect
 	golang.org/x/net v0.25.0 // indirect

@@ -38,10 +38,27 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.12.2
 
       - name: Build
         run: go build -v ./...
 
       - name: Test
         run: go test -timeout 30m ./...
+
+  race:
+    # race-detector pass over the fast suites (root unit tests + the
+    # docker-gated cli smoke, which runs a real container daemon). The
+    # conformance suite is excluded: with -race it exceeds a practical CI
+    # budget.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test with race detector
+        run: go test -race -timeout 15m . ./cli/...

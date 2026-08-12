@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,22 +35,20 @@ const (
 	updatePath  = "/usr/local/bin/sandman"
 )
 
+// updateAPIBase is the GitHub API base for release lookups; a package var
+// so tests can point it at an httptest server.
+var updateAPIBase = "https://api.github.com/repos"
+
 // errNoReleases marks a repo with no published releases yet.
-var errNoReleases = fmt.Errorf("no releases")
+var errNoReleases = errors.New("no releases")
 
 func cmdUpdate(args []string) {
-	checkOnly := false
-	for _, a := range args {
-		switch a {
-		case "--check", "-check":
-			checkOnly = true
-		case "-h", "--help":
-			fmt.Fprint(os.Stderr, "usage: sandman update [--check]\n  check GitHub releases and install the latest build over "+updatePath+"\n  --check: report the latest release without installing\n")
-			os.Exit(0)
-		default:
-			die("update: unknown flag "+a+" (try --check)", 2)
-		}
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	checkOnly := fs.Bool("check", false, "report the latest release without installing")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "usage: sandman update [--check]\n  check GitHub releases and install the latest build over %s\n  --check: report the latest release without installing\n", updatePath)
 	}
+	_ = fs.Parse(args)
 
 	rel, err := latestRelease()
 	if err == errNoReleases {
@@ -73,7 +72,7 @@ func cmdUpdate(args []string) {
 	}
 
 	fmt.Printf("new version available: %s (you have %s)\n", rel.TagName, Version)
-	if checkOnly {
+	if *checkOnly {
 		return
 	}
 
@@ -88,7 +87,7 @@ func cmdUpdate(args []string) {
 		die(fmt.Sprintf("update: release %s is missing the %s checksum asset; refusing unsigned install", rel.TagName, runtime.GOOS+"-"+runtime.GOARCH+".sha256"), 1)
 	}
 
-	if err := installRelease(asset, shasum); err != nil {
+	if err := installRelease(asset, shasum, updatePath); err != nil {
 		die("update: "+err.Error(), 1)
 	}
 	fmt.Printf("updated to %s — installed at %s\n", rel.TagName, updatePath)
@@ -155,7 +154,7 @@ type ghAsset struct {
 
 // latestRelease fetches the newest tagged release from GitHub.
 func latestRelease() (*ghRelease, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", updateOwner, updateRepo)
+	url := fmt.Sprintf("%s/%s/%s/releases/latest", updateAPIBase, updateOwner, updateRepo)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -197,9 +196,10 @@ func releaseAsset(rel *ghRelease, goos, goarch string) string {
 }
 
 // installRelease downloads the binary and its checksum, verifies the
-// hash, and atomically replaces updatePath (sudo re-exec when the target
-// directory is not writable).
-func installRelease(binURL, shaURL string) error {
+// hash, and atomically replaces the install path (sudo re-exec when the
+// target directory is not writable). dst is the install target; the
+// production call passes updatePath, tests pass a temp dir.
+func installRelease(binURL, shaURL, dst string) error {
 	tmp, err := os.CreateTemp("", "sandman-update-*.bin")
 	if err != nil {
 		return err
@@ -224,7 +224,7 @@ func installRelease(binURL, shaURL string) error {
 		return err
 	}
 
-	if err := replaceBinary(tmpPath); err != nil {
+	if err := replaceBinary(tmpPath, dst); err != nil {
 		return installAsRoot()
 	}
 	return nil
@@ -300,9 +300,9 @@ func verifyChecksum(path string, want []byte) error {
 	return nil
 }
 
-// replaceBinary atomically swaps the downloaded binary over updatePath.
-func replaceBinary(src string) error {
-	dir := filepath.Dir(updatePath)
+// replaceBinary atomically swaps the downloaded binary over dst.
+func replaceBinary(src, dst string) error {
+	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -312,11 +312,15 @@ func replaceBinary(src string) error {
 	if err != nil {
 		return err
 	}
-	staged := updatePath + ".new"
+	staged := dst + ".new"
 	if err := os.WriteFile(staged, data, 0o755); err != nil {
 		return err
 	}
-	return os.Rename(staged, updatePath)
+	if err := os.Rename(staged, dst); err != nil {
+		os.Remove(staged) // do not leave a half-written world-readable binary behind
+		return err
+	}
+	return nil
 }
 
 // installAsRoot re-executes the same update through sudo (the target
