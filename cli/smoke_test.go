@@ -296,6 +296,27 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("default-copy output = %q, want %q", got, "A")
 	}
 
+	// 4b. file inspect reports the size
+	fi := mustCLI(t, "", "file", "inspect", "r2@master:/a.txt")
+	if !strings.Contains(fi, "SizeBytes") {
+		t.Fatalf("file inspect %q: want SizeBytes", fi)
+	}
+
+	// 4c. pipeline extract emits a round-trippable spec (update -f accepts it)
+	ex := mustCLI(t, "", "pipeline", "extract", "cap2")
+	if !strings.Contains(ex, `"name": "cap2"`) {
+		t.Fatalf("pipeline extract %q: want cap2 spec JSON", ex)
+	}
+	spec3 := filepath.Join(t.TempDir(), "spec3.json")
+	if err := os.WriteFile(spec3, []byte(ex), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCLI(t, "", "pipeline", "update", "-f", spec3)
+
+	// 4d. pipeline edit re-submits through $EDITOR
+	t.Setenv("EDITOR", "true")
+	mustCLI(t, "", "pipeline", "edit", "cap2")
+
 	// 5. job inspect round-trips the success state
 	jl := mustCLI(t, "", "job", "list", "cap2")
 	jid := strings.Fields(strings.Split(jl, "\n")[0])[0]

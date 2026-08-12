@@ -725,3 +725,106 @@ func TestSB169_UnplaceableRecovery(t *testing.T) {
 		t.Fatalf("pipeline still crashed after the host returned")
 	}
 }
+
+// TestD01_StandbyIdlesWithZeroContainers — the D-01 scale-to-zero
+// assertion: a standby pipeline with no pending work holds NO standing
+// execution participants (docker ps shows zero sandman-* containers).
+// The standby family asserts state transitions only; this pins the
+// container count, the observable side of scale-to-zero.
+func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
+	withContainerDaemon(t)
+	// a fresh container daemon must start with a clean slate
+	if n := sandmanContainerCount(); n != 0 {
+		t.Fatalf("%d sandman-* containers before any work, want 0", n)
+	}
+	repo := uniq(t) + "r"
+	pipe := uniq(t) + "p"
+	mustRepo(t, repo)
+	mustPipeline(t, client.Pipeline{Name: pipe, Standby: true, Transform: standbyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}})
+	pollFor(t, "idle in standby", 30*time.Second, func() bool {
+		return standbyState(t, pipe) == "standby"
+	})
+	if n := sandmanContainerCount(); n != 0 {
+		t.Fatalf("%d standing containers while idle in standby, want 0 (D-01)", n)
+	}
+	// a commit wakes it: a container exists while the job runs
+	cm := commitFiles(t, repo, "", map[string]string{"file": "foo\n"})
+	pollFor(t, "container while the job runs", 30*time.Second, func() bool {
+		return sandmanContainerCount() > 0
+	})
+	flushOK(t, cm.ID)
+	pollFor(t, "resting in standby with zero containers", 30*time.Second, func() bool {
+		return standbyState(t, pipe) == "standby" && sandmanContainerCount() == 0
+	})
+}
+
+// sandmanContainerCount counts RUNNING sandbox containers (docker ps, not
+// -a: exited ones are removed by --rm; a standing execution participant
+// is a running container).
+func sandmanContainerCount() int {
+	out, err := exec.Command("docker", "ps", "-q", "--filter", "name=sandman-").Output()
+	if err != nil {
+		return -1
+	}
+	return len(strings.Fields(string(out)))
+}
+
+// TestD15_UnsatisfiableResourcesAcceptedAndRecorded — D-15's
+// accept-and-record contract: a provably-unsatisfiable declaration
+// (memory beyond any host's RAM) is NOT a creation gate — the spec is
+// accepted, the declared values are recorded, and the pipeline is not
+// prevented from running. Enforcement is the worker runtime's: docker
+// refuses to provision the over-large container, and the failure
+// converges on the crashed state with a reason (SB-091's provisioning
+// path) rather than a rejection or a hang.
+func TestD15_UnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
+	withContainerDaemon(t)
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
+	name := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name: name,
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "true"},
+			ResourceLimits: &client.ResourceLimits{
+				Memory: "1000000000000b", // 1TB: beyond any host's RAM
+				CPU:    9999,             // beyond any core count
+			},
+		},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
+	})
+	// the declaration is recorded, not rejected
+	p, err := c.InspectPipeline(name)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if p.Transform.ResourceLimits == nil || p.Transform.ResourceLimits.Memory != "1000000000000b" || p.Transform.ResourceLimits.CPU != 9999 {
+		t.Fatalf("declared limits = %+v, want 1TB/9999 recorded", p.Transform.ResourceLimits)
+	}
+	// the pipeline is not prevented from running: the job attempt reaches
+	// the runtime, docker refuses the over-large CPU range at exec (exit
+	// 125), and the datum fails with the RUNTIME's reason — never a
+	// create-time rejection. The pipeline stays operational.
+	jobs, err := c.Flush(cm.ID, 60*time.Second)
+	if err != nil {
+		t.Fatalf("flush of the unsatisfiable-resource job: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("unsatisfiable-resource flush = %d jobs, want 1", len(jobs))
+	}
+	if jobs[0].State != "failure" {
+		t.Fatalf("job state = %s, want failure (runtime rejected the CPU range)", jobs[0].State)
+	}
+	if jobs[0].Reason == "" || !strings.Contains(jobs[0].Reason, "docker") {
+		t.Fatalf("job reason = %q, want the docker runtime's rejection named", jobs[0].Reason)
+	}
+	pi, err := c.InspectPipeline(name)
+	if err != nil {
+		t.Fatalf("re-inspect: %v", err)
+	}
+	if pi.State == "crashed" || pi.State == "failure" {
+		t.Fatalf("pipeline state = %s, want operational (declaration is not a gate)", pi.State)
+	}
+}

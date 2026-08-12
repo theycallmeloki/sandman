@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -343,6 +345,28 @@ func newFileCmd() *cobra.Command {
 			},
 		},
 		&cobra.Command{
+			Use:  "inspect <repo@branch:path>",
+			Args: cobra.ExactArgs(1),
+			Run: func(_ *cobra.Command, args []string) {
+				repo, branch, path, err := parseRef(args[0])
+				if err != nil {
+					die(err.Error(), 2)
+				}
+				if path == "" {
+					die("file inspect: path required (repo@branch:path)", 2)
+				}
+				head, err := cliClient().HeadCommit(repo, branch)
+				if err != nil {
+					die("file inspect: "+err.Error(), 1)
+				}
+				desc, err := cliClient().DescribeFile(head.ID, path)
+				if err != nil {
+					die("file inspect: "+err.Error(), 1)
+				}
+				fmt.Println(desc)
+			},
+		},
+		&cobra.Command{
 			Use:  "list <repo@branch>[:path]",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
@@ -669,6 +693,74 @@ func newPipelineCmd() *cobra.Command {
 					die("pipeline run-cron: "+err.Error(), 1)
 				}
 				fmt.Printf("triggered %s\n", args[0])
+			},
+		},
+		&cobra.Command{
+			Use:  "extract <name>",
+			Args: cobra.ExactArgs(1),
+			Run: func(_ *cobra.Command, args []string) {
+				p, err := cliClient().InspectPipeline(args[0])
+				if err != nil {
+					die("pipeline extract: "+err.Error(), 1)
+				}
+				// normalize to the spec shape so the output round-trips
+				// through `pipeline create -f` (the inspection carries
+				// state/version/jobCounts the spec decoder ignores)
+				b, err := json.Marshal(p)
+				if err != nil {
+					die("pipeline extract: "+err.Error(), 1)
+				}
+				var spec client.Pipeline
+				if err := json.Unmarshal(b, &spec); err != nil {
+					die("pipeline extract: "+err.Error(), 1)
+				}
+				out, err := json.MarshalIndent(spec, "", "  ")
+				if err != nil {
+					die("pipeline extract: "+err.Error(), 1)
+				}
+				fmt.Println(string(out))
+			},
+		},
+		&cobra.Command{
+			Use:  "edit <name>",
+			Args: cobra.ExactArgs(1),
+			Run: func(_ *cobra.Command, args []string) {
+				p, err := cliClient().InspectPipeline(args[0])
+				if err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				b, err := json.Marshal(p)
+				if err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				f, err := os.CreateTemp("", "sandman-pipeline-*.json")
+				if err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				name := f.Name()
+				defer os.Remove(name)
+				if _, err := f.Write(b); err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				f.Close()
+				editor := os.Getenv("EDITOR")
+				if editor == "" {
+					editor = "vi"
+				}
+				cmd := exec.Command("sh", "-c", editor+" "+strconv.Quote(name))
+				cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+				if err := cmd.Run(); err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				spec, err := readPipelineSpec(name)
+				if err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				spec.Update = true
+				if err := cliClient().CreatePipeline(spec); err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				fmt.Printf("updated pipeline %s\n", spec.Name)
 			},
 		},
 	)

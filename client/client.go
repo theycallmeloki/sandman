@@ -731,8 +731,7 @@ type Spout struct {
 	Marker    string `json:"marker,omitempty"`
 }
 
-// Pipeline state machine (P7): running, stopped, standby, failure, degraded,
-// crashed. Stopped is a persistent flag distinct from the transient state:
+// Pipeline state machine (P7): running, stopped, standby, failure, crashed. Stopped is a persistent flag distinct from the transient state:
 // stopping a pipeline sets Stopped and reports state "paused" (SB-028).
 // Transform and Input are populated in full inspections; the other fields
 // are the current version's state.

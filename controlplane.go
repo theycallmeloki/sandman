@@ -35,7 +35,7 @@ import (
 // replayed on start (SB-048).
 type pipelineRec struct {
 	Pipeline  client.Pipeline `json:"pipeline"`
-	State     string          `json:"state"` // running | stopped | standby | failure | degraded | crashed
+	State     string          `json:"state"` // running | stopped | standby | failure | crashed
 	Reason    string          `json:"reason,omitempty"`
 	Stopped   bool            `json:"stopped,omitempty"`
 	StoppedAt string          `json:"stoppedAt,omitempty"`
