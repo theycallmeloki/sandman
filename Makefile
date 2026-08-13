@@ -22,6 +22,8 @@ install: build
 	install -m 0755 sandman $(PREFIX)/bin/sandman
 	install -m 0644 deploy/sandman.service /etc/systemd/system/sandman.service
 	install -m 0644 deploy/sandman-worker.service /etc/systemd/system/sandman-worker.service
+	install -m 0644 deploy/sandman-update.service /etc/systemd/system/sandman-update.service
+	install -m 0644 deploy/sandman-update.timer /etc/systemd/system/sandman-update.timer
 	@if [ "$(ROLE)" = "worker" ]; then \
 		if [ ! -f /etc/sandman/worker.env ]; then \
 			install -d /etc/sandman; \
@@ -30,7 +32,13 @@ install: build
 		fi; \
 	fi
 	systemctl daemon-reload || true
+	# auto-roll: the root oneshot installs the latest release over
+	# /usr/local/bin/sandman daily; disable with `systemctl disable
+	# sandman-update.timer`. The update never restarts the daemon — the
+	# new binary applies at the next natural restart.
+	systemctl enable sandman-update.timer || true
 	@echo "installed $(PREFIX)/bin/sandman ($(ROLE) role)"
+	@echo "auto-updates: enabled (sandman-update.timer, daily) — disable: systemctl disable sandman-update.timer"
 	@if [ "$(ROLE)" = "worker" ]; then \
 		echo "start the worker:  systemctl enable --now sandman-worker"; \
 	else \
@@ -43,7 +51,7 @@ daemon worker:
 	@true
 
 uninstall:
-	rm -f $(PREFIX)/bin/sandman /etc/systemd/system/sandman.service /etc/systemd/system/sandman-worker.service
+	rm -f $(PREFIX)/bin/sandman /etc/systemd/system/sandman.service /etc/systemd/system/sandman-worker.service /etc/systemd/system/sandman-update.service /etc/systemd/system/sandman-update.timer
 	systemctl daemon-reload || true
 
 # release: build the tagged version's release binary + sha256 asset.

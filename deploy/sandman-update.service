@@ -1,0 +1,18 @@
+[Unit]
+Description=Sandman self-update (install the latest release over /usr/local/bin/sandman)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root (no User=, like the daemon unit), so the install can write
+# /usr/local/bin/sandman — the non-root `sandman update` path would have
+# to re-exec through an interactive sudo prompt. The update replaces the
+# binary atomically (tmp + rename): the running daemon keeps its old
+# inode, so an in-flight job is never disturbed — the new binary applies
+# at the next natural restart. This unit deliberately does NOT restart
+# the daemon.
+ExecStart=/usr/local/bin/sandman update
+
+[Install]
+WantedBy=multi-user.target
