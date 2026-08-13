@@ -18,7 +18,11 @@ set -e
 need() {
 	command -v "$1" >/dev/null 2>&1 && return 0
 	echo "install.sh: $1 not found — installing it"
-	sudo apt-get install -y -qq "$1"
+	sudo apt-get install -y -qq "$1" || {
+		echo "install.sh: apt install failed — refreshing package lists and retrying"
+		sudo apt-get update -qq
+		sudo apt-get install -y -qq "$1"
+	}
 	command -v "$1" >/dev/null 2>&1 || { echo "install.sh: failed to install $1" >&2; exit 1; }
 }
 need curl
