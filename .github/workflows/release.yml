@@ -50,23 +50,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
-          body="Automated release $GITHUB_REF_NAME."
+          echo "Automated release $GITHUB_REF_NAME." > /tmp/notes.txt
           if [ -n "$prev" ]; then
-            notes=$(git log --oneline --no-merges "$prev..HEAD")
-            if [ -n "$notes" ]; then
-              body="$body
-
-## Changes since $prev
-
-$notes"
-            fi
+            echo "" >> /tmp/notes.txt
+            echo "## Changes since $prev" >> /tmp/notes.txt
+            git log --oneline --no-merges "$prev..HEAD" >> /tmp/notes.txt || true
           fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "release $GITHUB_REF_NAME exists; uploading assets"
             gh release upload "$GITHUB_REF_NAME" dist/* --clobber
           else
-            echo "$body" | gh release create "$GITHUB_REF_NAME" dist/* \
-              --title "sandman $GITHUB_REF_NAME" --notes-file -
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "sandman $GITHUB_REF_NAME" --notes-file /tmp/notes.txt
           fi
           gh release view "$GITHUB_REF_NAME" --json name,tagName,assets \
             -q '"published " + .name + " (" + .tagName + ") with " + ([.assets[].name] | join(", "))'
