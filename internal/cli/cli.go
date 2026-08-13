@@ -809,6 +809,7 @@ func newPipelineCmd() *cobra.Command {
 		},
 	}
 	update.Flags().StringVarP(&specFile, "spec", "f", "-", "pipeline spec JSON file ('-' = stdin)")
+	update.Flags().StringVar(&txID, "tx", "", "stage the update in this transaction")
 	cmd.AddCommand(update)
 
 	pdel := &cobra.Command{

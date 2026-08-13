@@ -377,6 +377,31 @@ func TestCLI_VerbCoverage(t *testing.T) {
 	}
 	mustCLI(t, "", "transaction", "stop")
 
+	// 6b2. pipeline update --tx stages the update explicitly — the flag
+	// existed only on create; the update handler read txID but the flag
+	// was unreachable from the CLI (dead code), so only the resume flow
+	// exercised update-in-transaction
+	tid2 := strings.TrimSpace(mustCLI(t, "", "transaction", "start"))
+	spec5 := filepath.Join(t.TempDir(), "spec5.json")
+	if err := os.WriteFile(spec5, []byte(`{
+	  "name": "cap3",
+	  "description": "updated in tx",
+	  "transform": {"image": "alpine"},
+	  "input": {"repo": "r2", "glob": "/*"}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustCLI(t, "", "pipeline", "update", "--tx", tid2, "-f", spec5)
+	ti2 := mustCLI(t, "", "transaction", "inspect", tid2)
+	if !strings.Contains(ti2, "update cap3") {
+		t.Fatalf("transaction inspect %q: want the staged update cap3", ti2)
+	}
+	mustCLI(t, "", "transaction", "finish", tid2)
+	pi2 := mustCLI(t, "", "pipeline", "inspect", "cap3")
+	if !strings.Contains(pi2, "version") || !strings.Contains(pi2, "2") {
+		t.Fatalf("pipeline inspect %q after tx update: want version 2", pi2)
+	}
+
 	// 6c. top-level `get file` recovers a file by ref (the nested `file
 	// get` is equivalent); commit inspect accepts repo@branch
 	if got := mustCLI(t, "", "get", "file", "r2@master:/a.txt"); got != "A" {
