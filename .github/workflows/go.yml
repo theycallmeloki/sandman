@@ -87,6 +87,8 @@ jobs:
           docker pull python:3-alpine
 
       - name: Conformance (${{ matrix.shard.name }})
+        env:
+          SANDBOX_SPOUT_DEBUG: "1"
         run: go test -timeout 45m ./conformance/ -run '${{ matrix.shard.pattern }}'
 
       - name: CLI smoke + root unit tests

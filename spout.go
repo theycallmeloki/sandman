@@ -142,6 +142,10 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	// final state, and a file deferred by an earlier mid-write check
 	// must not be lost to the exit.
 	commitCycle := func(final bool) {
+		if dbg := os.Getenv("SANDBOX_SPOUT_DEBUG"); dbg != "" {
+			snap := spoutSnapshot(outDir)
+			log.Printf("spout %s: poll snapshot %d files: %v", pl.Pipeline.Name, len(snap), sortedStringKeys(snap))
+		}
 		changed, deferred := spoutDiffVerify(outDir, committedOut, !final)
 		if len(changed) > 0 {
 			log.Printf("spout %s: cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
@@ -149,6 +153,7 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 			snap := spoutSnapshot(outDir)
 			for p := range deferred {
 				delete(snap, p) // still being written: must stay uncommitted for the next poll
+				log.Printf("spout %s: deferred mid-write file %s (left uncommitted)", pl.Pipeline.Name, p)
 			}
 			committedOut = snap
 		}
