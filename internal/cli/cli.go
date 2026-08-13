@@ -905,18 +905,11 @@ func newPipelineCmd() *cobra.Command {
 				if err != nil {
 					die("pipeline extract: "+err.Error(), 1)
 				}
-				// normalize to the spec shape so the output round-trips
-				// through `pipeline create -f` (the inspection carries
-				// state/version/jobCounts the spec decoder ignores)
 				b, err := json.Marshal(p)
 				if err != nil {
 					die("pipeline extract: "+err.Error(), 1)
 				}
-				var spec client.Pipeline
-				if err := json.Unmarshal(b, &spec); err != nil {
-					die("pipeline extract: "+err.Error(), 1)
-				}
-				out, err := json.MarshalIndent(spec, "", "  ")
+				out, err := normalizeSpec(b)
 				if err != nil {
 					die("pipeline extract: "+err.Error(), 1)
 				}
@@ -931,7 +924,14 @@ func newPipelineCmd() *cobra.Command {
 				if err != nil {
 					die("pipeline edit: "+err.Error(), 1)
 				}
-				b, err := json.Marshal(p)
+				raw, err := json.Marshal(p)
+				if err != nil {
+					die("pipeline edit: "+err.Error(), 1)
+				}
+				// the editor file is the normalized spec, not the raw
+				// inspection: the strict spec decoder rejects the
+				// inspection's state/version/jobCounts fields
+				b, err := normalizeSpec(raw)
 				if err != nil {
 					die("pipeline edit: "+err.Error(), 1)
 				}
@@ -974,6 +974,18 @@ var (
 	txID     string
 )
 
+// normalizeSpec strips a pipeline inspection down to its spec shape so
+// the result round-trips through `pipeline create -f`: the inspection
+// carries state/version/jobCounts that are not spec fields, and the
+// strict spec decoder rejects unknown fields.
+func normalizeSpec(b []byte) ([]byte, error) {
+	var spec client.Pipeline
+	if err := json.Unmarshal(b, &spec); err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(spec, "", "  ")
+}
+
 // readPipelineSpec decodes a pipeline spec from the -f source (stdin
 // default), the same shape the conformance suite passes to CreatePipeline.
 func readPipelineSpec(src string) (client.Pipeline, error) {
@@ -987,7 +999,13 @@ func readPipelineSpec(src string) (client.Pipeline, error) {
 		r = f
 	}
 	var p client.Pipeline
-	if err := json.NewDecoder(r).Decode(&p); err != nil {
+	dec := json.NewDecoder(r)
+	// strict: a spec field the decoder does not recognize — a typo, or
+	// a pachyderm-shaped port like top-level resource_limits — fails
+	// loudly instead of being silently ignored (a quiet resource-policy
+	// loss: the ported spec runs with no limits, no error)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
 		return client.Pipeline{}, fmt.Errorf("spec: %w", err)
 	}
 	return p, nil

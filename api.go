@@ -1090,9 +1090,17 @@ func (d *daemon) listFilesH(w http.ResponseWriter, r *http.Request) error {
 
 func (d *daemon) createPipelineH(w http.ResponseWriter, r *http.Request) error {
 	var p pipelineRec
-	if err := decodeBody(r, &p.Pipeline); err != nil {
-		return fmt.Errorf("invalid request body")
+	// strict spec decode: an unknown field (a typo, or a pachyderm-
+	// shaped port like top-level resource_limits) must fail the request
+	// loudly — silently ignoring it drops the declaration with no error,
+	// a quiet resource-policy loss. The error names the field (400).
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<30))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p.Pipeline); err != nil {
+		r.Body.Close()
+		return fmt.Errorf("invalid request body: %w", err)
 	}
+	r.Body.Close()
 	if tx := r.URL.Query().Get("transaction"); tx != "" {
 		// stage the create/update into an open transaction (SB-162/163)
 		if err := d.stageTxOp(tx, p.Pipeline); err != nil {

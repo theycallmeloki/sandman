@@ -384,6 +384,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		if len(b) != 100 {
 			t.Fatalf("overwrite file = %d bytes, want a constant 100", len(b))
 		}
+		pollSpoutJobSettled(t, pipe)
 	})
 
 	t.Run("deleting the head does not stop the spout", func(t *testing.T) {
@@ -416,6 +417,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		if len(after) != 7 {
 			t.Fatalf("spout history has %d commits after deletion, want 7 (8 cycles minus the deleted head)", len(after))
 		}
+		pollSpoutJobSettled(t, pipe)
 	})
 
 	t.Run("downstream consumes the spout", func(t *testing.T) {
@@ -459,6 +461,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		if err != nil || len(b) != 500 {
 			t.Fatalf("downstream file = %d bytes (%v), want the spout's 500", len(b), err)
 		}
+		pollSpoutJobSettled(t, pipe)
 	})
 
 	t.Run("marker branch", func(t *testing.T) {
@@ -484,6 +487,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		if string(b) != "m5\n" {
 			t.Fatalf("marker = %q, want the latest marker content", string(b))
 		}
+		pollSpoutJobSettled(t, pipe)
 	})
 
 	t.Run("rapid open/close keeps every cycle's file", func(t *testing.T) {
@@ -681,6 +685,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 				t.Fatalf("post-update commit %s provenance = %v, want %v", cm.ID, cm.Provenance, s2)
 			}
 		}
+		pollSpoutJobSettled(t, pipe)
 	})
 
 	t.Run("marker persists across plain update, resets on reprocess", func(t *testing.T) {
@@ -708,6 +713,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		if strings.Count(ep2, "\n") != 2 || strings.Contains(ep2, epoch1) {
 			t.Fatalf("marker after reprocess update = %q, want fresh state without %q", ep2, epoch1)
 		}
+		pollSpoutJobSettled(t, pipe)
 	})
 
 	t.Run("downstream subvenance of the spec commit", func(t *testing.T) {
@@ -761,6 +767,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		if !containsStrList(sc.Subvenants, head.ID) || !containsStrList(sc.Subvenants, downJob.OutputCommit) {
 			t.Fatalf("spec commit subvenants = %v, want the spout output %s and the downstream output %s", sc.Subvenants, head.ID, downJob.OutputCommit)
 		}
+		pollSpoutJobSettled(t, pipe)
 	})
 }
 func TestSB158_StandbyLifecycle(t *testing.T) {

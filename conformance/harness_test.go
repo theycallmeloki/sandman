@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -95,9 +96,44 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	// os.Exit skips defers, so the daemon must die here or it keeps the
 	// inherited stderr pipe open and go test waits out its WaitDelay.
-	_ = daemonCmd.Process.Kill()
+	// Graceful first: a SIGKILLed daemon strands running spout
+	// containers, orphaned with the daemon's stale label — they poison
+	// later tests' container assertions (SB-139/140 leave spouts
+	// mid-cycle at teardown by design).
+	stopDaemon()
+	// belt and braces: whatever the daemon's exit left behind (a spout
+	// straggler whose cleanup raced the process exit), remove it now —
+	// the same scoped sweep the next run's startup would do, so a
+	// batch's later tests never see a stale container.
+	if dockerAvailable() {
+		if out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-conformance-").Output(); err == nil {
+			for _, id := range strings.Fields(string(out)) {
+				exec.Command("docker", "rm", "-f", id).Run()
+			}
+		}
+	}
 	os.RemoveAll(state)
 	os.Exit(code)
+}
+
+// stopDaemon ends the harness daemon gracefully: SIGTERM runs the
+// daemon's shutdown envelope (cancel in-flight jobs, kill their
+// containers, bounded settle), then a bounded wait; SIGKILL only as a
+// fallback. The daemon must be fully dead before a new one binds the
+// port.
+func stopDaemon() {
+	if daemonCmd == nil || daemonCmd.Process == nil {
+		return
+	}
+	_ = daemonCmd.Process.Signal(syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() { _ = daemonCmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		_ = daemonCmd.Process.Kill()
+		<-done
+	}
 }
 
 func startDaemon(state string) {
@@ -150,8 +186,7 @@ func procPPID(pid string) int {
 // new one binds the port.
 func restartDaemon(t *testing.T) {
 	t.Helper()
-	_ = daemonCmd.Process.Kill()
-	_ = daemonCmd.Wait()
+	stopDaemon()
 	startDaemon(daemonStateDir)
 	if !waitPort(daemonPort, 15*time.Second) {
 		t.Fatal("daemon did not come back up after restart")

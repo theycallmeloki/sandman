@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -112,7 +113,13 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	if pl.Pipeline.Transform.Image == "" {
 		argv[len(argv)-4] = "alpine"
 	}
-	if exec.Command("docker", argv...).Run() != nil {
+	// the start is bounded too (an image pull may take a while; a
+	// stalled daemon beyond that fails the job instead of wedging it
+	// "running" before the poll loop ever starts)
+	sctx, scancel := context.WithTimeout(context.Background(), 120*time.Second)
+	err := exec.CommandContext(sctx, "docker", argv...).Run()
+	scancel()
+	if err != nil {
 		rec.State = stateFailure
 		rec.Reason = "spout container failed to start"
 		rec.Finished = now()
@@ -130,16 +137,30 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	}
 	for {
 		if rj.cancelled.Load() {
-			exec.Command("docker", "kill", cname).Run()
+			kctx, kcancel := context.WithTimeout(context.Background(), 30*time.Second)
+			exec.CommandContext(kctx, "docker", "kill", cname).Run()
+			kcancel()
 			settle(stateKilled, reasonJobCancelled)
 			break
 		}
-		// the container exited? (a natural end settles the job)
-		if out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", cname).Output(); err != nil {
+		// the container exited? (a natural end settles the job). The
+		// inspect is bounded: a stalled docker daemon must not freeze
+		// the poll — a missed beat re-inspects on the next tick, while
+		// an unbounded inspect was observed freezing the loop forever,
+		// orphaning the exited container and leaving the job "running".
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", cname).Output()
+		cancel()
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				continue // docker is stalled; try again on the next tick
+			}
 			settle(stateFailure, "spout container exited unexpectedly")
 			break
 		} else if strings.TrimSpace(string(out)) != "true" {
-			exec.Command("docker", "rm", "-f", cname).Run()
+			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
+			rmCancel()
 			settle(stateSuccess, "")
 			break
 		}
@@ -155,7 +176,9 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	exec.Command("docker", "rm", "-f", cname).Run()
+	rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
+	rmCancel()
 }
 
 // spoutMarkerDir is the spout's per-pipeline marker directory: it lives

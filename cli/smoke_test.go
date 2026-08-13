@@ -418,6 +418,24 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("file put into a missing repo: stderr %q, want not-found", errs)
 	}
 
+	// 6d2. unknown spec fields are rejected, not silently ignored — a
+	// ported pachyderm spec with top-level resource_limits must fail
+	// loudly (the pre-fix decode dropped the declaration and ran the
+	// container with no limits, no error)
+	badSpec := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(badSpec, []byte(`{
+	  "resourceLimits": {"memory": "64M", "cpu": 0.5},
+	  "name": "capbad",
+	  "transform": {"image": "alpine"},
+	  "input": {"repo": "r2", "glob": "/*"}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	errs3 := failCLI(t, "pipeline", "create", "-f", badSpec)
+	if !strings.Contains(errs3, "resourceLimits") {
+		t.Fatalf("pipeline create with unknown field: stderr %q, want the field named", errs3)
+	}
+
 	// 6e. tag delete drops the ref
 	mustCLI(t, "payload", "tag", "put", "smoketag", "-")
 	mustCLI(t, "", "tag", "delete", "smoketag")
