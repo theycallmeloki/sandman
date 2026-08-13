@@ -142,16 +142,26 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	// final state, and a file deferred by an earlier mid-write check
 	// must not be lost to the exit.
 	commitCycle := func(final bool) {
-		if changed := spoutDiffVerify(outDir, committedOut, !final); len(changed) > 0 {
+		changed, deferred := spoutDiffVerify(outDir, committedOut, !final)
+		if len(changed) > 0 {
 			log.Printf("spout %s: cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
 			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
-			committedOut = spoutSnapshot(outDir)
+			snap := spoutSnapshot(outDir)
+			for p := range deferred {
+				delete(snap, p) // still being written: must stay uncommitted for the next poll
+			}
+			committedOut = snap
 		}
 		if markerDir != "" {
-			if changed := spoutDiffVerify(markerDir, committedMarker, !final); len(changed) > 0 {
+			changed, deferred := spoutDiffVerify(markerDir, committedMarker, !final)
+			if len(changed) > 0 {
 				log.Printf("spout %s: marker cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
 				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
-				committedMarker = spoutSnapshot(markerDir)
+				snap := spoutSnapshot(markerDir)
+				for p := range deferred {
+					delete(snap, p)
+				}
+				committedMarker = snap
 			}
 		}
 	}
@@ -282,10 +292,15 @@ func spoutSnapshot(dir string) map[string]string {
 // short window (still being written — commit them next cycle), while
 // the natural-exit settle calls with verify=false — the container is
 // gone, so whatever is visible is the final state, and a file deferred
-// by an earlier verify must not be lost to the settle.
-func spoutDiffVerify(dir string, committed map[string]string, verify bool) map[string]string {
+// by an earlier verify must not be lost to the settle. It returns the
+// changed files and the deferred set (verify deferred them; the caller
+// must not record them as committed — the post-commit snapshot would
+// otherwise capture their finished content and the next poll would
+// never see them as changed again, silently dropping the cycle).
+func spoutDiffVerify(dir string, committed map[string]string, verify bool) (changed, deferred map[string]string) {
 	files := spoutSnapshot(dir)
-	changed := map[string]string{}
+	changed = map[string]string{}
+	deferred = map[string]string{}
 	for p, h := range files {
 		if committed[p] != h {
 			changed[p] = h
@@ -302,14 +317,16 @@ func spoutDiffVerify(dir string, committed map[string]string, verify bool) map[s
 		for p := range changed {
 			if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
 				if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != changed[p] {
+					deferred[p] = changed[p]
 					delete(changed, p) // still being written: catch it next cycle
 				}
 			} else {
+				deferred[p] = changed[p]
 				delete(changed, p) // vanished mid-write
 			}
 		}
 	}
-	return changed
+	return changed, deferred
 }
 
 func sortedStringKeys(m map[string]string) []string {
