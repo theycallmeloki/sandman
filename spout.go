@@ -135,6 +135,22 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		rec.Finished = now()
 		d.saveJob(rec)
 	}
+	// commitCycle snapshots and commits any data-bearing change; final
+	// runs it once more at the settle so a cycle deferred by the
+	// stability verify (mid-write at the last poll) is not lost to the
+	// container's exit — the files are stable once it is gone.
+	commitCycle := func() {
+		if changed := spoutDiff(outDir, committedOut); len(changed) > 0 {
+			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
+			committedOut = spoutSnapshot(outDir)
+		}
+		if markerDir != "" {
+			if changed := spoutDiff(markerDir, committedMarker); len(changed) > 0 {
+				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
+				committedMarker = spoutSnapshot(markerDir)
+			}
+		}
+	}
 	for {
 		if rj.cancelled.Load() {
 			kctx, kcancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -158,22 +174,16 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 			settle(stateFailure, "spout container exited unexpectedly")
 			break
 		} else if strings.TrimSpace(string(out)) != "true" {
+			// the container is gone: commit any final cycle — a
+			// deferred mid-write file must not be lost to the settle
+			commitCycle()
 			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
 			rmCancel()
 			settle(stateSuccess, "")
 			break
 		}
-		if changed := spoutDiff(outDir, committedOut); len(changed) > 0 {
-			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
-			committedOut = spoutSnapshot(outDir)
-		}
-		if markerDir != "" {
-			if changed := spoutDiff(markerDir, committedMarker); len(changed) > 0 {
-				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
-				committedMarker = spoutSnapshot(markerDir)
-			}
-		}
+		commitCycle()
 		time.Sleep(250 * time.Millisecond)
 	}
 	rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
