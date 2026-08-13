@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"sandman/client"
+	"sandman/internal/store"
 )
 
 // The data-plane CLI on spf13/cobra (D-19: the CLI is a second consumer
@@ -135,6 +136,24 @@ func parseRef(s string) (repo, branch, path string, err error) {
 		return "", "", "", fmt.Errorf("empty repository name in %q", s)
 	}
 	return repo, branch, path, nil
+}
+
+// resolveCommitRef resolves a repo@ref segment to a commit id: a 16-hex
+// ref is a commit id — the canonical explicit-commit flow (start, put by
+// id, finish) — and must address that commit, never materialize a
+// phantom branch of the same name (F14). Anything else is a branch whose
+// head is taken.
+func resolveCommitRef(c *client.Client, repo, ref string) (string, error) {
+	if store.IsCommitID(ref) {
+		if cm, err := c.InspectCommit(ref); err == nil && cm.Repo == repo {
+			return ref, nil
+		}
+	}
+	head, err := c.HeadCommit(repo, ref)
+	if err != nil {
+		return "", err
+	}
+	return head.ID, nil
 }
 
 // dataPlaneCommands returns the data-plane subtree of the root command
@@ -280,11 +299,11 @@ func newCommitCmd() *cobra.Command {
 					if err != nil || repo == "" {
 						die("commit inspect: invalid ref "+args[0], 2)
 					}
-					head, err := cliClient().HeadCommit(repo, branch)
+					resolved, err := resolveCommitRef(cliClient(), repo, branch)
 					if err != nil {
 						die("commit inspect: "+err.Error(), 1)
 					}
-					id = head.ID
+					id = resolved
 				}
 				cm, err := cliClient().InspectCommit(id)
 				if err != nil {
@@ -414,11 +433,11 @@ func getCmd() *cobra.Command {
 			if path == "" {
 				die("get file: path required (repo@branch:path)", 2)
 			}
-			head, err := cliClient().HeadCommit(repo, branch)
+			head, err := resolveCommitRef(cliClient(), repo, branch)
 			if err != nil {
 				die("get file: "+err.Error(), 1)
 			}
-			data, err := cliClient().GetFile(head.ID, path)
+			data, err := cliClient().GetFile(head, path)
 			if err != nil {
 				die("get file: "+err.Error(), 1)
 			}
@@ -455,6 +474,33 @@ func newFileCmd() *cobra.Command {
 			if _, err := cliClient().InspectRepo(repo); err != nil {
 				die("file put: repo "+repo+" not found", 1)
 			}
+			if store.IsCommitID(branch) {
+				// the canonical explicit-commit flow (F14): a commit-id
+				// ref writes into that OPEN commit — the put neither
+				// starts a new commit nor finishes it (the explicit
+				// `commit finish <id>` completes the flow). A branch of
+				// the commit's name can only be a phantom.
+				cm, err := cliClient().InspectCommit(branch)
+				if err != nil {
+					die("file put: "+err.Error(), 1)
+				}
+				if cm.Repo != repo {
+					die(fmt.Sprintf("file put: commit %s is in repo %s, not %s", branch, cm.Repo, repo), 1)
+				}
+				if cm.Finished {
+					die(fmt.Sprintf("file put: commit %s is finished; start a new commit to write", branch), 1)
+				}
+				if fileOverwrite {
+					err = cliClient().PutFileOverwrite(branch, path, data)
+				} else {
+					err = cliClient().PutFile(branch, path, data)
+				}
+				if err != nil {
+					die("file put: "+err.Error(), 1)
+				}
+				fmt.Printf("wrote %s@%s:%s (%d bytes, commit %s)\n", repo, branch, path, len(data), branch)
+				return
+			}
 			cm, err := cliClient().StartCommit(repo, branch, "")
 			if err != nil {
 				die("file put: "+err.Error(), 1)
@@ -488,11 +534,11 @@ func newFileCmd() *cobra.Command {
 				if path == "" {
 					die("file get: path required (repo@branch:path)", 2)
 				}
-				head, err := cliClient().HeadCommit(repo, branch)
+				head, err := resolveCommitRef(cliClient(), repo, branch)
 				if err != nil {
 					die("file get: "+err.Error(), 1)
 				}
-				data, err := cliClient().GetFile(head.ID, path)
+				data, err := cliClient().GetFile(head, path)
 				if err != nil {
 					die("file get: "+err.Error(), 1)
 				}
@@ -510,11 +556,11 @@ func newFileCmd() *cobra.Command {
 				if path == "" {
 					die("file inspect: path required (repo@branch:path)", 2)
 				}
-				head, err := cliClient().HeadCommit(repo, branch)
+				head, err := resolveCommitRef(cliClient(), repo, branch)
 				if err != nil {
 					die("file inspect: "+err.Error(), 1)
 				}
-				data, err := cliClient().GetFile(head.ID, path)
+				data, err := cliClient().GetFile(head, path)
 				if err != nil {
 					die("file inspect: "+err.Error(), 1)
 				}
@@ -530,15 +576,15 @@ func newFileCmd() *cobra.Command {
 				if err != nil {
 					die(err.Error(), 2)
 				}
-				head, err := cliClient().HeadCommit(repo, branch)
+				head, err := resolveCommitRef(cliClient(), repo, branch)
 				if err != nil {
 					die("file list: "+err.Error(), 1)
 				}
 				var files []client.FileInfo
 				if path != "" {
-					files, err = cliClient().ListFilesGlob(head.ID, path)
+					files, err = cliClient().ListFilesGlob(head, path)
 				} else {
-					files, err = cliClient().ListFiles(head.ID)
+					files, err = cliClient().ListFiles(head)
 				}
 				if err != nil {
 					die("file list: "+err.Error(), 1)

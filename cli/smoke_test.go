@@ -426,8 +426,39 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("commit inspect r2@master %q: want repo r2", ci2)
 	}
 
+	// 6c2. the canonical explicit-commit flow (F14): commit start + file
+	// put by commit id + commit finish. The put's @ segment must address
+	// the open commit — a commit-id ref used to materialize a phantom
+	// branch of the same name, silently finishing the started commit
+	// empty and stranding the data on the phantom.
+	fid := strings.TrimSpace(mustCLI(t, "", "commit", "start", "r2@master"))
+	if got := mustCLI(t, "B\n", "file", "put", "r2@"+fid+":/b.txt", "-"); !strings.Contains(got, "commit "+fid) {
+		t.Fatalf("put by commit id %q: want the same commit id %s (no new commit)", got, fid)
+	}
+	mustCLI(t, "", "commit", "finish", fid)
+	fc := mustCLI(t, "", "commit", "inspect", "r2@"+fid)
+	if !strings.Contains(strings.Join(strings.Fields(fc), " "), "finished : true") {
+		t.Fatalf("commit inspect %s: want finished", fc)
+	}
+	if got := mustCLI(t, "", "file", "get", "r2@"+fid+":/b.txt"); got != "B\n" {
+		t.Fatalf("get by commit id = %q, want B", got)
+	}
+	bl := mustCLI(t, "", "branch", "list", "r2")
+	for _, line := range strings.Split(bl, "\n")[1:] {
+		f := strings.Fields(line)
+		if len(f) > 0 && f[0] == fid {
+			t.Fatalf("branch list %q: phantom branch %s materialized", bl, fid)
+		}
+	}
+	// the put's finish is explicit: a second put into the now-finished
+	// commit errors instead of silently starting a phantom
+	errs := failCLI(t, "file", "put", "r2@"+fid+":/c.txt", "-")
+	if !strings.Contains(errs, "finished") {
+		t.Fatalf("put into a finished commit: stderr %q, want a finished error", errs)
+	}
+
 	// 6d. file put into a missing repo errors (no silent auto-create)
-	errs := failCLI(t, "file", "put", "no-such-repo@master:x", "-")
+	errs = failCLI(t, "file", "put", "no-such-repo@master:x", "-")
 	if !strings.Contains(errs, "not found") {
 		t.Fatalf("file put into a missing repo: stderr %q, want not-found", errs)
 	}

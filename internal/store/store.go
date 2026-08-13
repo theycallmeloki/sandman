@@ -520,6 +520,19 @@ func newCommitID() string {
 	return hex.EncodeToString(b)
 }
 
+// IsCommitID reports whether s has the commit-id shape (16 hex chars —
+// newCommitID). It disambiguates a ref segment between a commit id and a
+// branch name: a commit-id ref must address the commit, never
+// materialize a phantom branch of that name (F14 — the CLI open-commit
+// flow misplaced data by treating the started commit's id as a branch).
+func IsCommitID(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
 // startCommit opens a new revision on the branch. The repo is created if it
 // does not exist (pipeline output repos are born this way). The parent is
 // the branch's finished head at start time.

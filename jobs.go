@@ -1169,9 +1169,18 @@ func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 }
 
 // resolveCommitRef resolves a commit reference: a commit id, or
-// repo@branch meaning that branch's head.
+// repo@branch meaning that branch's head. A repo@<commit-id> reference
+// addresses the commit (the canonical explicit-commit flow, F14): a
+// 16-hex ref must not be read as a branch — that branch could only be a
+// phantom created by a ref misfire. The commit must belong to the
+// addressed repo; otherwise the ref falls through to branch resolution.
 func (d *daemon) resolveCommitRef(ref string) (*store.CommitRec, error) {
 	if repo, branch, ok := strings.Cut(ref, "@"); ok {
+		if store.IsCommitID(branch) {
+			if rec, err := d.store.LoadCommitByID(branch); err == nil && rec.Repo == repo {
+				return rec, nil
+			}
+		}
 		head, err := d.store.HeadCommitRec(repo, branch)
 		if err != nil {
 			return nil, err
