@@ -13,7 +13,11 @@ import (
 
 // spoutCmd runs n cycles, writing the output file with size*i bytes.
 func spoutCmd(size, n int, marker bool) []string {
-	script := "for i in $(seq 1 " + itoa(n) + "); do head -c $((i*" + itoa(size) + ")) /dev/zero | tr '\\0' 'x' > ${OUT}/file; "
+	// the file write is atomic (tmp+rename): the daemon commits the
+	// cycle's snapshot as it polls, and a plain ">" truncates before
+	// writing — the poll can catch the empty window and commit a
+	// zero-byte file (observed on CI: the downstream read 0 bytes)
+	script := "for i in $(seq 1 " + itoa(n) + "); do head -c $((i*" + itoa(size) + ")) /dev/zero | tr '\\0' 'x' > ${OUT}/file.tmp && mv ${OUT}/file.tmp ${OUT}/file; "
 	if marker {
 		script += "echo m$i > ${MARKER}/marker; "
 	}
