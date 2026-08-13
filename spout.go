@@ -150,7 +150,23 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		if len(changed) > 0 {
 			log.Printf("spout %s: cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
 			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
+			// The committed set is the previous committed files plus
+			// this cycle's changed files, refreshed to their current
+			// content. It is NOT the raw post-commit snapshot: a file
+			// that appeared during the commit window was never written
+			// by this commit, and marking it committed would silently
+			// drop its cycle (observed on CI: a rapid writer's file
+			// landing mid-commit was never committed nor retried).
 			snap := spoutSnapshot(outDir)
+			for p, h := range snap {
+				if _, was := committedOut[p]; !was {
+					if _, just := changed[p]; !just {
+						delete(snap, p) // appeared mid-cycle: stays uncommitted, retried next poll
+					}
+				} else {
+					snap[p] = h // refresh a previously committed file's content hash
+				}
+			}
 			for p := range deferred {
 				delete(snap, p) // still being written: must stay uncommitted for the next poll
 				log.Printf("spout %s: deferred mid-write file %s (left uncommitted)", pl.Pipeline.Name, p)
@@ -163,8 +179,18 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 				log.Printf("spout %s: marker cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
 				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
 				snap := spoutSnapshot(markerDir)
+				for p, h := range snap {
+					if _, was := committedMarker[p]; !was {
+						if _, just := changed[p]; !just {
+							delete(snap, p)
+						}
+					} else {
+						snap[p] = h
+					}
+				}
 				for p := range deferred {
 					delete(snap, p)
+					log.Printf("spout %s: deferred marker mid-write file %s (left uncommitted)", pl.Pipeline.Name, p)
 				}
 				committedMarker = snap
 			}
