@@ -41,7 +41,11 @@ jobs:
             GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -trimpath \
               -ldflags "-X main.Version=$GITHUB_REF_NAME" \
               -o dist/sandman-$1-$2 .
-            sha256sum dist/sandman-$1-$2 > dist/sandman-$1-$2.sha256
+            # cd so sha256sum records the bare filename: the asset label
+            # matches the downloaded name (a "dist/..." label breaks
+            # `sha256sum -c` for humans; the update parser only reads the
+            # hex, but the label should not lie)
+            (cd dist && sha256sum sandman-$1-$2 > sandman-$1-$2.sha256)
           done
           ls -la dist/
 
