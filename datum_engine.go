@@ -1354,11 +1354,47 @@ func (d *daemon) storeOutput(dir string, linkTarget func(string) string) ([]file
 }
 
 // mergeOutputs writes the job's output commit content from every datum's
-// contribution: processed datums contribute their fresh files, skipped
+// contribution: datums that ran contribute their fresh files, skipped
 // datums their carried files, failed datums nothing. A file path produced
-// by several datums concatenates their contents in datum order (SB-063).
-func (d *daemon) mergeOutputs(jx *jobExec, datums []datum) error {
+// by several datums that ran concatenates their contents in datum order
+// (FS-5/SB-063). A fresh datum's output supersedes the carried content a
+// skipped datum contributes for the same path: the fresh run is the only
+// live write, and carried content from an earlier job is stale under it —
+// the transform's truncate+write is honored at the branch level. Without
+// the supersede, every partial reprocess of a shared path accumulates:
+// v1 -> v1v3 -> v1v3v3. Carried files merge only for paths no datum ran
+// wrote, where they reproduce the parent's content exactly.
+func (d *daemon) mergeOutputs(jx *jobExec, datums []datum, skipped map[string]bool) error {
+	fresh := make(map[string]bool)
 	for _, dt := range datums {
+		if skipped[dt.ID] {
+			continue
+		}
+		st := jx.dedup[dt.ID]
+		switch st.Outcome {
+		case stateSuccess, stateRecovered:
+			for _, f := range st.Files {
+				fresh[f.Path] = true
+			}
+		}
+	}
+	for _, dt := range datums {
+		if skipped[dt.ID] {
+			// a skipped datum carries the parent's per-datum files; they
+			// merge only where no datum ran in this job wrote the path
+			// (a same-path append of carried and fresh content is what
+			// accumulated the reviewer-found v1v3)
+			st := jx.dedup[dt.ID]
+			for _, f := range st.Files {
+				if fresh[f.Path] {
+					continue
+				}
+				if err := d.mergeFile(jx, f); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		st := jx.dedup[dt.ID]
 		switch st.Outcome {
 		case stateSuccess, stateRecovered, stateSkipped:
@@ -1366,25 +1402,35 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum) error {
 			continue // failed datums contribute nothing
 		}
 		for _, f := range st.Files {
-			data, err := d.store.ReadBlob(f.Hash)
-			if err != nil {
+			if err := d.mergeFile(jx, f); err != nil {
 				return err
 			}
-			dst := filepath.Join(jx.outDir, filepath.FromSlash(f.Path))
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				// a file where a directory is needed (or vice versa) is a
-				// type conflict across the job's datum outputs (FS-5 edge)
-				return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
-			}
-			if cur, err := os.ReadFile(dst); err == nil {
-				if err := os.WriteFile(dst, append(cur, data...), 0o644); err != nil {
-					return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
-				}
-			} else {
-				if err := os.WriteFile(dst, data, 0o644); err != nil {
-					return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
-				}
-			}
+		}
+	}
+	return nil
+}
+
+// mergeFile writes one datum file's blob into the job's output directory,
+// appending when the path already holds content from an earlier datum in
+// the same merge (FS-5 datum-order concatenation).
+func (d *daemon) mergeFile(jx *jobExec, f fileRef) error {
+	data, err := d.store.ReadBlob(f.Hash)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Join(jx.outDir, filepath.FromSlash(f.Path))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		// a file where a directory is needed (or vice versa) is a
+		// type conflict across the job's datum outputs (FS-5 edge)
+		return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
+	}
+	if cur, err := os.ReadFile(dst); err == nil {
+		if err := os.WriteFile(dst, append(cur, data...), 0o644); err != nil {
+			return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
+		}
+	} else {
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
 		}
 	}
 	return nil

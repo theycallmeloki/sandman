@@ -243,6 +243,37 @@ func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
 	if b, err := c.GetFile(jobs[0].OutputCommit, "file"); err != nil || string(b) != "foo" {
 		t.Fatalf("reprocessed output = %q (err %v), want foo (not foofoo)", string(b), err)
 	}
+	t.Run("partial reprocess does not accumulate a shared path", func(t *testing.T) {
+		repo := uniq(t)
+		mustRepo(t, repo)
+		pipe := uniq(t)
+		in := &client.Input{Name: "in", Repo: repo, Glob: "/*"}
+		// every datum truncate-writes its input's content to one shared
+		// path — the transform's ">" contract at the branch level
+		tr := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cat ${in}/* > ${OUT}/ver.txt"}}
+		mustPipeline(t, client.Pipeline{Name: pipe, Transform: tr, Input: in})
+		cm1 := commitFiles(t, repo, "master", map[string]string{"f1": "v1"})
+		jobs := flushOK(t, cm1.ID)
+		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v1" {
+			t.Fatalf("first output = %q (err %v), want v1", string(b), err)
+		}
+		// a new datum shares the path: the unchanged datum is copy-
+		// forwarded, the new datum runs fresh — the fresh write must
+		// replace the carried content, not append to it (the pre-fix
+		// merge concatenated: v1 -> v1v3)
+		cm2 := commitFiles(t, repo, "master", map[string]string{"f2": "v3"})
+		jobs = flushOK(t, cm2.ID)
+		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v3" {
+			t.Fatalf("partial reprocess output = %q (err %v), want v3 (not v1v3)", string(b), err)
+		}
+		// and a third cycle must not accumulate either (v1v3 -> v1v3v4
+		// was the pre-fix unbounded growth)
+		cm3 := commitFiles(t, repo, "master", map[string]string{"f3": "v4"})
+		jobs = flushOK(t, cm3.ID)
+		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v4" {
+			t.Fatalf("third-cycle output = %q (err %v), want v4 (not v1v3v4)", string(b), err)
+		}
+	})
 }
 
 func TestFS7_SplitNumberingAcrossCommits(t *testing.T) {

@@ -344,10 +344,12 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	dedup := d.loadDedup(pl.Pipeline.Name)
 	reprocess := pl.Pipeline.Reprocess
 	rec.DatumStates = map[string]string{}
+	skipped := map[string]bool{}
 	var todo []datum
 	for _, dt := range datums {
 		if st, ok := dedup[dt.ID]; ok && !reprocess && st.Outcome == stateSuccess && st.Hash == dt.Hash {
 			rec.DatumStates[dt.ID] = stateSkipped
+			skipped[dt.ID] = true
 			continue
 		}
 		if _, ok := dedup[dt.ID]; !ok {
@@ -524,7 +526,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 
 	// Merge every datum's contribution into the output directory — a
 	// processed datum's fresh files, a skipped datum's carried files.
-	if err := d.mergeOutputs(jx, datums); err != nil {
+	if err := d.mergeOutputs(jx, datums, skipped); err != nil {
 		d.finishOutput(pl, outCommit, "", true)
 		fail("merge output: " + err.Error())
 		d.saveDedup(pl.Pipeline.Name, dedup)
