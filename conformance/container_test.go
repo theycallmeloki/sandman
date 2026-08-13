@@ -883,20 +883,22 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 	// container must start within the poll; a slow runner's docker
 	// overhead has blown 30s, so the poll is generous.
 	cm := commitFiles(t, repo, "", map[string]string{"file": "foo\n"})
-	pollFor(t, "container while the job runs", 60*time.Second, func() bool {
-		return sandmanContainerCount() > 0
-	})
-	if n := sandmanContainerCount(); n == 0 {
-		// diagnostic for the CI-only hang: dump every sandman-* container
-		// (including created/exited ones — docker ps without -a hides
-		// them) and the latest job records, so the next failure shows
-		// where the container launch stopped
-		out, _ := exec.Command("docker", "ps", "-a", "--filter", "name=sandman-", "--format", "{{.ID}} {{.State}} {{.Names}}").Output()
-		t.Logf("container poll timed out; docker ps -a: %s", strings.TrimSpace(string(out)))
-		js, _ := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
-		for _, j := range js {
-			t.Logf("job %s: state=%s outputCommit=%q", j.ID, j.State, j.OutputCommit)
+	deadline := time.Now().Add(60 * time.Second)
+	for sandmanContainerCount() == 0 {
+		if time.Now().After(deadline) {
+			// diagnostic for the CI-only hang: dump every sandman-*
+			// container (including created/exited ones — docker ps
+			// without -a hides them) and the pipeline's job records, so
+			// the next failure shows where the launch stopped
+			out, _ := exec.Command("docker", "ps", "-a", "--filter", "name=sandman-", "--format", "{{.ID}} {{.State}} {{.Names}}").Output()
+			t.Logf("container poll timed out; docker ps -a:\n%s", strings.TrimSpace(string(out)))
+			js, _ := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
+			for _, j := range js {
+				t.Logf("job %s: state=%s outputCommit=%q", j.ID, j.State, j.OutputCommit)
+			}
+			t.Fatalf("timed out waiting for container while the job runs")
 		}
+		time.Sleep(250 * time.Millisecond)
 	}
 	flushOK(t, cm.ID)
 	pollFor(t, "resting in standby with zero containers", 30*time.Second, func() bool {

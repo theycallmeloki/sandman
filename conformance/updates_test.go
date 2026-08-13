@@ -358,7 +358,18 @@ func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
 
 	fixed := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "echo -n bar > ${OUT}/file"}}
 	mustUpdate(t, name, fixed, in, false) // no reprocess flag
-	flushOK(t, cm.ID)                     // the update's head job runs under the fix
+	if jobs, err := c.Flush(cm.ID, 60*time.Second); err != nil {
+		// diagnostic for the CI-only hang: show every job of the pipeline
+		// so the stuck one (state, commit, reason) is identifiable
+		if js, lerr := c.ListJobsFiltered(client.JobFilter{Pipeline: name}); lerr == nil {
+			for _, j := range js {
+				t.Logf("job %s: state=%s outputCommit=%q reason=%q", j.ID, j.State, j.OutputCommit, j.Reason)
+			}
+		}
+		t.Fatalf("flush after update: %v", err)
+	} else {
+		_ = jobs
+	}
 
 	js, err = c.ListJobsFiltered(client.JobFilter{Pipeline: name})
 	if err != nil {
