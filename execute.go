@@ -368,7 +368,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 
 	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, views: views,
-		viewDirs: map[string]string{}, dedup: dedup, rj: rj, host: placedHost}
+		viewDirs: map[string]string{}, dedup: dedup, rj: rj, host: placedHost,
+		transformHash: transformHash(pl.Pipeline.Transform)}
 	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
 	// apply the pipeline's execution-environment customization
 	// (SB-072/152): the document's env vars join the job environment and

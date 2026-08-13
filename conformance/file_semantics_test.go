@@ -243,35 +243,40 @@ func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
 	if b, err := c.GetFile(jobs[0].OutputCommit, "file"); err != nil || string(b) != "foo" {
 		t.Fatalf("reprocessed output = %q (err %v), want foo (not foofoo)", string(b), err)
 	}
-	t.Run("partial reprocess does not accumulate a shared path", func(t *testing.T) {
+	t.Run("partial reprocess after an update does not accumulate a shared path", func(t *testing.T) {
 		repo := uniq(t)
 		mustRepo(t, repo)
 		pipe := uniq(t)
 		in := &client.Input{Name: "in", Repo: repo, Glob: "/*"}
-		// every datum truncate-writes its input's content to one shared
+		// each datum truncate-writes its input's content to one shared
 		// path — the transform's ">" contract at the branch level
-		tr := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cat ${in}/* > ${OUT}/ver.txt"}}
-		mustPipeline(t, client.Pipeline{Name: pipe, Transform: tr, Input: in})
+		writeIn := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cat ${in}/* > ${OUT}/ver.txt"}}
+		mustPipeline(t, client.Pipeline{Name: pipe, Transform: writeIn, Input: in})
 		cm1 := commitFiles(t, repo, "master", map[string]string{"f1": "v1"})
 		jobs := flushOK(t, cm1.ID)
 		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v1" {
 			t.Fatalf("first output = %q (err %v), want v1", string(b), err)
 		}
-		// a new datum shares the path: the unchanged datum is copy-
-		// forwarded, the new datum runs fresh — the fresh write must
-		// replace the carried content, not append to it (the pre-fix
-		// merge concatenated: v1 -> v1v3)
-		cm2 := commitFiles(t, repo, "master", map[string]string{"f2": "v3"})
+		// an update changes the transform: the unchanged datum is copy-
+		// forwarded with old-transform content, the new datum runs the
+		// new transform — the fresh write must replace the stale carried
+		// content, not append to it (the pre-fix merge concatenated the
+		// old-transform "v1" under the new transform's write: v1 -> v1v3)
+		literal := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "echo v3 > ${OUT}/ver.txt"}}
+		mustUpdate(t, pipe, literal, in, false)
+		cm2 := commitFiles(t, repo, "master", map[string]string{"f2": "x"})
 		jobs = flushOK(t, cm2.ID)
-		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v3" {
-			t.Fatalf("partial reprocess output = %q (err %v), want v3 (not v1v3)", string(b), err)
+		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v3\n" {
+			t.Fatalf("post-update output = %q (err %v), want v3 (not v1v3)", string(b), err)
 		}
-		// and a third cycle must not accumulate either (v1v3 -> v1v3v4
-		// was the pre-fix unbounded growth)
-		cm3 := commitFiles(t, repo, "master", map[string]string{"f3": "v4"})
+		// a third cycle must not resurrect the stale content either: the
+		// old-transform datum's carried "v1" stays superseded, while the
+		// new-transform datum's carried "v3" is re-run-equivalent and
+		// concatenates with the fresh datum's "v3" (FS-5)
+		cm3 := commitFiles(t, repo, "master", map[string]string{"f3": "y"})
 		jobs = flushOK(t, cm3.ID)
-		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v4" {
-			t.Fatalf("third-cycle output = %q (err %v), want v4 (not v1v3v4)", string(b), err)
+		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v3\nv3\n" {
+			t.Fatalf("third-cycle output = %q (err %v), want v3v3 (no stale v1 content)", string(b), err)
 		}
 	})
 }

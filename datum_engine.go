@@ -200,6 +200,12 @@ type datumState struct {
 	ProcessTime float64   `json:"processTime,omitempty"` // seconds
 	Worker      int       `json:"worker,omitempty"`
 	Reason      string    `json:"reason,omitempty"`
+	// TransformHash identifies the transform that produced this record's
+	// output: a skipped datum's carried files are re-run-equivalent (and
+	// may concatenate with fresh output, FS-5) only under the same
+	// transform — under a changed transform the carried content is stale
+	// and a fresh datum's output for the same path supersedes it.
+	TransformHash string `json:"transformHash,omitempty"`
 }
 
 // fileRef points at stored content: a relative path and its sha256.
@@ -472,6 +478,11 @@ type jobExec struct {
 
 	dedupMu sync.Mutex
 	dedup   map[string]datumState
+
+	// transformHash identifies the transform this job runs under; datum
+	// records store it so the merge can tell re-run-equivalent carried
+	// content from stale carried content (see datumState.TransformHash).
+	transformHash string
 }
 
 // requestRestart asks that a datum's current processing be aborted and
@@ -704,6 +715,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 			rec.Outcome = outcome
 			rec.Tries = attempt
 			rec.Files = files
+			rec.TransformHash = jx.transformHash
 			rec.Finished = now()
 			rec.ProcessTime = time.Since(started).Seconds()
 			jx.setDatum(dt.ID, rec)
@@ -1381,12 +1393,16 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum, skipped map[string]bo
 	for _, dt := range datums {
 		if skipped[dt.ID] {
 			// a skipped datum carries the parent's per-datum files; they
-			// merge only where no datum ran in this job wrote the path
-			// (a same-path append of carried and fresh content is what
-			// accumulated the reviewer-found v1v3)
+			// concatenate with fresh output (FS-5) only where they are
+			// re-run-equivalent — produced under the same transform. Under
+			// a changed transform the carried content is stale and a fresh
+			// datum's output for the same path supersedes it (without the
+			// supersede, every partial reprocess after an update
+			// accumulated the reviewer-found v1v3 -> v1v3v3).
 			st := jx.dedup[dt.ID]
+			stale := st.TransformHash != "" && st.TransformHash != jx.transformHash
 			for _, f := range st.Files {
-				if fresh[f.Path] {
+				if fresh[f.Path] && stale {
 					continue
 				}
 				if err := d.mergeFile(jx, f); err != nil {
@@ -1408,6 +1424,20 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum, skipped map[string]bo
 		}
 	}
 	return nil
+}
+
+// transformHash identifies the transform a job runs under: the sha256 of
+// its JSON form. Datum records stamp it so the output merge can tell
+// re-run-equivalent carried content (same transform) from stale carried
+// content (a changed transform) — the record's Files are only trusted as
+// "what a re-run would produce" under the producing transform.
+func transformHash(tr *client.Transform) string {
+	b, err := json.Marshal(tr)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // mergeFile writes one datum file's blob into the job's output directory,
