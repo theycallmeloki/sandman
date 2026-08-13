@@ -319,7 +319,9 @@ func TestCLI_VerbCoverage(t *testing.T) {
 	// 5. job inspect round-trips the success state
 	jl := mustCLI(t, "", "job", "list", "cap2")
 	jid := strings.Fields(strings.Split(jl, "\n")[1])[0]
-	ji := mustCLI(t, "", "job", "inspect", jid)
+	ji := pollCLI(t, func(out string) bool {
+		return strings.Contains(out, "state") && strings.Contains(out, "success")
+	}, 60*time.Second, "job", "inspect", jid)
 	if !strings.Contains(ji, "state") || !strings.Contains(ji, "success") {
 		t.Fatalf("job inspect %q: want state: success", ji)
 	}
@@ -690,7 +692,16 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 	// the datum that is actually running (skipped datums are not
 	// restartable)
 	rdl := pollCLI(t, func(out string) bool {
-		return len(strings.Split(strings.TrimSpace(out), "\n")) == 5 // header + 4 datums
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		if len(lines) != 5 { // header + 4 datums
+			return false
+		}
+		for _, line := range lines[1:] {
+			if len(strings.Fields(line)) == 2 && strings.Fields(line)[1] == "running" {
+				return true
+			}
+		}
+		return false
 	}, 60*time.Second, "datum", "list", rjid)
 	rdid := ""
 	for _, line := range strings.Split(strings.TrimSpace(rdl), "\n") {
