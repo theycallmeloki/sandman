@@ -43,19 +43,21 @@ Cross-subnet nodes (no multicast): `sandman attach wan-node 10.0.0.9:4242` adds 
 static peer; `detach` removes it.
 
 **Add an execution worker to an existing fleet** (a machine that runs jobs
-for your control plane — needs docker; make and curl are fetched if
-missing):
+for your control plane — needs docker, a trusted LAN; make and curl are
+fetched if missing):
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/theycallmeloki/sandman/main/install.sh | sh
 ```
 
-The installer fetches the repo and delegates to the Makefile
-(`make install worker`, or `install-release` when the box has no Go). It
-auto-fills the worker name (hostname), exec port (4343), and advertise
-address (the host's LAN IP). The control plane is discovered — the worker
-browses `_sandman._tcp` for the daemon (role=daemon) when `CONTROL` is
-unset; set it explicitly to skip discovery:
+One command, everything auto-filled: worker name (hostname), exec port
+(4343), advertise address (the host's default-route LAN IP, so the daemon
+can dial back and place jobs), and the control plane — the worker
+discovers the daemon itself via mDNS (`role=daemon`; the fleet expects
+one daemon per LAN). The worker's systemd unit is written with these
+values baked in — edit `/etc/systemd/system/sandman-worker.service` and
+`systemctl restart sandman-worker` to change them. Set `CONTROL` to skip
+discovery:
 
 ```sh
 CONTROL=http://192.168.1.147:4242 \

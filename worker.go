@@ -91,7 +91,7 @@ type execResult struct {
 // control plane, heartbeat, and serve the exec endpoint.
 func cmdWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
-	name := fs.String("name", "", "host name (required)")
+	name := fs.String("name", "", "host name (default: this host's hostname)")
 	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (default: discover the daemon via mDNS)")
 	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
 	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
@@ -99,8 +99,17 @@ func cmdWorker(args []string) {
 	fs.Var(&labels, "label", "placement label this host bears (repeatable)")
 	fs.Parse(args)
 	if *name == "" {
-		fmt.Fprintln(os.Stderr, "sandman worker: -name is required")
-		os.Exit(2)
+		// a bare `sandman worker` is a legal default worker: the unit and
+		// installer can omit every flag, and the node still joins the
+		// fleet under its hostname with the daemon discovered via mDNS
+		// (placement needs -advertise, which stays explicit — the exec
+		// endpoint is unauthenticated).
+		host, err := os.Hostname()
+		if err != nil || host == "" {
+			fmt.Fprintln(os.Stderr, "sandman worker: -name is required (cannot determine hostname)")
+			os.Exit(2)
+		}
+		*name = host
 	}
 
 	// A worker with no explicit control plane discovers the daemon on the

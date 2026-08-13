@@ -5,14 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/sandman/worker.env
-# Braced ${VAR} always yields a word even when empty ("" = flag unset, which
-# the worker accepts): an unbraced $VAR drops empty words, which would make a
-# flag consume its neighbor and derail the command line. $SANDBOX_LABELS is
-# the exception — it must split on whitespace to repeat -label.
-ExecStart=/usr/local/bin/sandman worker -name ${SANDBOX_WORKER_NAME} -control ${SANDBOX_CONTROL} -port ${SANDBOX_PORT} -advertise ${SANDBOX_ADVERTISE} $SANDBOX_LABELS
-Restart=on-failure
-RestartSec=2
+# A bare `sandman worker` joins the fleet with zero configuration: the
+# name defaults to the hostname, the control plane is discovered via mDNS
+# (role=daemon on the LAN), and the exec endpoint binds loopback. For the
+# control plane to place jobs here, -advertise must name a host:port the
+# daemon can dial (and -port must match); the endpoint is unauthenticated,
+# so only advertise on a trusted LAN. The curl installer
+# (README "Add an execution worker") writes this unit with the flags
+# baked in — edit them here and `systemctl restart sandman-worker` to
+# change name, advertise address, or placement labels.
+ExecStart=/usr/local/bin/sandman worker
 
 [Install]
 WantedBy=multi-user.target

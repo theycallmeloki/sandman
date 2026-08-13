@@ -7,8 +7,10 @@ PREFIX ?= /usr/local
 .PHONY: build install install-release uninstall clean daemon worker
 
 # Role selection: `make install daemon` (default) installs the control-plane
-# unit; `make install worker` installs the execution-host unit + a config
-# template at /etc/sandman/worker.env (never overwrites an existing one).
+# unit; `make install worker` installs the execution-host unit (a bare
+# `sandman worker` — name defaults to the hostname, control plane
+# discovered via mDNS; add -advertise for placement, or use the curl
+# installer which writes the unit with the flags baked in).
 # The role word is a goal, so MAKECMDGOALS picks it up before `install` runs.
 ifneq ($(filter worker,$(MAKECMDGOALS)),)
 ROLE := worker
@@ -42,19 +44,12 @@ release-fetch:
 	install -m 0755 "/tmp/$$asset" sandman; \
 	rm -f "/tmp/$$asset" "/tmp/$$asset.sha256"
 
-# do-install: the actual install (binary, units, worker env, reload). The
-# role word is a goal, so ROLE was picked up at parse time above.
+# do-install: the actual install (binary + units). The role word is a
+# goal, so ROLE was picked up at parse time above.
 do-install:
 	install -m 0755 sandman $(PREFIX)/bin/sandman
 	install -m 0644 deploy/sandman.service /etc/systemd/system/sandman.service
 	install -m 0644 deploy/sandman-worker.service /etc/systemd/system/sandman-worker.service
-	@if [ "$(ROLE)" = "worker" ]; then \
-		if [ ! -f /etc/sandman/worker.env ]; then \
-			install -d /etc/sandman; \
-			install -m 0644 deploy/worker.env.example /etc/sandman/worker.env; \
-			echo "created /etc/sandman/worker.env — edit it for your control plane"; \
-		fi; \
-	fi
 	systemctl daemon-reload || true
 	@echo "installed $(PREFIX)/bin/sandman ($(ROLE) role)"
 	@if [ "$(ROLE)" = "worker" ]; then \
