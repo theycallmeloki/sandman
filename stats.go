@@ -52,6 +52,7 @@ type nodeStats struct {
 type fleetNode struct {
 	Name, Addr, Docker, Source string
 	Role                       string // "daemon" | "worker" ("" = unknown)
+	Version                    string // build version; "-" when unknown
 }
 
 // fleet collects the fleet: registry/peers files, plus a live mDNS browse
@@ -84,8 +85,12 @@ func fleet(state string, browseNow bool) []fleetNode {
 			if len(fields) > 5 {
 				role = fields[5] // appended last: old files omit it
 			}
+			ver := "-"
+			if len(fields) > 6 {
+				ver = fields[6] // version column added later: old files omit it
+			}
 			if _, ok := seen[fields[0]]; !ok || src == "mdns" {
-				seen[fields[0]] = fleetNode{fields[0], fields[1], docker, src, role}
+				seen[fields[0]] = fleetNode{fields[0], fields[1], docker, src, role, ver}
 			}
 		}
 	}
@@ -108,14 +113,18 @@ func fleet(state string, browseNow bool) []fleetNode {
 			if role == "" {
 				role = "daemon"
 			}
-			seen[e.Instance] = fleetNode{e.Instance, addr, textValue(e.Text, "docker"), "mdns", role}
+			ver := textValue(e.Text, "ver")
+			if ver == "" {
+				ver = "-"
+			}
+			seen[e.Instance] = fleetNode{e.Instance, addr, textValue(e.Text, "docker"), "mdns", role, ver}
 		}
 	}
 	// A node's own registry excludes itself (a peer list is for peers), so
 	// include the local daemon when it answers on the default port — the
 	// dashboard and stats must show the node you're sitting on.
-	if name, docker := probeLocalDaemon(DefaultPort); name != "" {
-		seen[name] = fleetNode{name, net.JoinHostPort("127.0.0.1", strconv.Itoa(DefaultPort)), docker, "local", "daemon"}
+	if name, docker, ver := probeLocalDaemon(DefaultPort); name != "" {
+		seen[name] = fleetNode{name, net.JoinHostPort("127.0.0.1", strconv.Itoa(DefaultPort)), docker, "local", "daemon", ver}
 	}
 	out := make([]fleetNode, 0, len(seen))
 	for _, n := range seen {
@@ -126,21 +135,21 @@ func fleet(state string, browseNow bool) []fleetNode {
 }
 
 // probeLocalDaemon asks 127.0.0.1:port who it is; empty name = no local daemon.
-func probeLocalDaemon(port int) (name, docker string) {
+func probeLocalDaemon(port int) (name, docker, version string) {
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 500*time.Millisecond)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
 	r := bufio.NewReader(conn)
 	w := bufio.NewWriter(conn)
 	if writeLine(w, "HELLO", ProtoVersion) != nil {
-		return "", ""
+		return "", "", ""
 	}
 	ok, err := readLine(r)
 	if err != nil || len(ok) == 0 || ok[0] != "OK" {
-		return "", ""
+		return "", "", ""
 	}
 	for _, t := range ok {
 		if v, found := strings.CutPrefix(t, "node="); found {
@@ -149,8 +158,11 @@ func probeLocalDaemon(port int) (name, docker string) {
 		if v, found := strings.CutPrefix(t, "docker="); found {
 			docker = v
 		}
+		if v, found := strings.CutPrefix(t, "version="); found {
+			version = v
+		}
 	}
-	return name, docker
+	return name, docker, version
 }
 
 // collectStats polls every node in the fleet in parallel.

@@ -372,7 +372,11 @@ func (d *daemon) syncOnce() {
 		if len(tok) > 5 {
 			role = tok[5] // appended last: old peers omit it
 		}
-		d.reg.mergeSync(tok[1], tok[2], docker, role)
+		ver := ""
+		if len(tok) > 6 {
+			ver = tok[6]
+		}
+		d.reg.mergeSync(tok[1], tok[2], docker, role, ver)
 	}
 }
 
@@ -384,7 +388,11 @@ func (d *daemon) handleNodes(w *bufio.Writer) {
 		return
 	}
 	for _, p := range peers {
-		if err := writeLine(w, "NODE", p.Name, p.Addr, p.Docker, p.Source, p.Role); err != nil {
+		ver := p.Version
+		if ver == "" {
+			ver = "-"
+		}
+		if err := writeLine(w, "NODE", p.Name, p.Addr, p.Docker, p.Source, p.Role, ver); err != nil {
 			return
 		}
 	}

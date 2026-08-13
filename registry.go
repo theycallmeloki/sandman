@@ -17,6 +17,7 @@ type peer struct {
 	Docker   string
 	Role     string // "daemon" (control plane) | "worker" (execution host)
 	Source   string // "mdns" (ephemeral) | "sync" (gossip) | "static" (hand-edited peers file)
+	Version  string // the node's build version ("-" when unknown) — lets an operator spot lagging nodes
 	LastSeen time.Time
 }
 
@@ -107,13 +108,17 @@ func (r *registry) writeSnapshot() {
 	defer r.mu.Unlock()
 	var b strings.Builder
 	b.WriteString("# sandman registry: mdns-discovered peers (ephemeral) + static peers (hand-edited)\n")
-	b.WriteString("# name addr docker source seen role\n")
+	b.WriteString("# name addr docker source seen role version\n")
 	for _, p := range r.peers {
 		seen := "-"
 		if p.Source == "mdns" {
 			seen = time.Since(p.LastSeen).Round(time.Second).String()
 		}
-		fmt.Fprintf(&b, "%s %s %s %s %s %s\n", p.Name, p.Addr, p.Docker, p.Source, seen, p.Role)
+		ver := p.Version
+		if ver == "" {
+			ver = "-"
+		}
+		fmt.Fprintf(&b, "%s %s %s %s %s %s %s\n", p.Name, p.Addr, p.Docker, p.Source, seen, p.Role, ver)
 	}
 	tmp := filepath.Join(r.dir, "registry.tmp")
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
@@ -128,7 +133,7 @@ func (r *registry) writeSnapshot() {
 // kernel delivers multicast to one shared-5353 socket per packet, so a
 // specific peer pair can be starved; TCP pull of a peer's registry always
 // converges (Rule of Robustness).
-func (r *registry) mergeSync(name, addr, docker, role string) {
+func (r *registry) mergeSync(name, addr, docker, role, version string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if name == r.own {
@@ -137,7 +142,7 @@ func (r *registry) mergeSync(name, addr, docker, role string) {
 	if role == "" {
 		role = "daemon"
 	}
-	r.peers[name] = &peer{Name: name, Addr: addr, Docker: docker, Role: role, Source: "sync", LastSeen: time.Now()}
+	r.peers[name] = &peer{Name: name, Addr: addr, Docker: docker, Role: role, Source: "sync", Version: version, LastSeen: time.Now()}
 }
 
 // addStatic records a manual peer in the peers file (the attach verb).

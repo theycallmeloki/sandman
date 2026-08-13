@@ -159,12 +159,16 @@ func clientRun(node, state, image string, env, argv []string) {
 // browse, so it works on any machine, node or not.
 func clientNodes(state string) {
 	nodes := fleet(state, true)
-	fmt.Printf("%-24s %-22s %-8s %-8s %s\n", "NAME", "ADDR", "DOCKER", "ROLE", "SOURCE")
+	fmt.Printf("%-24s %-22s %-8s %-8s %-8s %s\n", "NAME", "ADDR", "DOCKER", "ROLE", "VERSION", "SOURCE")
 	for _, n := range nodes {
 		role := n.Role
 		if role == "" {
 			role = "-"
 		}
-		fmt.Printf("%-24s %-22s %-8s %-8s %s\n", n.Name, n.Addr, n.Docker, role, n.Source)
+		ver := n.Version
+		if ver == "" {
+			ver = "-"
+		}
+		fmt.Printf("%-24s %-22s %-8s %-8s %-8s %s\n", n.Name, n.Addr, n.Docker, role, ver, n.Source)
 	}
 }

@@ -24,6 +24,7 @@ func advertiseMDNS(name string, port int, role, addr string) (*zeroconf.Server, 
 		"arch=" + runtime.GOARCH,
 		"os=" + runtime.GOOS,
 		"role=" + role,
+		"ver=" + Version,
 	}
 	if addr != "" {
 		txt = append(txt, "addr="+addr)
@@ -99,6 +100,7 @@ func (r *registry) mergeMdns(e *zeroconf.ServiceEntry) {
 		Docker:   textValue(e.Text, "docker"),
 		Role:     role,
 		Source:   "mdns",
+		Version:  textValue(e.Text, "ver"),
 		LastSeen: time.Now(),
 	}
 }
