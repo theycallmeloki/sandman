@@ -671,6 +671,13 @@ func newJobCmd() *cobra.Command {
 				fmt.Printf("%-13s : %s\n", "state", j.State)
 				fmt.Printf("%-13s : %s\n", "reason", j.Reason)
 				fmt.Printf("%-13s : %s\n", "outputCommit", j.OutputCommit)
+				fmt.Printf("%-13s : %d\n", "processed", j.Processed)
+				fmt.Printf("%-13s : %d\n", "recovered", j.Recovered)
+				fmt.Printf("%-13s : %d\n", "failed", j.Failed)
+				fmt.Printf("%-13s : %d\n", "skipped", j.Skipped)
+				if j.StatsCommit != "" {
+					fmt.Printf("%-13s : %s\n", "statsCommit", j.StatsCommit)
+				}
 			},
 		},
 		&cobra.Command{

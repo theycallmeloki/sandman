@@ -325,6 +325,18 @@ func TestCLI_VerbCoverage(t *testing.T) {
 	if !strings.Contains(ji, "state") || !strings.Contains(ji, "success") {
 		t.Fatalf("job inspect %q: want state: success", ji)
 	}
+	// 5b. job inspect prints the per-datum aggregate counts (pachctl
+	// parity, SB-086 review). The newest cap2 job is the update-triggered
+	// re-run: its single datum is unchanged from the flush's successful
+	// run, so dedup (SB-006) skips it — skipped 1, processed 0 — and
+	// statsCommit stays absent (stats disabled here)
+	norm := strings.Join(strings.Fields(ji), " ")
+	if !strings.Contains(norm, "processed : 0") || !strings.Contains(norm, "failed : 0") || !strings.Contains(norm, "skipped : 1") {
+		t.Fatalf("job inspect %q: want aggregate counts processed 0 / failed 0 / skipped 1 (dedup)", ji)
+	}
+	if strings.Contains(ji, "statsCommit") {
+		t.Fatalf("job inspect %q: statsCommit printed without stats enabled", ji)
+	}
 
 	// 6. a downstream consumer refuses a plain delete and the error names
 	// --force; --force deletes the mid-DAG pipeline anyway, leaving the
