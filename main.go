@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"sandman/client"
+	"sandman/internal/cli"
 )
 
 // Version is the baked build version. Releases set it at build time via
 // -ldflags "-X main.Version=0.0.1"; dev builds fall back to this value.
+// The daemon reports it on /api/v1/version (api.go); the CLI shows it
+// via cli.PrintVersion (internal/cli).
 var Version = "0.0.1"
 
 // One static binary, busybox-style: every verb is a subcommand, the daemon
@@ -20,30 +22,15 @@ var Version = "0.0.1"
 // systemd unit) and the node joins the fleet on its own. The data-plane
 // verbs (repo/commit/branch/file/job/datum/pipeline/flush/secret/tag/
 // logs/transaction/check) are cobra commands over the client package
-// (planectl.go); the fleet and runtime verbs parse their own flags and
+// (internal/cli); the fleet and runtime verbs parse their own flags and
 // receive raw args (DisableFlagParsing).
 var (
 	// addrFlag selects the control plane for the data-plane verbs
-	// (planectl.go); it defaults to the local daemon port.
+	// (internal/cli); it defaults to the local daemon port.
 	addrFlag = flag.String("addr", defaultAddr(), "control-plane address (data-plane verbs)")
 	// versionFlag prints the binary and daemon versions and exits.
 	versionFlag = flag.Bool("version", false, "print binary and daemon versions")
 )
-
-// printVersion reports the binary's baked version and, when a control
-// plane answers, the daemon's version — a stale daemon is visible at a
-// glance (the two come from the same binary, so a mismatch means the
-// daemon predates this build).
-func printVersion() {
-	fmt.Printf("sandman %s\n", Version)
-	c := client.New(*addrFlag)
-	ver, err := c.Version()
-	if err != nil {
-		fmt.Printf("daemon: not reachable at %s\n", *addrFlag)
-		return
-	}
-	fmt.Printf("daemon: %s (%s)\n", ver, *addrFlag)
-}
 
 func defaultAddr() string {
 	if a := os.Getenv("SANDBOX_ADDR"); a != "" {
@@ -81,23 +68,17 @@ func newRootCmd() *cobra.Command {
 		}
 		root.AddCommand(c)
 	}
-	root.AddCommand(newDataPlaneCommands()...)
-	// the reference's top-level `get file <repo>@<branch>:<path>` verb —
-	// the canonical way to recover a file from a commit (the nested
-	// `file get` is equivalent)
-	root.AddCommand(newGetCmd())
-	root.AddCommand(&cobra.Command{
-		Use: "version",
-		Run: func(*cobra.Command, []string) { printVersion() },
-	})
+	root.AddCommand(cli.Commands()...)
 	return root
 }
 
 func main() {
 	flag.Usage = usage
 	flag.Parse()
+	cli.SetAddr(*addrFlag)
+	cli.SetVersion(Version)
 	if *versionFlag {
-		printVersion()
+		cli.PrintVersion()
 		os.Exit(0)
 	}
 	args := flag.Args()

@@ -13,6 +13,14 @@ import (
 	"time"
 )
 
+// die is the CLI's fatal-error exit: print the message to stderr and
+// exit with the given code. (internal/cli has its own copy for the
+// data-plane verbs.)
+func die(msg string, code int) {
+	fmt.Fprintln(os.Stderr, "sandman:", msg)
+	os.Exit(code)
+}
+
 // resolveNode turns a node name into host:port. Resolution order: literal
 // addr, local registry/peers files, a quick mDNS browse, then hostname:4242.
 func resolveNode(node, state string) (string, error) {

@@ -12,6 +12,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"golang.org/x/term"
+	"sandman/internal/cli"
 )
 
 // dashboard is a thin renderer over the stats layer: poll the fleet, draw
@@ -162,7 +163,7 @@ func drawTable(t *tview.Table, stats []nodeStats) int {
 		mem := ""
 		if ns.HostMemT > 0 {
 			ratio := float64(ns.HostMemU) / float64(ns.HostMemT)
-			mem = fmt.Sprintf("%s %s / %s · %.1f%%", memBar(ratio, 14), humanSize(ns.HostMemU), humanSize(ns.HostMemT), ns.HostMemPerc)
+			mem = fmt.Sprintf("%s %s / %s · %.1f%%", memBar(ratio, 14), cli.HumanSize(ns.HostMemU), cli.HumanSize(ns.HostMemT), ns.HostMemPerc)
 		}
 		t.SetCell(row, 3, tview.NewTableCell(mem).SetTextColor(utilColor(ns.HostMemPerc)))
 		row++
@@ -196,7 +197,7 @@ func drawTable(t *tview.Table, stats []nodeStats) int {
 			mem := ""
 			if c.MemLimit > 0 {
 				ratio := float64(c.MemBytes) / float64(c.MemLimit)
-				mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 16), humanSize(c.MemBytes), humanSize(c.MemLimit))
+				mem = fmt.Sprintf("%s %s / %s", memBar(ratio, 16), cli.HumanSize(c.MemBytes), cli.HumanSize(c.MemLimit))
 			}
 			t.SetCell(row, 3, tview.NewTableCell(mem).SetTextColor(color))
 			row++

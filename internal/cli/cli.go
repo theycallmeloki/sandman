@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -16,6 +16,28 @@ import (
 	"sandman/client"
 )
 
+// The data-plane CLI on spf13/cobra (D-19: the CLI is a second consumer
+// of the same client package the conformance suite drives — semantic and
+// command-level compatibility with the reference, no wire compatibility).
+// The reference surface is tracked verb by verb in
+// sandman-behaviour-notes/implementation-review/CLI_SURFACE.md.
+//
+// addr selects the control plane for every verb; the sandman binary sets
+// it from its global -addr flag (parsed by the std flag package before
+// cobra sees the args) via SetAddr.
+
+var addr string
+
+// SetAddr selects the control-plane address for the data-plane verbs.
+func SetAddr(a string) { addr = a }
+
+// binVersion is the baked build version, injected by main (which owns
+// the -ldflags -X main.Version wiring and the daemon's /api/v1/version).
+var binVersion = "0.0.1"
+
+// SetVersion installs the binary's baked version for PrintVersion.
+func SetVersion(v string) { binVersion = v }
+
 // die is the CLI's fatal-error exit: print the message to stderr and
 // exit with the given code.
 func die(msg string, code int) {
@@ -23,19 +45,37 @@ func die(msg string, code int) {
 	os.Exit(code)
 }
 
-// planectl implements the data-plane CLI on spf13/cobra (D-19: the CLI is
-// a second consumer of the same client package the conformance suite
-// drives — semantic and command-level compatibility with the reference,
-// no wire compatibility). The reference surface is tracked verb by verb
-// in sandman-behaviour-notes/implementation-review/CLI_SURFACE.md.
-//
-// The global flag -addr (declared in main.go, parsed by the
-// std flag package before cobra sees the args) selects the control plane
-// for every verb.
+// PrintVersion reports the binary's baked version and, when a control
+// plane answers, the daemon's version — a stale daemon is visible at a
+// glance (the two come from the same binary, so a mismatch means the
+// daemon predates this build).
+func PrintVersion() {
+	fmt.Printf("sandman %s\n", binVersion)
+	c := client.New(addr)
+	ver, err := c.Version()
+	if err != nil {
+		fmt.Printf("daemon: not reachable at %s\n", addr)
+		return
+	}
+	fmt.Printf("daemon: %s (%s)\n", ver, addr)
+}
 
 func cliClient() *client.Client {
-	c := client.New(*addrFlag)
-	return c
+	return client.New(addr)
+}
+
+// Commands returns the data-plane subtree (the cobra verbs over the
+// client package) plus the top-level get and version verbs. The sandman
+// binary mounts these under its root command alongside the fleet/runtime
+// verbs (daemon, worker, nodes, ...).
+func Commands() []*cobra.Command {
+	cmds := dataPlaneCommands()
+	cmds = append(cmds, getCmd())
+	cmds = append(cmds, &cobra.Command{
+		Use: "version",
+		Run: func(*cobra.Command, []string) { PrintVersion() },
+	})
+	return cmds
 }
 
 // table prints an aligned table with an uppercase header row via
@@ -58,7 +98,7 @@ func table(header []string, rows [][]string) {
 }
 
 // humanSize renders a byte count for humans (42 B, 1.5 KB, 3.2 MB).
-func humanSize(n uint64) string {
+func HumanSize(n uint64) string {
 	const unit = 1024
 	if n < unit {
 		return fmt.Sprintf("%d B", n)
@@ -97,10 +137,10 @@ func parseRef(s string) (repo, branch, path string, err error) {
 	return repo, branch, path, nil
 }
 
-// newDataPlaneCommands returns the data-plane subtree of the root command
+// dataPlaneCommands returns the data-plane subtree of the root command
 // (repo, commit, branch, file, check, job, datum, pipeline, flush, secret,
 // tag, logs, transaction).
-func newDataPlaneCommands() []*cobra.Command {
+func dataPlaneCommands() []*cobra.Command {
 	return []*cobra.Command{
 		newRepoCmd(),
 		newCommitCmd(),
@@ -140,7 +180,7 @@ func newRepoCmd() *cobra.Command {
 				}
 				rows := make([][]string, 0, len(repos))
 				for _, r := range repos {
-					rows = append(rows, []string{r.Name, humanSize(r.SizeBytes), strings.Join(r.Branches, ",")})
+					rows = append(rows, []string{r.Name, HumanSize(r.SizeBytes), strings.Join(r.Branches, ",")})
 				}
 				table([]string{"NAME", "SIZE", "BRANCHES"}, rows)
 				if len(rows) == 0 {
@@ -157,7 +197,7 @@ func newRepoCmd() *cobra.Command {
 					die("repo inspect: "+err.Error(), 1)
 				}
 				fmt.Printf("%-10s : %s\n", "name", r.Name)
-				fmt.Printf("%-10s : %s\n", "size", humanSize(r.SizeBytes))
+				fmt.Printf("%-10s : %s\n", "size", HumanSize(r.SizeBytes))
 				fmt.Printf("%-10s : %s\n", "branches", strings.Join(r.Branches, ", "))
 			},
 		},
@@ -357,10 +397,10 @@ func newBranchCmd() *cobra.Command {
 	return cmd
 }
 
-// newGetCmd is the reference's top-level `get file` verb: fetch a file
+// getCmd is the reference's top-level `get file` verb: fetch a file
 // from a commit by ref, the canonical recovery path. Equivalent to
 // `file get` (same resolution), kept as its own command for parity.
-func newGetCmd() *cobra.Command {
+func getCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "get", Short: "fetch files from commits"}
 	cmd.AddCommand(&cobra.Command{
 		Use:  "file <repo@branch:path>",
@@ -478,7 +518,7 @@ func newFileCmd() *cobra.Command {
 					die("file inspect: "+err.Error(), 1)
 				}
 				fmt.Printf("%-10s : %s\n", "path", path)
-				fmt.Printf("%-10s : %s\n", "size", humanSize(uint64(len(data))))
+				fmt.Printf("%-10s : %s\n", "size", HumanSize(uint64(len(data))))
 			},
 		},
 		&cobra.Command{
@@ -504,7 +544,7 @@ func newFileCmd() *cobra.Command {
 				}
 				rows := make([][]string, 0, len(files))
 				for _, f := range files {
-					rows = append(rows, []string{f.Path, humanSize(f.Size)})
+					rows = append(rows, []string{f.Path, HumanSize(f.Size)})
 				}
 				table([]string{"PATH", "SIZE"}, rows)
 				if len(rows) == 0 {
