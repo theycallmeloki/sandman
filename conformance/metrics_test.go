@@ -139,9 +139,12 @@ func TestSB079_GarbageCollection(t *testing.T) {
 	if _, err := c.WaitJob(latestJob(t, slow).ID, 60*time.Second); err != nil {
 		t.Fatalf("slow job did not settle after stop: %v", err)
 	}
-	if err := c.CollectGarbage(); err != nil {
-		t.Fatalf("collection after stop: %v", err)
-	}
+	// collection refuses while ANY job runs (GC needs quiescence); an
+	// unrelated pipeline's legitimately in-flight job (e.g. a cron tick
+	// from a prior test) delays the collection rather than failing it
+	pollFor(t, "garbage collection after stop", 60*time.Second, func() bool {
+		return c.CollectGarbage() == nil
+	})
 	if b, err := c.GetFile(cm.ID, "foo"); err != nil || string(b) != "foo" {
 		t.Fatalf("input foo after collection = %q (%v)", string(b), err)
 	}

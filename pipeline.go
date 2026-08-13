@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"sandman/client"
 	"sandman/internal/store"
@@ -1153,10 +1154,28 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 		}
 	}
 	// cancel in-flight work and wait for it to settle, then remove the job
-	// records (SB-026/027: no orphaned job listings)
-	d.cancelPipelineJobs(name)
+	// records (SB-026/027: no orphaned job listings). The tickers stop
+	// first: a cron tick landing between the cancel scan and the ticker
+	// stop would create a job that escapes the cancel and keeps the
+	// registry busy — garbage collection must not see a ghost running
+	// job after the delete returns (SB-079).
 	d.stopCronTickers(name)     // a deleted pipeline's schedule stops (SB-089)
 	d.clearTriggerLedgers(name) // its trigger accumulation goes too (SB-160)
+	d.cancelPipelineJobs(name)
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+		d.jobsMu.Lock()
+		late := 0
+		for _, rj := range d.running {
+			if rj.pipeline == name {
+				late++
+			}
+		}
+		d.jobsMu.Unlock()
+		if late == 0 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 	for _, j := range d.mustListJobs() {
 		if j.Pipeline == name {
 			os.RemoveAll(d.jobDir(j.ID))
