@@ -1,7 +1,7 @@
 # FINDINGS — manual happy-path walk, 2026-08-13
 
 Method: for each feature bucket, drove the current binary (`/tmp/sandman-current`,
-worktree build) through the typical pachctl-style usage against the live daemon
+worktree build) through the typical happy-path usage against the live daemon
 on 192.168.1.147:4242 (container runner, `/var/lib/sandman` state). Every claim
 below was observed live; evidence quoted verbatim. Statuses re-checked against
 the worktree source after the maintainer's fix batch (commits `3e42a26`…`13fbabe`).
@@ -36,7 +36,7 @@ the worktree source after the maintainer's fix batch (commits `3e42a26`…`13fba
   dockerd → "service process exited with code 137". Fix: harness_test.go:81
   now scopes the sweep to `name=sandman-conformance-`.
 - **F6 — `pipeline stop` panicked on any spout and wedged the daemon.**
-  `stopPipeline` dereferenced `rec.Pipeline.Input.Repo` (nil for spouts) →
+  `stopPipeline` accessed `rec.Pipeline.Input.Repo` (nil for spouts) →
   `http: panic serving … runtime error: invalid memory address` inside the
   handler, after `pipelineRecMu.Lock()` → mutex leaked → every
   pipeline-mutex op hung until restart. Fix: pipeline.go:888 guards
@@ -57,60 +57,61 @@ the worktree source after the maintainer's fix batch (commits `3e42a26`…`13fba
 - **F10 — two `SecretMount`s on one `mountPath` failed the job.**
   `docker: Error response from daemon: Duplicate mount point:
   /sandman/secrets` (exit 125) — sandman is strictly one key per mount, so
-  exposing two keys the pachyderm way (whole secret at one path) was
-  impossible. Fix (13fbabe): same-path secret references merge into one
+  exposing two keys the whole-secret-at-one-path way was
+  impossible. Fix (13fbabe): same-path secret mounts merge into one
   bind mount.
+
+## Fixed in round 2 (maintainer batch, commits `3c5651a`…`79fb8b8`; all
+live-verified 2026-08-14 on a fresh build of HEAD `79fb8b8`)
+
+- **F9 — `pipeline update --tx` dead code.** Fix: flag registered
+  (internal/cli/cli.go:865, folded into the f4c48d1 batch). Verified:
+  `pipeline update --tx <id> -f spec.json` stages and applies.
+- **F11 — silent ignore of unknown spec fields.** Fix: strict spec decode
+  (`DisallowUnknownFields`, api.go:1098 + internal/cli/cli.go:1060).
+  Verified: top-level `resourceLimits` → `spec: json: unknown field
+  "resourceLimits"`.
+- **F13 — git private-push permanent silencing.** Fix (5f7d0ff):
+  auto-recover clone-failed pipelines on successful push. Verified:
+  private push → pipeline failure; next normal push → job runs, revision
+  lands.
+- **F14 — CLI open-commit phantom branch.** Fix (79fb8b8): commit-id refs
+  address the commit. Verified: `put repo@<commitid>` writes into the open
+  commit, master resolves to it, no phantom branch, no empty finish.
+- **G1 — `job inspect` no aggregate stats.** Fix (80cf5ff): prints
+  processed/recovered/failed/skipped. Verified on a failed job:
+  `processed 0 / recovered 0 / failed 1 / skipped 0`.
 
 ## Open (not yet fixed in source at the time of writing)
 
-- **F9 — `pipeline update --tx <id>` is dead code.** The update handler
-  reads `txID`/`activeTx()` (cli.go:797-802) but only `create` registers the
-  `--tx` flag → `Error: unknown flag: --tx`. Explicit update-in-transaction
-  is unreachable; the resume flow is the only path. One-line fix:
-  register the flag on `update`.
-- **F11 — misplaced/unknown spec fields are silently ignored.** Top-level
-  `resourceLimits` (pachyderm's shape; sandman reads
-  `transform.resourceLimits`) created fine and ran the container with
-  `memory=0 nanocupus=0` — silent resource-policy loss, no error. No strict
-  decoding (`DisallowUnknownFields`) anywhere in the spec path. Either
-  accept top-level resources or reject unknown fields.
 - **F12 — `"user": "nobody"` fails.** `This account is not available` —
   busybox `su` refuses pre-existing accounts with nologin shells; the
   `user` field works only for fresh usernames the runner creates
   (`adduser -D`). Untested surface: the suite only uses fresh names.
-- **F13 — a private/uncloneable git push permanently silences triggering.**
-  `private: true` push correctly fails the pipeline with `unable to clone
-  private repository (<url>)` (SB-105), but subsequent normal pushes to the
-  same URL keep committing (`secrepo` 1 → 3 commits) while **no job ever
-  spawns** — the failed pipeline never re-triggers. `pipeline update`
-  revives it (state → running, next push runs). No auto-recovery on later
-  successful pushes.
+  Re-verified 2026-08-14: still reproduces on the current build.
 
 ## CLI surface gaps (not bugs)
 
-- **G1 — `job inspect` prints no aggregate stats.** `processed`/`failed`/
-  `skipped`/`statsCommit` exist in the client struct but the inspect output
-  shows only id/pipeline/state/reason/outputCommit. Counts must be derived
-  from `datum list` or the stats-branch records.
-- `commit inspect` takes a commit ID, not `repo@branch`; `datum list` takes
-  a job ID, not `pipeline@job`; per-commit file reads
-  (`file get repo@<commitid>:path`) are not addressable — the `@` segment
-  is branch-only; no `tag delete` verb.
+- `datum list` takes a job ID, not `pipeline@job`; `tag delete` exists
+  (added in the refactor; the turn-1 probe predated it). `commit inspect`
+  accepts a commit ID, `repo@branch`, and `repo@<commit-id>` (F14).
 
-## Divergences from pachyderm (by design or accepted; document, don't fix)
+## Divergences (by design or accepted; document, don't fix)
 
 - Hyphenated repo names are creatable but unconsumable by pipelines
   (`input name "x-y" is not a valid environment variable name`, 400) —
-  pachyderm allows hyphens end to end.
-- `file put` to a nonexistent repo auto-creates it — pachyderm errors.
+  hyphens work end to end in the upstream tool.
+- `file put` to a nonexistent repo auto-creates it — the upstream tool
+  errors.
 - Triggers are pipeline-input options (`trigger.sizeBytes`) not
   branch-level triggers; there is no branch-trigger CLI surface.
 - Git inputs are a push receiver (D-16): `POST /api/v1/git/push` with the
   pushed tree; URLs are validated but never cloned. No CLI verb for git
   push (curl only).
-- Cron/trigger/git derived repos (`<pipeline>-<cron>`, `<pipeline>-0`,
-  URL-derived) survive pipeline delete — inert data, `repo delete` cleans
-  them.
+- Cron/git derived repos (`<pipeline>-<cron>`, URL-derived) are deleted
+  with their pipeline (5f7d0ff) unless another pipeline still references
+  the mapped repo (a shared git side or a plain input over it); `repo
+  delete` cleans the remaining inert-data class.
 - Job failure output commits are finished empty and become the branch head,
   so a failed job hides prior good output from the head view (recoverable
   via history).
