@@ -143,11 +143,13 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 	// must not be lost to the exit.
 	commitCycle := func(final bool) {
 		if changed := spoutDiffVerify(outDir, committedOut, !final); len(changed) > 0 {
+			log.Printf("spout %s: cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
 			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
 			committedOut = spoutSnapshot(outDir)
 		}
 		if markerDir != "" {
 			if changed := spoutDiffVerify(markerDir, committedMarker, !final); len(changed) > 0 {
+				log.Printf("spout %s: marker cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
 				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
 				committedMarker = spoutSnapshot(markerDir)
 			}
@@ -208,6 +210,7 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		} else if strings.TrimSpace(string(out)) != "true" {
 			// the container is gone: commit any final cycle — a
 			// deferred mid-write file must not be lost to the settle
+			log.Printf("spout %s: container exited; committing final cycle", pl.Pipeline.Name)
 			commitCycle(true)
 			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
