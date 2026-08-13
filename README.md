@@ -42,6 +42,26 @@ it joins the fleet by itself. Nothing to register, nothing to configure.
 Cross-subnet nodes (no multicast): `sandman attach wan-node 10.0.0.9:4242` adds a
 static peer; `detach` removes it.
 
+**Add an execution worker to an existing fleet** (a machine that runs jobs
+for your control plane — needs docker; make and curl are fetched if
+missing):
+
+```sh
+curl -sSL https://raw.githubusercontent.com/theycallmeloki/sandman/main/install.sh | sh
+```
+
+The installer fetches the repo and delegates to the Makefile
+(`make install worker`, or `install-release` when the box has no Go). It
+auto-fills the worker name (hostname), exec port (4343), and advertise
+address (the host's LAN IP). The control plane is discovered — the worker
+browses `_sandman._tcp` for the daemon (role=daemon) when `CONTROL` is
+unset; set it explicitly to skip discovery:
+
+```sh
+CONTROL=http://192.168.1.147:4242 \
+  curl -sSL https://raw.githubusercontent.com/theycallmeloki/sandman/main/install.sh | sh
+```
+
 ## Usage
 
 ```sh

@@ -118,3 +118,30 @@ func mdnsLookup(name string, timeout time.Duration) string {
 	}
 	return ""
 }
+
+// discoverDaemon browses _sandman._tcp for a control plane (role=daemon)
+// and returns its http URL, or "" when none responds within the timeout.
+// The worker uses it when -control is unset: the daemon advertises
+// role=daemon, so with one daemon on the LAN the worker joins it with
+// zero configuration.
+func discoverDaemon(timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ch := make(chan *zeroconf.ServiceEntry, 16)
+	go browse(ctx, ch)
+	for e := range ch {
+		if textValue(e.Text, "role") != "daemon" {
+			continue
+		}
+		addr := textValue(e.Text, "addr")
+		if addr == "" {
+			if ip := firstAddr(e); ip != "" {
+				addr = net.JoinHostPort(ip, strconv.Itoa(e.Port))
+			}
+		}
+		if addr != "" {
+			return "http://" + addr
+		}
+	}
+	return ""
+}

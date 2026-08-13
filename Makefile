@@ -4,7 +4,7 @@
 GO ?= go
 PREFIX ?= /usr/local
 
-.PHONY: build install uninstall clean daemon worker
+.PHONY: build install install-release uninstall clean daemon worker
 
 # Role selection: `make install daemon` (default) installs the control-plane
 # unit; `make install worker` installs the execution-host unit + a config
@@ -19,9 +19,32 @@ endif
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w$(if $(VERSION), -X main.Version=$(VERSION),)" -o sandman .
 
-# install: one binary + the unit for the chosen role. `systemctl enable --now
-# sandman` (daemon) or `sandman-worker` (worker) and the node joins the fleet.
-install: build
+# install: build from source, then install the binary + the unit for the
+# chosen role. `systemctl enable --now sandman` (daemon) or
+# `sandman-worker` (worker) and the node joins the fleet.
+install: build do-install
+
+# install-release: install the newest published release binary instead of
+# building — no Go toolchain needed on the target. The release workflow
+# (.github/workflows/release.yml) publishes sandman-<os>-<arch> + .sha256
+# per v* tag; this fetches, checksum-verifies, and installs them.
+install-release: release-fetch do-install
+
+release-fetch:
+	@test -n "$(VERSION)" || (echo "no release tags yet — use 'make install' (builds from source)" >&2; exit 1)
+	@set -e; os=$$(uname -s | tr 'A-Z' 'a-z'); arch=$$(uname -m); \
+	case "$$arch" in x86_64|amd64) goarch=amd64;; aarch64|arm64) goarch=arm64;; *) echo "unsupported arch $$arch" >&2; exit 1;; esac; \
+	asset="sandman-$$os-$$goarch"; \
+	base="https://github.com/theycallmeloki/sandman/releases/download/v$(VERSION)"; \
+	curl -fsSL -o "/tmp/$$asset" "$$base/$$asset"; \
+	curl -fsSL -o "/tmp/$$asset.sha256" "$$base/$$asset.sha256"; \
+	(cd /tmp && sha256sum -c "$$asset.sha256" >/dev/null); \
+	install -m 0755 "/tmp/$$asset" sandman; \
+	rm -f "/tmp/$$asset" "/tmp/$$asset.sha256"
+
+# do-install: the actual install (binary, units, worker env, reload). The
+# role word is a goal, so ROLE was picked up at parse time above.
+do-install:
 	install -m 0755 sandman $(PREFIX)/bin/sandman
 	install -m 0644 deploy/sandman.service /etc/systemd/system/sandman.service
 	install -m 0644 deploy/sandman-worker.service /etc/systemd/system/sandman-worker.service

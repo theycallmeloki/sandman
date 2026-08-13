@@ -92,15 +92,34 @@ type execResult struct {
 func cmdWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	name := fs.String("name", "", "host name (required)")
-	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (required)")
+	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (default: discover the daemon via mDNS)")
 	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
 	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
 	var labels multiFlag
 	fs.Var(&labels, "label", "placement label this host bears (repeatable)")
 	fs.Parse(args)
-	if *name == "" || *control == "" {
-		fmt.Fprintln(os.Stderr, "sandman worker: -name and -control are required")
+	if *name == "" {
+		fmt.Fprintln(os.Stderr, "sandman worker: -name is required")
 		os.Exit(2)
+	}
+
+	// A worker with no explicit control plane discovers the daemon on the
+	// LAN: the daemon advertises _sandman._tcp with role=daemon, so the
+	// worker browses and takes the first daemon's address (the fleet
+	// expects exactly one). Retry until found — the register loop below
+	// also retries forever, and a worker without a control plane is
+	// useless anyway; the log says what it is doing.
+	if *control == "" {
+		fmt.Fprintf(os.Stderr, "sandman worker %s: -control unset — discovering the daemon via mDNS\n", *name)
+		for *control == "" {
+			if c := discoverDaemon(3 * time.Second); c != "" {
+				*control = c
+				break
+			}
+			fmt.Fprintf(os.Stderr, "sandman worker %s: no daemon found on the LAN yet — retrying\n", *name)
+			time.Sleep(5 * time.Second)
+		}
+		fmt.Fprintf(os.Stderr, "sandman worker %s: discovered control plane %s\n", *name, *control)
 	}
 
 	if *advertise != "" {
