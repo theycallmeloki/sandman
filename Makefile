@@ -1,7 +1,10 @@
+# GO is overridable: user-local Go installs (e.g. ~/sdk/go/bin/go) are not
+# on root's secure_path, so `sudo make install` needs
+# `sudo make GO=$HOME/sdk/go/bin/go install`.
 GO ?= go
 PREFIX ?= /usr/local
 
-.PHONY: build install uninstall clean daemon worker release
+.PHONY: build install uninstall clean daemon worker
 
 # Role selection: `make install daemon` (default) installs the control-plane
 # unit; `make install worker` installs the execution-host unit + a config
@@ -22,8 +25,6 @@ install: build
 	install -m 0755 sandman $(PREFIX)/bin/sandman
 	install -m 0644 deploy/sandman.service /etc/systemd/system/sandman.service
 	install -m 0644 deploy/sandman-worker.service /etc/systemd/system/sandman-worker.service
-	install -m 0644 deploy/sandman-update.service /etc/systemd/system/sandman-update.service
-	install -m 0644 deploy/sandman-update.timer /etc/systemd/system/sandman-update.timer
 	@if [ "$(ROLE)" = "worker" ]; then \
 		if [ ! -f /etc/sandman/worker.env ]; then \
 			install -d /etc/sandman; \
@@ -32,13 +33,7 @@ install: build
 		fi; \
 	fi
 	systemctl daemon-reload || true
-	# auto-roll: the root oneshot installs the latest release over
-	# /usr/local/bin/sandman daily; disable with `systemctl disable
-	# sandman-update.timer`. The update never restarts the daemon — the
-	# new binary applies at the next natural restart.
-	systemctl enable sandman-update.timer || true
 	@echo "installed $(PREFIX)/bin/sandman ($(ROLE) role)"
-	@echo "auto-updates: enabled (sandman-update.timer, daily) — disable: systemctl disable sandman-update.timer"
 	@if [ "$(ROLE)" = "worker" ]; then \
 		echo "start the worker:  systemctl enable --now sandman-worker"; \
 	else \
@@ -51,24 +46,15 @@ daemon worker:
 	@true
 
 uninstall:
-	rm -f $(PREFIX)/bin/sandman /etc/systemd/system/sandman.service /etc/systemd/system/sandman-worker.service /etc/systemd/system/sandman-update.service /etc/systemd/system/sandman-update.timer
+	rm -f $(PREFIX)/bin/sandman /etc/systemd/system/sandman.service /etc/systemd/system/sandman-worker.service
 	systemctl daemon-reload || true
 
-# release: build the tagged version's release binary + sha256 asset.
-# VERSION defaults to the newest git tag (v stripped). Publishing (after
-# `git tag v$(VERSION) && git push origin v$(VERSION)`):
-#   gh release create v$(VERSION) sandman-linux-amd64 sandman-linux-amd64.sha256 --notes "..."
 # VERSION defaults to the highest semver tag (v stripped) — git describe
 # picks arbitrarily when several tags share one commit (the 0.0.x re-cut
-# line all point at the same revision).
+# line all point at the same revision). Releases themselves are built and
+# published by .github/workflows/release.yml on every v* tag push — there
+# is no local release target; `sandman update` installs release builds.
 VERSION ?= $(shell git tag --sort=-v:refname 2>/dev/null | head -1 | sed 's/^v//')
 
-release:
-	@test -n "$(VERSION)" || (echo "no git tags yet — set VERSION=x.y.z" >&2; exit 1)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.Version=$(VERSION)" -o sandman-linux-amd64 .
-	sha256sum sandman-linux-amd64 > sandman-linux-amd64.sha256
-	@echo "built sandman-linux-amd64 ($(VERSION)) + checksum"
-	@echo "publish:  gh release create v$(VERSION) sandman-linux-amd64 sandman-linux-amd64.sha256 --notes ..."
-
 clean:
-	rm -f sandman sandman-linux-amd64 sandman-linux-amd64.sha256
+	rm -f sandman
