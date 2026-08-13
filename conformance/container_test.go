@@ -879,9 +879,11 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 	if n := sandmanContainerCount(); n != 0 {
 		t.Fatalf("%d standing containers while idle in standby, want 0 (D-01)", n)
 	}
-	// a commit wakes it: a container exists while the job runs
+	// a commit wakes it: a container exists while the job runs. The
+	// container must start within the poll; a slow runner's docker
+	// overhead has blown 30s, so the poll is generous.
 	cm := commitFiles(t, repo, "", map[string]string{"file": "foo\n"})
-	pollFor(t, "container while the job runs", 30*time.Second, func() bool {
+	pollFor(t, "container while the job runs", 60*time.Second, func() bool {
 		return sandmanContainerCount() > 0
 	})
 	flushOK(t, cm.ID)

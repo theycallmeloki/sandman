@@ -325,9 +325,22 @@ func TestSB146_SurvivesDeletedOutputRepo(t *testing.T) {
 	flushOK(t, cm1.ID)
 
 	cm2 := commitFiles(t, repo, "master", map[string]string{"file2": "2"})
-	pollFor(t, "job in flight", 30*time.Second, func() bool {
+	// the job's record is saved at spawn, before its output commit is
+	// opened — deleting in that window would be silently absorbed
+	// (startCommit recreates a missing repo). Wait for the commit to be
+	// open (OutputCommit set) so the force-delete lands mid-execution and
+	// the execute-side repo check (execute.go) fails the pipeline.
+	pollFor(t, "job output commit open", 30*time.Second, func() bool {
 		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
-		return err == nil && len(js) > 0 && js[0].State == "running"
+		if err != nil {
+			return false
+		}
+		for _, j := range js {
+			if j.State == "running" && j.OutputCommit != "" {
+				return true
+			}
+		}
+		return false
 	})
 	noPanic(t, c.DeleteRepo(name, true)) // force-delete the output repo mid-job
 
