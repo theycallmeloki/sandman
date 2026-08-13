@@ -74,10 +74,15 @@ uninstall:
 
 # VERSION defaults to the highest semver tag (v stripped) — git describe
 # picks arbitrarily when several tags share one commit (the 0.0.x re-cut
-# line all point at the same revision). Releases themselves are built and
+# line all point at the same revision). A source tarball (install.sh
+# fetches the archive, which has no .git) falls back to the latest
+# release tag from the GitHub API. Releases themselves are built and
 # published by .github/workflows/release.yml on every v* tag push — there
 # is no local release target; `sandman update` installs release builds.
 VERSION ?= $(shell git tag --sort=-v:refname 2>/dev/null | head -1 | sed 's/^v//')
+ifeq ($(VERSION),)
+VERSION := $(shell curl -fsSL https://api.github.com/repos/theycallmeloki/sandman/releases/latest 2>/dev/null | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' | sed 's/^v//')
+endif
 
 clean:
 	rm -f sandman
