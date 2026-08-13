@@ -886,6 +886,18 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 	pollFor(t, "container while the job runs", 60*time.Second, func() bool {
 		return sandmanContainerCount() > 0
 	})
+	if n := sandmanContainerCount(); n == 0 {
+		// diagnostic for the CI-only hang: dump every sandman-* container
+		// (including created/exited ones — docker ps without -a hides
+		// them) and the latest job records, so the next failure shows
+		// where the container launch stopped
+		out, _ := exec.Command("docker", "ps", "-a", "--filter", "name=sandman-", "--format", "{{.ID}} {{.State}} {{.Names}}").Output()
+		t.Logf("container poll timed out; docker ps -a: %s", strings.TrimSpace(string(out)))
+		js, _ := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
+		for _, j := range js {
+			t.Logf("job %s: state=%s outputCommit=%q", j.ID, j.State, j.OutputCommit)
+		}
+	}
 	flushOK(t, cm.ID)
 	pollFor(t, "resting in standby with zero containers", 30*time.Second, func() bool {
 		return standbyState(t, pipe) == "standby" && sandmanContainerCount() == 0

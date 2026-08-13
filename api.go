@@ -568,7 +568,10 @@ func (d *daemon) collectGarbageH(w http.ResponseWriter, r *http.Request) error {
 func (d *daemon) collectGarbage() error {
 	for _, j := range d.mustListJobs() {
 		if j.State == stateRunning {
-			return fmt.Errorf("cannot collect garbage while a job is running")
+			// name the offender: a GC refusal on a stale "running" record
+			// from a dead/cancelled job is a bug in whoever left it, and
+			// the job id makes the culprit identifiable in one log line
+			return fmt.Errorf("cannot collect garbage while job %s is running", j.ID)
 		}
 	}
 	referenced := map[string]bool{}
