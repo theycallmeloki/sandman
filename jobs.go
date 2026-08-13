@@ -1082,6 +1082,10 @@ func (d *daemon) reset() error {
 	if err := d.checkMetadata(); err != nil {
 		return fmt.Errorf("reset aborted: corrupted metadata (%w)", err)
 	}
+	// stop cron tickers first: a tick landing after the repos/ sweep would
+	// write a commit into a freshly recreated repo and resurrect state
+	// (a runaway pipeline must not survive its own reset).
+	d.stopAllCronTickers()
 	// cancel in-flight work so no goroutine writes into removed state
 	d.jobsMu.Lock()
 	var ids []string
@@ -1092,12 +1096,14 @@ func (d *daemon) reset() error {
 	for _, id := range ids {
 		d.cancelJob(id)
 	}
-	os.RemoveAll(filepath.Join(d.state, "repos"))
-	os.RemoveAll(filepath.Join(d.state, "pipelines"))
-	os.RemoveAll(filepath.Join(d.state, "jobs"))
-	os.RemoveAll(filepath.Join(d.state, "logs"))
-	os.RemoveAll(filepath.Join(d.state, "transactions"))
-	os.RemoveAll(filepath.Join(d.state, "dedup"))
+	// the whole state dir goes: repos, pipelines, jobs, logs, dedup,
+	// spout markers, trigger ledgers, secrets, transactions, tags
+	entries, err := os.ReadDir(d.state)
+	if err == nil {
+		for _, e := range entries {
+			os.RemoveAll(filepath.Join(d.state, e.Name()))
+		}
+	}
 	if err := os.MkdirAll(filepath.Join(d.state, "repos"), 0o755); err != nil {
 		return err
 	}

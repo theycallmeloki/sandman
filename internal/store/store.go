@@ -16,12 +16,14 @@ package store
 // empty flag has no view at all: nothing is readable through it, even at
 // the branch head (SB-118).
 import (
+	"archive/tar"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -217,6 +219,96 @@ func validPath(p string) bool {
 }
 
 // ---- low-level record I/O ----
+
+// TarDir writes dir's tree to tw as tar entries rooted at prefix. Missing
+// dirs and non-dir roots are skipped; files ending in .tmp (mid-rename
+// scratch) never enter an archive.
+func (s *Store) TarDir(tw *tar.Writer, dir, prefix string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	prev := ""
+	return filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if fi.IsDir() && p == dir {
+			return nil // children carry the prefix
+		}
+		if !fi.IsDir() && strings.HasSuffix(fi.Name(), ".tmp") {
+			return nil
+		}
+		defer func() { prev = p }()
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		hdr := &tar.Header{
+			Name:    prefix + "/" + filepath.ToSlash(rel),
+			Mode:    int64(fi.Mode().Perm()),
+			ModTime: fi.ModTime(),
+		}
+		if fi.IsDir() {
+			hdr.Typeflag = tar.TypeDir
+			hdr.Name += "/"
+		} else {
+			hdr.Typeflag = tar.TypeReg
+			hdr.Size = fi.Size()
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("backup %s (after %s): %w", p, prev, err)
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		// Copy exactly the stat'd size: the daemon-owned dirs are not
+		// under the store lock, and a transform writing into a job's out
+		// dir can change a file between stat and copy. A grown file is
+		// snapshotted at its stat-time prefix (consistent point-in-time
+		// semantics); a shrunk file (truncate+rewrite) is retried once —
+		// atomic tmp+rename writers make the retry stable.
+		size := fi.Size()
+		for attempt := 0; ; attempt++ {
+			f, err := os.Open(p)
+			if err != nil {
+				return err
+			}
+			_, err = io.CopyN(tw, f, size)
+			f.Close()
+			if err == nil {
+				return nil
+			}
+			if err == io.EOF && attempt == 0 {
+				continue
+			}
+			return fmt.Errorf("backup %s (after %s): %w", p, prev, err)
+		}
+	})
+}
+
+// BackupTar writes the store's durable state — repositories and tags —
+// into tw (the caller owns the tar stream). The store's write lock is
+// held for the whole copy: in the single-writer design the mutex is the
+// buffer — pending repo writes queue on it and land after the snapshot,
+// so a captured ref can never point at a commit missing from the archive.
+func (s *Store) BackupTar(tw *tar.Writer) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.TarDir(tw, s.dir, "repos"); err != nil {
+		return err
+	}
+	if err := s.TarDir(tw, filepath.Join(filepath.Dir(s.dir), "tags"), "tags"); err != nil {
+		return err
+	}
+	return nil
+}
 
 func (s *Store) RepoDir(name string) string {
 	return filepath.Join(s.dir, name)

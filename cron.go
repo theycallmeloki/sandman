@@ -105,6 +105,18 @@ func (d *daemon) stopCronTickers(pipeline string) {
 	d.cronMu.Unlock()
 }
 
+// stopAllCronTickers cancels every cron ticker (reset): a reset removes
+// the pipelines whose schedules own the tickers, and a surviving ticker
+// would write into the freshly recreated store.
+func (d *daemon) stopAllCronTickers() {
+	d.cronMu.Lock()
+	defer d.cronMu.Unlock()
+	for repo, cancel := range d.cronTickers {
+		cancel()
+		delete(d.cronTickers, repo)
+	}
+}
+
 // cronTick creates one tick commit: a file named by the tick time (UTC
 // RFC3339 — a legal path with no glob metacharacters, SB-089) in the cron
 // repository. With overwrite the previous tick's file is tombstoned so

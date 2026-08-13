@@ -1049,9 +1049,10 @@ func (c *Client) DeleteJob(id string) error {
 }
 
 // Reset removes every repository, pipeline, and job (SB-037). It is
-// idempotent and requires healthy metadata (D-08).
+// idempotent and requires healthy metadata (D-08). The yes=1 parameter is
+// the destructive confirmation: the endpoint refuses without it.
 func (c *Client) Reset() error {
-	return c.do("POST", "/api/v1/reset", nil, nil)
+	return c.do("POST", "/api/v1/reset?yes=1", nil, nil)
 }
 
 // Version reports the control plane's version (the daemon's baked build
@@ -1539,4 +1540,27 @@ func (c *Client) FollowLogs(p LogParams) (io.ReadCloser, error) {
 		return nil, &Error{Status: resp.StatusCode, Message: e.Error}
 	}
 	return resp.Body, nil
+}
+
+// Backup streams the control plane's full durable state as a tar.gz into
+// w: repos, tags, pipelines, jobs, dedup, logs, spout markers, secrets,
+// transactions, triggers — everything under the state dir. The store part
+// is captured under the store's write lock (the single-writer's buffer),
+// so a restored state is a consistent point-in-time snapshot.
+func (c *Client) Backup(w io.Writer) error {
+	req, err := http.NewRequest("GET", c.base+"/api/v1/backup", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return decodeError(resp.StatusCode, b)
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
 }

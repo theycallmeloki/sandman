@@ -133,6 +133,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/hosts/{name}", hErr(d.deleteHostH))
 	mux.HandleFunc("GET /api/v1/metrics", hErr(d.metricsH))
 	mux.HandleFunc("GET /api/v1/version", hErr(d.versionH))
+	mux.HandleFunc("GET /api/v1/backup", hErr(d.backupH))
 	mux.HandleFunc("POST /api/v1/gc", hErr(d.collectGarbageH))
 	mux.HandleFunc("POST /api/v1/check", hErr(d.checkH))
 	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
@@ -1247,6 +1248,9 @@ func (d *daemon) listJobsH(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (d *daemon) resetH(w http.ResponseWriter, r *http.Request) error {
+	if r.URL.Query().Get("yes") != "1" {
+		return fmt.Errorf("reset destroys every repo and pipeline; pass ?yes=1")
+	}
 	if err := d.reset(); err != nil {
 		return err
 	}

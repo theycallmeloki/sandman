@@ -183,6 +183,17 @@ revisions, and jobs that run them.
   sniffed from the bytes
 - `PUT/GET /api/v1/tags/{name}` `GET /api/v1/tags` — durable global names
   bound to file content, listed with their object reference
+- `GET /api/v1/backup` — full control-plane state as a tar.gz: repos,
+  tags, pipelines, jobs, dedup, logs, spout markers, secrets,
+  transactions, triggers. The store part is captured under the store's
+  write lock — the single-writer's buffer — so the archive is a
+  consistent point-in-time state (a captured ref always has its commit
+  in the same archive). Restore: stop the daemon, extract into the
+  state dir, start. `sandman backup [dest]`
+- `POST /api/v1/reset?yes=1` — destroy every repo, pipeline, job,
+  secret, tag, spout marker, and trigger ledger; the internal `spec`
+  repo is recreated empty and the fleet keeps running. Refuses without
+  `yes=1`. `sandman reset --yes`
 - `POST/GET/DELETE /api/v1/pipelines[/{name}]` — pipelines. The create body
   carries `update: true` to apply a new version (creating when absent);
   `reprocess: true` is a persisted spec field: every job re-executes all

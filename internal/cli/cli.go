@@ -174,7 +174,60 @@ func dataPlaneCommands() []*cobra.Command {
 		newTagCmd(),
 		newLogsCmd(),
 		newTransactionCmd(),
+		newBackupCmd(),
+		newResetCmd(),
 	}
+}
+
+// newBackupCmd snapshots the full control-plane state to a tar.gz: repos,
+// tags, pipelines, jobs, dedup, logs, spout markers, secrets, transactions,
+// triggers. The store part is captured under the store's write lock, so
+// the archive is a consistent point-in-time state. Restore is manual by
+// design: stop the daemon, extract into the state dir, start the daemon.
+func newBackupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backup [dest]",
+		Short: "snapshot the full control-plane state to a tar.gz",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			dest := "sandman-backup-" + time.Now().UTC().Format("20060102-150405") + ".tar.gz"
+			if len(args) == 1 {
+				dest = args[0]
+			}
+			f, err := os.Create(dest)
+			if err != nil {
+				die("backup: "+err.Error(), 1)
+			}
+			defer f.Close()
+			if err := cliClient().Backup(f); err != nil {
+				die("backup: "+err.Error(), 1)
+			}
+			fmt.Printf("backed up control-plane state to %s\n", dest)
+			fmt.Println("restore: stop the daemon, extract the archive into the state dir, start the daemon")
+		},
+	}
+}
+
+// newResetCmd destroys every pipeline and repository, returning the state
+// dir to zero (the internal spec repo survives; the fleet keeps running).
+// Requires --yes: this is unrecoverable without a backup.
+func newResetCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "destroy every repo and pipeline (state to zero)",
+		Run: func(cmd *cobra.Command, _ []string) {
+			yes, _ := cmd.Flags().GetBool("yes")
+			if !yes {
+				die("reset: this destroys every repo and pipeline; pass --yes", 1)
+			}
+			if err := cliClient().Reset(); err != nil {
+				die("reset: "+err.Error(), 1)
+			}
+			fmt.Println("reset complete — repos, pipelines, jobs, secrets, tags cleared (spec repo recreated)")
+		},
+	}
+	cmd.Flags().Bool("yes", false, "confirm the destructive reset")
+	return cmd
 }
 
 func newRepoCmd() *cobra.Command {
