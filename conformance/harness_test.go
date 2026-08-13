@@ -186,7 +186,12 @@ func procPPID(pid string) int {
 // new one binds the port.
 func restartDaemon(t *testing.T) {
 	t.Helper()
-	stopDaemon()
+	// restart simulates a CRASH: SIGKILL, no graceful cleanup — the
+	// tests assert the crash-recovery paths (a mid-flight job's record
+	// is marked failed by the next daemon, SB-031). The graceful stop
+	// (stopDaemon) is only for the final teardown.
+	_ = daemonCmd.Process.Kill()
+	_ = daemonCmd.Wait()
 	startDaemon(daemonStateDir)
 	if !waitPort(daemonPort, 15*time.Second) {
 		t.Fatal("daemon did not come back up after restart")
