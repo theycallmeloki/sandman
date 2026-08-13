@@ -14,7 +14,7 @@ ROLE := daemon
 endif
 
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w" -o sandman .
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w$(if $(VERSION), -X main.Version=$(VERSION),)" -o sandman .
 
 # install: one binary + the unit for the chosen role. `systemctl enable --now
 # sandman` (daemon) or `sandman-worker` (worker) and the node joins the fleet.
@@ -58,7 +58,10 @@ uninstall:
 # VERSION defaults to the newest git tag (v stripped). Publishing (after
 # `git tag v$(VERSION) && git push origin v$(VERSION)`):
 #   gh release create v$(VERSION) sandman-linux-amd64 sandman-linux-amd64.sha256 --notes "..."
-VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+# VERSION defaults to the highest semver tag (v stripped) — git describe
+# picks arbitrarily when several tags share one commit (the 0.0.x re-cut
+# line all point at the same revision).
+VERSION ?= $(shell git tag --sort=-v:refname 2>/dev/null | head -1 | sed 's/^v//')
 
 release:
 	@test -n "$(VERSION)" || (echo "no git tags yet — set VERSION=x.y.z" >&2; exit 1)
