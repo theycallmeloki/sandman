@@ -240,6 +240,24 @@ func spoutDiff(dir string, committed map[string]string) map[string]string {
 			changed[p] = h
 		}
 	}
+	// A changed file caught mid-write (a non-atomic ">" truncates before
+	// writing; the daemon polls on a directory watch with no open/close
+	// signal) would commit an empty or partial snapshot — observed as a
+	// zero-byte head the downstream then copied. Verify each changed
+	// file is stable across a short window and defer mid-write files to
+	// the next poll: the writer's final state is stable and commits.
+	if len(changed) > 0 {
+		time.Sleep(10 * time.Millisecond)
+		for p := range changed {
+			if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
+				if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != changed[p] {
+					delete(changed, p) // still being written: catch it next cycle
+				}
+			} else {
+				delete(changed, p) // vanished mid-write
+			}
+		}
+	}
 	return changed
 }
 
