@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"sandman/client"
 )
@@ -214,4 +215,84 @@ func TestSB051_SecretBindingSurvivesRestart(t *testing.T) {
 			t.Fatalf("%s after restart = %q, want %q", f, got, "restartfoo")
 		}
 	}
+}
+
+// TestSB051_SameMountPathMerges — references to several keys at one
+// MountPath merge into a single bind mount: the pachyderm-style
+// {name, mountPath} pattern declares multiple keys at one path, and
+// docker rejects duplicate mount points for the same container path
+// (the pre-fix behavior failed the job with exit 125).
+func TestSB051_SameMountPathMerges(t *testing.T) {
+	withContainerDaemon(t)
+	repo := uniq(t)
+	mustRepo(t, repo)
+	commitFiles(t, repo, "master", map[string]string{"file": "x\n"})
+	secretName := uniq(t)
+	if err := c.CreateSecret(secretName, map[string]string{"foo": "secretfoo", "bar": "secretbar"}); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	t.Run("two keys share one mount path", func(t *testing.T) {
+		p := client.Pipeline{
+			Name: uniq(t),
+			Transform: &client.Transform{
+				Image: "alpine",
+				Cmd: []string{"sh", "-c",
+					"cat /sandman/secrets/foo > ${OUT}/a; cat /sandman/secrets/bar > ${OUT}/b"},
+				Secrets: []client.SecretMount{
+					{Name: secretName, Key: "foo", MountPath: "/sandman/secrets"},
+					{Name: secretName, Key: "bar", MountPath: "/sandman/secrets"},
+				},
+			},
+			Input: &client.Input{Repo: repo, Glob: "/"},
+		}
+		mustPipeline(t, p)
+		cm := commitFiles(t, repo, "master", map[string]string{"file2": "y\n"})
+		jobs := flushOK(t, cm.ID)
+		for _, tc := range []struct{ path, want string }{
+			{"a", "secretfoo"},
+			{"b", "secretbar"},
+		} {
+			b, err := c.GetFile(jobs[0].OutputCommit, tc.path)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.path, err)
+			}
+			if string(b) != tc.want {
+				t.Fatalf("%s = %q, want %q", tc.path, string(b), tc.want)
+			}
+		}
+	})
+
+	t.Run("duplicate key on one path is rejected", func(t *testing.T) {
+		p := client.Pipeline{
+			Name: uniq(t),
+			Transform: &client.Transform{
+				Image: "alpine",
+				Cmd:   []string{"sh", "-c", "true"},
+				Secrets: []client.SecretMount{
+					{Name: secretName, Key: "foo", MountPath: "/sandman/secrets"},
+					{Name: secretName, Key: "foo", MountPath: "/sandman/secrets"},
+				},
+			},
+			Input: &client.Input{Repo: repo, Glob: "/"},
+		}
+		mustPipeline(t, p)
+		cm := commitFiles(t, repo, "master", map[string]string{"file3": "z\n"})
+		jobs, err := c.Flush(cm.ID, 60*time.Second)
+		if err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		var failed *client.Job
+		for i := range jobs {
+			if jobs[i].State == "failure" {
+				failed = &jobs[i]
+			}
+		}
+		if failed == nil {
+			t.Fatalf("duplicate-mount jobs = %+v, want the pipeline's failure", jobs)
+		}
+		if !strings.Contains(failed.Reason, "already mounted") {
+			t.Fatalf("job reason %q, want the duplicate-key message", failed.Reason)
+		}
+	})
 }

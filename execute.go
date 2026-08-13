@@ -398,8 +398,15 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// secret bindings (SB-051 clause 2, D-05): each reference's key is
 	// written as a file at MountPath/<key> and/or injected as the env
 	// var, so secret values reach the execution environment before the
-	// job starts
-	for i, m := range pl.Pipeline.Transform.Secrets {
+	// job starts. References sharing a MountPath merge into one bind
+	// mount: the pachyderm-style {name, mountPath} pattern declares
+	// several keys at one path, and docker rejects duplicate mount
+	// points for the same container path (exit 125). A key mounted
+	// twice on one path (from two secrets, or twice from one) is an
+	// ambiguity — rejected rather than silently overwritten.
+	mountDirs := map[string]string{}            // mountPath -> host dir
+	mountKeys := map[string]map[string]string{} // host dir -> key -> secret name
+	for _, m := range pl.Pipeline.Transform.Secrets {
 		if !store.ValidName(m.Name) {
 			fail("invalid secret name: " + m.Name)
 			d.finishOutput(pl, outCommit, "", true)
@@ -421,8 +428,24 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			jx.extraEnv = append(jx.extraEnv, m.EnvVar+"="+v)
 		}
 		if m.MountPath != "" {
-			dir := filepath.Join(d.jobDir(id), "secrets", strconv.Itoa(i))
-			os.MkdirAll(dir, 0o755)
+			dir, ok := mountDirs[m.MountPath]
+			if !ok {
+				dir = filepath.Join(d.jobDir(id), "secrets", strconv.Itoa(len(mountDirs)))
+				os.MkdirAll(dir, 0o755)
+				mountDirs[m.MountPath] = dir
+				mountKeys[dir] = map[string]string{}
+				jx.extraMounts = append(jx.extraMounts, "-v", dir+":"+m.MountPath)
+			}
+			mount := func(key, val string) bool {
+				if owner, dup := mountKeys[dir][key]; dup {
+					fail(fmt.Sprintf("secret mount: key %q at %q already mounted from secret %q", key, m.MountPath, owner))
+					d.finishOutput(pl, outCommit, "", true)
+					return false
+				}
+				mountKeys[dir][key] = m.Name
+				os.WriteFile(filepath.Join(dir, key), []byte(val), 0o644)
+				return true
+			}
 			if m.Key != "" {
 				v, ok := srec.Data[m.Key]
 				if !ok {
@@ -430,13 +453,16 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 					d.finishOutput(pl, outCommit, "", true)
 					return
 				}
-				os.WriteFile(filepath.Join(dir, m.Key), []byte(v), 0o644)
+				if !mount(m.Key, v) {
+					return
+				}
 			} else {
 				for k, v := range srec.Data {
-					os.WriteFile(filepath.Join(dir, k), []byte(v), 0o644)
+					if !mount(k, v) {
+						return
+					}
 				}
 			}
-			jx.extraMounts = append(jx.extraMounts, "-v", dir+":"+m.MountPath)
 		}
 	}
 	// the live execution context is visible to the datum API (restart,

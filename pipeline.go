@@ -592,7 +592,18 @@ func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, i
 	// not-yet-scheduled goroutine would otherwise escape the cancel and
 	// run the old version indefinitely (SB-045)
 	rj := d.registerRunning(id, rec.Pipeline.Name)
-	go guard(func() { d.runJob(*rec, heads, id, propagated, pre, rj) })
+	go guard(func() {
+		// a panic must not abandon the job with a forever-"running"
+		// record: settle it failed first (the wedge-breaker), then let
+		// the guard log the stack
+		defer func() {
+			if r := recover(); r != nil {
+				d.settlePanicJob(id)
+				panic(r)
+			}
+		}()
+		d.runJob(*rec, heads, id, propagated, pre, rj)
+	})
 	return id
 }
 

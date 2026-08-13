@@ -1343,3 +1343,46 @@ func (d *daemon) deleteCommit(ref string) error {
 	}
 	return nil
 }
+
+// settlePanicJob marks a job whose runJob goroutine panicked as failed:
+// the guard would otherwise abandon it with a forever-"running" record,
+// which wedges every later flush (timeout) and garbage collection
+// (refusal) — the stuck-job class. The record update is the wedge-
+// breaker and touches no locks; the empty-commit finish is best-effort
+// (the panic may have struck while the pipeline's repo lock was held, in
+// which case the finish is skipped and the next job's own start-output
+// failure path reports the open commit).
+func (d *daemon) settlePanicJob(id string) {
+	dir := d.jobDir(id)
+	b, err := os.ReadFile(filepath.Join(dir, "job.json"))
+	if err != nil {
+		return // the panic struck before the record existed
+	}
+	var rec jobRec
+	if json.Unmarshal(b, &rec) != nil || rec.State != stateRunning {
+		return // already terminal: nothing to settle
+	}
+	rec.State = stateFailure
+	rec.Reason = "internal error: job goroutine panicked"
+	rec.Finished = now()
+	d.saveJob(&rec)
+	if rec.OutputCommit == "" {
+		return
+	}
+	// close the output commit empty so the DAG stays continuous (SB-022);
+	// bounded so a panic under the repo lock cannot wedge this settle too
+	go func() {
+		m := d.repoLock(rec.Pipeline)
+		acquired := make(chan struct{})
+		go func() {
+			m.Lock()
+			close(acquired)
+		}()
+		select {
+		case <-acquired:
+			defer m.Unlock()
+			d.store.FinishCommit(rec.OutputCommit, "", true)
+		case <-time.After(2 * time.Second):
+		}
+	}()
+}
