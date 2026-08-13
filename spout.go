@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -172,6 +173,36 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 			if ctx.Err() == context.DeadlineExceeded {
 				continue // docker is stalled; try again on the next tick
 			}
+			// a momentary daemon blip must not kill a live spout:
+			// retry the inspect briefly before declaring the container
+			// gone.
+			live := false
+			for r := 0; r < 3; r++ {
+				time.Sleep(500 * time.Millisecond)
+				rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+				rout, rerr := exec.CommandContext(rctx, "docker", "inspect", "-f", "{{.State.Running}}", cname).Output()
+				rcancel()
+				if rerr == nil {
+					if strings.TrimSpace(string(rout)) == "true" {
+						live = true // recovered: resume normal polling
+					}
+					break
+				}
+			}
+			if live {
+				continue
+			}
+			// the container is gone or docker is broken: settle, but
+			// first commit the final visible cycle — the container's
+			// exit is indistinguishable from a persistent inspect
+			// error, and a cycle must not be lost to either. The
+			// container is removed so a still-running one cannot
+			// orphan.
+			log.Printf("spout %s: inspect failed persistently (%v); committing final cycle", pl.Pipeline.Name, err)
+			commitCycle(true)
+			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
+			rmCancel()
 			settle(stateFailure, "spout container exited unexpectedly")
 			break
 		} else if strings.TrimSpace(string(out)) != "true" {
