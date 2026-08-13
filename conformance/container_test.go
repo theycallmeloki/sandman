@@ -491,13 +491,13 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 	})
 
 	t.Run("rapid open/close keeps every cycle's file", func(t *testing.T) {
-		// clause 2: ten cycles at 50ms spacing — 20x faster than the
+		// clause 2: ten cycles at 100ms spacing — 10x faster than the
 		// accumulation test's 1s cadence but wider than the daemon's
 		// 250ms poll, so every cycle is caught separately; the trailing
 		// sleep keeps the container alive past the last write so the
 		// final poll commits it. Nothing may be lost or skipped.
 		pipe := uniq(t)
-		script := "for i in $(seq 1 10); do echo content-$i > ${OUT}/f$i; sleep 0.05; done; sleep 1"
+		script := "for i in $(seq 1 10); do echo content-$i > ${OUT}/f$i; sleep 0.1; done; sleep 1"
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
 			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", script}},

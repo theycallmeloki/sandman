@@ -136,16 +136,17 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		d.saveJob(rec)
 	}
 	// commitCycle snapshots and commits any data-bearing change; final
-	// runs it once more at the settle so a cycle deferred by the
-	// stability verify (mid-write at the last poll) is not lost to the
-	// container's exit — the files are stable once it is gone.
-	commitCycle := func() {
-		if changed := spoutDiff(outDir, committedOut); len(changed) > 0 {
+	// runs it once more at the settle with the stability verify
+	// disabled — the container is gone, so the visible files are the
+	// final state, and a file deferred by an earlier mid-write check
+	// must not be lost to the exit.
+	commitCycle := func(final bool) {
+		if changed := spoutDiffVerify(outDir, committedOut, !final); len(changed) > 0 {
 			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
 			committedOut = spoutSnapshot(outDir)
 		}
 		if markerDir != "" {
-			if changed := spoutDiff(markerDir, committedMarker); len(changed) > 0 {
+			if changed := spoutDiffVerify(markerDir, committedMarker, !final); len(changed) > 0 {
 				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
 				committedMarker = spoutSnapshot(markerDir)
 			}
@@ -176,14 +177,14 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
 		} else if strings.TrimSpace(string(out)) != "true" {
 			// the container is gone: commit any final cycle — a
 			// deferred mid-write file must not be lost to the settle
-			commitCycle()
+			commitCycle(true)
 			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
 			rmCancel()
 			settle(stateSuccess, "")
 			break
 		}
-		commitCycle()
+		commitCycle(false)
 		time.Sleep(250 * time.Millisecond)
 	}
 	rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -242,7 +243,13 @@ func spoutSnapshot(dir string) map[string]string {
 
 // spoutDiff returns the paths whose content differs from the last cycle's
 // snapshot (new or changed files — the cycle's data).
-func spoutDiff(dir string, committed map[string]string) map[string]string {
+// spoutDiffVerify is the cycle diff with the mid-write stability check
+// optional: verify=true defers files whose content changed across a
+// short window (still being written — commit them next cycle), while
+// the natural-exit settle calls with verify=false — the container is
+// gone, so whatever is visible is the final state, and a file deferred
+// by an earlier verify must not be lost to the settle.
+func spoutDiffVerify(dir string, committed map[string]string, verify bool) map[string]string {
 	files := spoutSnapshot(dir)
 	changed := map[string]string{}
 	for p, h := range files {
@@ -256,7 +263,7 @@ func spoutDiff(dir string, committed map[string]string) map[string]string {
 	// zero-byte head the downstream then copied. Verify each changed
 	// file is stable across a short window and defer mid-write files to
 	// the next poll: the writer's final state is stable and commits.
-	if len(changed) > 0 {
+	if verify && len(changed) > 0 {
 		time.Sleep(10 * time.Millisecond)
 		for p := range changed {
 			if b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
