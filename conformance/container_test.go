@@ -279,6 +279,51 @@ func TestSB128_UserIdentityAndWorkingDir(t *testing.T) {
 }
 func TestSB139_SpoutPipelines(t *testing.T) {
 	withContainerDaemon(t)
+	t.Run("stop and start a spout", func(t *testing.T) {
+		pipe := uniq(t)
+		mustPipeline(t, client.Pipeline{
+			Name:      pipe,
+			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(100, 8, false)},
+			Spout:     &client.Spout{},
+		})
+		waitSpoutCommits(t, pipe, 2)
+		// stopping a spout must not panic: its Input is nil by design,
+		// and the pre-fix stopPipeline dereferenced it under
+		// pipelineRecMu, leaking the mutex and wedging every control-
+		// plane operation (job list hung 60s; restart required)
+		if err := c.StopPipeline(pipe); err != nil {
+			t.Fatalf("stop spout pipeline: %v", err)
+		}
+		pollFor(t, "spout pipeline paused", 15*time.Second, func() bool {
+			i, err := c.InspectPipeline(pipe)
+			return err == nil && i.Stopped && i.State == "paused"
+		})
+		// the background spout job is cancelled and settles
+		js, _ := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
+		if len(js) == 0 {
+			t.Fatalf("no spout jobs recorded")
+		}
+		pollFor(t, "spout job settles after stop", 30*time.Second, func() bool {
+			j, err := c.InspectJob(js[len(js)-1].ID)
+			return err == nil && j.State != "running"
+		})
+		// the control plane still answers: the job-list path blocks on
+		// pipelineRecMu, so a leaked lock would hang this call
+		if _, err := c.ListPipelines(); err != nil {
+			t.Fatalf("list pipelines after stop: %v", err)
+		}
+		// resume: the spout restarts from its preserved state and keeps
+		// committing — there is no input head to replay, so the start
+		// path must not dereference the nil Input either
+		if err := c.StartPipeline(pipe); err != nil {
+			t.Fatalf("start spout pipeline: %v", err)
+		}
+		pollFor(t, "spout pipeline running", 15*time.Second, func() bool {
+			i, err := c.InspectPipeline(pipe)
+			return err == nil && !i.Stopped && i.State == "running"
+		})
+		waitSpoutCommits(t, pipe, 4) // new commits accumulate after resume
+	})
 	t.Run("spout accumulates commits", func(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{

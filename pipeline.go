@@ -862,26 +862,28 @@ func (d *daemon) loadAllPipelineRecs() []*pipelineRec {
 
 // stopPipeline pauses the pipeline: the persistent Stopped flag is set, the
 // transient state reports statePaused (SB-028), and the input head at stop
-// time becomes the backlog watermark.
+// time becomes the backlog watermark. A spout declares no input (SB-139:
+// it is rejected with one), so it has no watermark — stopping it just ends
+// the background job.
 func (d *daemon) stopPipeline(name string) error {
 	pipelineRecMu.Lock()
+	defer pipelineRecMu.Unlock()
 	rec, err := d.loadPipeline(name)
 	if err != nil {
-		pipelineRecMu.Unlock()
 		return notFound("pipeline %q not found", name)
 	}
 	rec.Stopped = true
 	rec.State = statePaused
-	if head, err := d.store.HeadCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil {
-		rec.StoppedAt = head.ID
+	if rec.Pipeline.Input != nil {
+		if head, err := d.store.HeadCommitRec(rec.Pipeline.Input.Repo, defaultBranch); err == nil {
+			rec.StoppedAt = head.ID
+		}
 	}
 	// a paused pipeline's in-flight work stops: stopping ends active
 	// processing, so garbage collection can proceed (SB-079) and the
 	// paused pipeline holds no containers
 	d.cancelPipelineJobs(name)
-	err = d.savePipeline(rec)
-	pipelineRecMu.Unlock()
-	return err
+	return d.savePipeline(rec)
 }
 
 // startPipeline resumes the pipeline and processes the backlog: the
@@ -892,13 +894,12 @@ func (d *daemon) stopPipeline(name string) error {
 // not re-run).
 func (d *daemon) startPipeline(name string) error {
 	pipelineRecMu.Lock()
+	defer pipelineRecMu.Unlock()
 	rec, err := d.loadPipeline(name)
 	if err != nil {
-		pipelineRecMu.Unlock()
 		return notFound("pipeline %q not found", name)
 	}
 	if !rec.Stopped {
-		pipelineRecMu.Unlock()
 		return nil // already running
 	}
 	stopAt := rec.StoppedAt
@@ -906,7 +907,6 @@ func (d *daemon) startPipeline(name string) error {
 	rec.State = stateRunning
 	rec.StoppedAt = ""
 	err = d.savePipeline(rec)
-	pipelineRecMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -914,6 +914,14 @@ func (d *daemon) startPipeline(name string) error {
 		// a stopped service was cancelled; starting it brings the long-
 		// lived process back up serving the current input head (SB-100)
 		d.spawnServiceJob(rec)
+		return nil
+	}
+	if rec.Pipeline.Spout != nil {
+		// a stopped spout was cancelled; starting it resumes the spout
+		// from its preserved marker state (SB-139 clause 10: a plain
+		// restart does not reset the marker) — there is no input head
+		// to process, so no backlog path exists
+		d.spawnSpoutJob(rec, false)
 		return nil
 	}
 	chain := d.store.ChainFromHead(rec.Pipeline.Input.Repo, defaultBranch, stopAt)
