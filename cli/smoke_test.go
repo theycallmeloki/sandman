@@ -324,12 +324,29 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("job inspect %q: want state: success", ji)
 	}
 
-	// 6. pipeline delete removes it from the listing
-	mustCLI(t, "", "pipeline", "delete", "cap2")
-	pl := mustCLI(t, "", "pipeline", "list")
-	if strings.Contains(pl, "cap2") {
-		t.Fatalf("pipeline list %q after delete: cap2 still present", pl)
+	// 6. a downstream consumer refuses a plain delete and the error names
+	// --force; --force deletes the mid-DAG pipeline anyway, leaving the
+	// consumer with a dangling input (SB-026) — the CLI advertised the
+	// flag before it existed, dead-ending the delete
+	downSpec := filepath.Join(t.TempDir(), "down.json")
+	if err := os.WriteFile(downSpec, []byte(`{
+	  "name": "cap2down",
+	  "transform": {"image": "alpine"},
+	  "input": {"repo": "cap2", "glob": "/*"}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	mustCLI(t, "", "pipeline", "create", "-f", downSpec)
+	if errs := failCLI(t, "pipeline", "delete", "cap2"); !strings.Contains(errs, "downstream") {
+		t.Fatalf("pipeline delete cap2 stderr %q: want downstream-consumers refusal", errs)
+	}
+	mustCLI(t, "", "pipeline", "delete", "cap2", "--force")
+	pl := mustCLI(t, "", "pipeline", "list")
+	if strings.Contains(pl, "cap2 ") { // padded name: cap2down must not match
+		t.Fatalf("pipeline list %q after forced delete: cap2 still present", pl)
+	}
+	// cleanup: the dangling consumer is a leaf now
+	mustCLI(t, "", "pipeline", "delete", "cap2down")
 
 	// 6b. transaction resume stages subsequent creates into the active tx
 	// (XDG_CONFIG_HOME isolates the active-tx marker)

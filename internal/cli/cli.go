@@ -218,6 +218,7 @@ func newRepoCmd() *cobra.Command {
 }
 
 var forceDelete bool
+var forcePipelineDelete bool
 
 func newCommitCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "commit", Short: "manage commits"}
@@ -810,6 +811,17 @@ func newPipelineCmd() *cobra.Command {
 	update.Flags().StringVarP(&specFile, "spec", "f", "-", "pipeline spec JSON file ('-' = stdin)")
 	cmd.AddCommand(update)
 
+	pdel := &cobra.Command{
+		Use:  "delete <name>",
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			if err := cliClient().DeletePipeline(args[0], forcePipelineDelete, false); err != nil {
+				die("pipeline delete: "+err.Error(), 1)
+			}
+			fmt.Printf("deleted pipeline %s\n", args[0])
+		},
+	}
+	pdel.Flags().BoolVar(&forcePipelineDelete, "force", false, "delete a pipeline even if it has downstream consumers")
 	cmd.AddCommand(
 		&cobra.Command{
 			Use: "list",
@@ -842,16 +854,7 @@ func newPipelineCmd() *cobra.Command {
 				fmt.Printf("%-10s : %s\n", "reason", p.Reason)
 			},
 		},
-		&cobra.Command{
-			Use:  "delete <name>",
-			Args: cobra.ExactArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				if err := cliClient().DeletePipeline(args[0], false, false); err != nil {
-					die("pipeline delete: "+err.Error(), 1)
-				}
-				fmt.Printf("deleted pipeline %s\n", args[0])
-			},
-		},
+		pdel,
 		&cobra.Command{
 			Use:  "start <name>",
 			Args: cobra.ExactArgs(1),
