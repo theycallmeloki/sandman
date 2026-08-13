@@ -88,6 +88,19 @@ type RunResult struct {
 // isProvisioningError reports whether a failed run never started the
 // execution — an environment problem, not a user-code failure.
 func isProvisioningError(tail string) bool {
+	// A first-run pull that succeeded is NOT a provisioning failure:
+	// docker prints "Unable to find image" as an informational notice
+	// even when the pull completes, so that marker alone would
+	// misclassify a user-code failure that follows a slow first pull as
+	// an environment problem — crashing the pipeline (which then stops
+	// scheduling) on a perfectly fixable transform. The pull-success
+	// markers say the image WAS obtainable; whatever failed after that
+	// is not provisioning.
+	for _, ok := range []string{"Pull complete", "Downloaded newer image", "Status: Downloaded"} {
+		if strings.Contains(tail, ok) {
+			return false
+		}
+	}
 	for _, marker := range []string{
 		"invalid reference format",
 		"Unable to find image",
