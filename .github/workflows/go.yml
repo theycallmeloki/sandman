@@ -1,6 +1,13 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-# This workflow builds, tests, and lints the Go project
+# This workflow builds, tests, and lints the Go project.
+
+# The conformance suite is docker-heavy and sequential: under a single CI
+# runner it runs ~2x slower than locally (33-45m) and individual docker
+# operations exceed the tests' 60s job waits, collapsing into a cascade of
+# timeouts (observed on every full-suite CI run). The suite is split into
+# three matrix shards by test-name range, each on its own runner: a shard
+# holds roughly a third of the docker load, fits comfortably in the 45m
+# budget, and a contention cascade in one shard no longer fails the others
+# (fail-fast: false).
 
 name: Go
 
@@ -43,11 +50,50 @@ jobs:
       - name: Build
         run: go build -v ./...
 
-      - name: Test
-        # the conformance suite is docker-heavy and exceeds 30m under CI
-        # runner load (observed: timeout cascades at ~33m); 45m fits the
-        # worst observed run while still failing on a genuine hang
-        run: go test -timeout 45m ./...
+      - name: Test (root unit tests)
+        run: go test -timeout 15m .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # SB-001..059 plus the non-SB docker-heavy tests
+          - name: sb001-059
+            pattern: 'TestSB(00[1-9]|0[1-5][0-9])|TestD[0-9]+|TestEgress|TestFS|TestService'
+          # SB-060..119
+          - name: sb060-119
+            pattern: 'TestSB(0[6-9][0-9]|1[01][0-9])'
+          # SB-120..173 plus the fast non-SB tests, the cli smoke, and the
+          # root unit tests (the lightest shard carries the extra suites)
+          - name: sb120-rest
+            pattern: 'TestSB1[2-9][0-9]|TestBranch|TestFetch|TestHyphenated|TestSecrets|TestTagDelete|TestTx|TestMain'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # the suite's images are used with lazy docker pulls; warming the
+      # runner's cache removes pull latency from the first container runs
+      - name: Prepare docker images
+        run: |
+          docker pull alpine:latest
+          docker pull python:3-alpine
+
+      - name: Conformance (${{ matrix.shard.name }})
+        run: go test -timeout 45m ./conformance/ -run '${{ matrix.shard.pattern }}'
+
+      - name: CLI smoke + root unit tests
+        if: matrix.shard.name == 'sb120-rest'
+        run: |
+          go test -timeout 15m ./cli/...
+          go test -timeout 15m .
 
   race:
     # race-detector pass over the fast suites (root unit tests + the
