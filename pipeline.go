@@ -1137,7 +1137,7 @@ func (rec *pipelineRec) info() client.PipelineInfo {
 // removed unless keepRepo is set (SB-157). An incomplete pipeline is
 // deletable by name only (SB-144).
 func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
-	_, loadErr := d.loadPipeline(name)
+	rec, loadErr := d.loadPipeline(name)
 	if loadErr != nil {
 		if _, err := os.Stat(d.pipelinePath(name)); err != nil {
 			return nil // deleting an already-deleted pipeline is a no-op (SB-010)
@@ -1193,6 +1193,34 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 			// tree and wedges garbage collection (SB-079 accounting)
 			if err := d.store.DeleteRepo(name, true); err != nil {
 				return fmt.Errorf("delete pipeline %q: output repo: %w", name, err)
+			}
+		}
+		// The pipeline's side repos go with it unless another pipeline
+		// still references them: the git-derived mapped repos (shared
+		// by pipelines bound to the same URL — SB-111 — or consumed as
+		// a plain input) and the cron tick repos. A surviving side repo
+		// keeps its blobs referenced forever — the pushed tree or the
+		// tick files — leaking and wedging garbage collection.
+		if rec != nil && rec.Pipeline.Input != nil {
+			for _, repo := range gitSideRepos(rec.Pipeline.Input) {
+				if repo == name || d.repoReferencedByOther(repo, name) {
+					continue
+				}
+				if _, err := os.Stat(d.store.RepoDir(repo)); err == nil {
+					if err := d.store.DeleteRepo(repo, true); err != nil {
+						return fmt.Errorf("delete pipeline %q: git repo %q: %w", name, repo, err)
+					}
+				}
+			}
+			for _, repo := range cronSideRepos(name, rec.Pipeline.Input) {
+				if repo == name || d.repoReferencedByOther(repo, name) {
+					continue
+				}
+				if _, err := os.Stat(d.store.RepoDir(repo)); err == nil {
+					if err := d.store.DeleteRepo(repo, true); err != nil {
+						return fmt.Errorf("delete pipeline %q: cron repo %q: %w", name, repo, err)
+					}
+				}
 			}
 		}
 	}

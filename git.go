@@ -66,6 +66,85 @@ func gitTrackedBranch(g *client.GitInput) string {
 	return "master"
 }
 
+// gitSideRepos returns the mapped repo names of every git input in the
+// spec (deep walk — git sides can be nested in cross/union/join/group):
+// the custom name if declared, else the URL-derived name.
+func gitSideRepos(in *client.Input) []string {
+	var out []string
+	var walk func(n *client.Input)
+	walk = func(n *client.Input) {
+		if n == nil {
+			return
+		}
+		for i := range n.Cross {
+			walk(&n.Cross[i])
+		}
+		for i := range n.Union {
+			walk(&n.Union[i])
+		}
+		for i := range n.Join {
+			walk(&n.Join[i])
+		}
+		for i := range n.Group {
+			walk(&n.Group[i])
+		}
+		if n.Git != nil {
+			if n.Repo != "" {
+				out = append(out, n.Repo)
+			} else {
+				out = append(out, gitRepoName(n.Git.URL))
+			}
+		}
+	}
+	walk(in)
+	return out
+}
+
+// cronSideRepos returns the tick repositories of every cron input in the
+// spec: the per-pipeline repo derived from the side name (SB-089).
+func cronSideRepos(pipeline string, in *client.Input) []string {
+	var out []string
+	var walk func(n *client.Input)
+	walk = func(n *client.Input) {
+		if n == nil {
+			return
+		}
+		for i := range n.Cross {
+			walk(&n.Cross[i])
+		}
+		for i := range n.Union {
+			walk(&n.Union[i])
+		}
+		for i := range n.Join {
+			walk(&n.Join[i])
+		}
+		for i := range n.Group {
+			walk(&n.Group[i])
+		}
+		if n.Cron != "" {
+			out = append(out, cronRepo(pipeline, n.Name)) // mirrors deriveCronRepos
+		}
+	}
+	walk(in)
+	return out
+}
+
+// repoReferencedByOther reports whether any pipeline other than except
+// references the repo in an input position: a plain repo input, a
+// git-derived mapped repo, or a cron tick repo (all carry a Repo on the
+// stored side after derivation).
+func (d *daemon) repoReferencedByOther(repo, except string) bool {
+	for _, p := range d.loadAllPipelineRecs() {
+		if p.Pipeline.Name == except || p.Pipeline.Input == nil {
+			continue
+		}
+		if inputConsumesRepo(p.Pipeline.Input, repo) {
+			return true
+		}
+	}
+	return false
+}
+
 // deriveGitRepos resolves a pipeline spec's git inputs: each side's
 // repository is the mapped name (custom or URL-derived), the side gets
 // the default glob, the tracked branch, and its environment name — and
@@ -195,6 +274,17 @@ func (d *daemon) gitPush(ev gitPushEvent) {
 			d.markPipelineFailed(b.pipeline, fmt.Sprintf("unable to clone private repository (%s)", ev.URL))
 		}
 		return
+	}
+	// A successful push is the recovery signal for a pipeline failed
+	// only by a previous uncloneable push: the repository became
+	// cloneable again (creds fixed, visibility changed), so the failure
+	// clears and the push triggers normally. Without this a failed
+	// pipeline was permanently silenced — commits kept landing with zero
+	// processing until a manual update. The clear is scoped to the clone
+	// reason; structural failures (output repository missing) stay
+	// failed until an explicit repair.
+	for _, b := range bound {
+		d.clearPipelineFailure(b.pipeline, "unable to clone private repository")
 	}
 	// one commit per mapped repository; the revision's tree replaces the
 	// previous revision's content at every path

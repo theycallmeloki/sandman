@@ -116,6 +116,24 @@ func TestSB105_GitCloneFailure(t *testing.T) {
 	if n := commitCount(t, repo, "master"); n != 0 {
 		t.Fatalf("repo has %d commits after the uncloneable push, want 0", n)
 	}
+	// recovery: a subsequent normal push to the same URL is the
+	// repository-becoming-cloneable signal — the failure clears and the
+	// push triggers a job (the review finding: a failed pipeline was
+	// permanently silenced — commits kept landing with zero processing)
+	if err := c.PushGitEvent(url, "master", revHex("b"), map[string]string{"README.md": "v2"}, false); err != nil {
+		t.Fatalf("recovery push errored: %v", err)
+	}
+	pollFor(t, "pipeline recovered and job succeeded", 60*time.Second, func() bool {
+		info, err := c.InspectPipeline(name)
+		if err != nil || info.State != "running" || info.Reason != "" {
+			return false
+		}
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+		if err != nil || len(js) == 0 || js[0].State != "success" {
+			return false
+		}
+		return true
+	})
 }
 
 func TestSB106_GitDuplicateNamesAndURLs(t *testing.T) {

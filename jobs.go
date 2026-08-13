@@ -720,6 +720,24 @@ func (d *daemon) markPipelineRunning(name string) {
 	}
 }
 
+// clearPipelineFailure clears a pipeline's failure state when the reason
+// starts with the given prefix: the failure was a per-event condition
+// (e.g. an uncloneable git repository — the repository becoming cloneable
+// again is the recovery signal) rather than a persistent structural one
+// (output repository missing) that stays failed until an explicit repair.
+// It reports whether the state was cleared.
+func (d *daemon) clearPipelineFailure(name, reasonPrefix string) bool {
+	pipelineRecMu.Lock()
+	defer pipelineRecMu.Unlock()
+	if rec, err := d.loadPipeline(name); err == nil && rec.State == stateFailure && strings.HasPrefix(rec.Reason, reasonPrefix) {
+		rec.State = stateRunning
+		rec.Reason = ""
+		d.savePipeline(rec)
+		return true
+	}
+	return false
+}
+
 // outputMu serializes each pipeline's output-commit write phase. Output
 // commits are opened at job start (their id goes into the job's
 // environment); concurrent jobs of one pipeline would otherwise parent
