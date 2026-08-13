@@ -570,8 +570,9 @@ func (d *daemon) collectGarbage() error {
 		if j.State == stateRunning {
 			// name the offender: a GC refusal on a stale "running" record
 			// from a dead/cancelled job is a bug in whoever left it, and
-			// the job id makes the culprit identifiable in one log line
-			return fmt.Errorf("cannot collect garbage while job %s is running", j.ID)
+			// the job id + pipeline make the culprit identifiable in one
+			// log line
+			return fmt.Errorf("cannot collect garbage while job %s (pipeline %s) is running", j.ID, j.Pipeline)
 		}
 	}
 	referenced := map[string]bool{}
