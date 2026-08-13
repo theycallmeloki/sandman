@@ -11,6 +11,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"sandman/client"
 )
@@ -196,7 +198,9 @@ func (containerRunner) Run(spec JobSpec) RunResult {
 
 // Kill force-kills a running container by name.
 func (containerRunner) Kill(name string) error {
-	return exec.Command("docker", "kill", name).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", "kill", name).Run()
 }
 
 // processRunner executes runs as local processes (TESTING_ARCHITECTURE.md

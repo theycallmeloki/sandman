@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // jobSpec is the text description of a job: an image, an argv, env, and a
@@ -47,7 +49,13 @@ func startJob(spec jobSpec) (*job, error) {
 	}
 	args = append(args, spec.Image)
 	args = append(args, spec.Argv...)
-	out, err := exec.Command("docker", args...).Output()
+	// the create is a control op (plus any image pull): bound it so a
+	// stalled dockerd fails the job instead of wedging it "running"
+	// forever — an unbounded create was observed wedging jobs on a
+	// stalled daemon, which then poisoned every later flush and GC
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker create: %w", err)
 	}
@@ -103,10 +111,14 @@ func startJob(spec jobSpec) (*job, error) {
 
 func (j *job) Signal(sig string) error {
 	name := strings.TrimPrefix(sig, "SIG")
-	return exec.Command("docker", "kill", "-s", "SIG"+name, j.cid).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", "kill", "-s", "SIG"+name, j.cid).Run()
 }
 
 // Kill force-kills the container (client vanished, no orphans).
 func (j *job) Kill() error {
-	return exec.Command("docker", "kill", j.cid).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", "kill", j.cid).Run()
 }
