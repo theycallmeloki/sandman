@@ -169,6 +169,16 @@ func TestSB079_GarbageCollection(t *testing.T) {
 	if err := c.DeletePipeline(pipe, false, false); err != nil {
 		t.Fatalf("delete pipeline: %v", err)
 	}
+	// the output repo must be gone: if it survives, its commits keep the
+	// barbar blob referenced and the GC below cannot reclaim it (the
+	// delete propagates DeleteRepo errors now)
+	if repos, err := c.ListRepos(); err == nil {
+		for _, r := range repos {
+			if r.Name == pipe {
+				t.Fatalf("pipeline's output repo %q survived the delete", pipe)
+			}
+		}
+	}
 	if err := c.CollectGarbage(); err != nil {
 		t.Fatalf("collection after pipeline deletion: %v", err)
 	}

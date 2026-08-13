@@ -1149,7 +1149,13 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 	os.RemoveAll(filepath.Join(d.state, "pipelines", "versions", name))
 	if !keepRepo {
 		if _, err := os.Stat(d.store.RepoDir(name)); err == nil {
-			d.store.DeleteRepo(name, true) // internal: the pipeline is gone
+			// a repo that survives its pipeline's deletion keeps the
+			// pipeline's blobs referenced forever (its commits are the
+			// only references) — a silent failure here leaks the whole
+			// tree and wedges garbage collection (SB-079 accounting)
+			if err := d.store.DeleteRepo(name, true); err != nil {
+				return fmt.Errorf("delete pipeline %q: output repo: %w", name, err)
+			}
 		}
 	}
 	return nil

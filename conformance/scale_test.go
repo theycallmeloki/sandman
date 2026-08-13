@@ -101,6 +101,13 @@ func TestSB097_MaxQueueSize(t *testing.T) {
 		j, err := c.InspectJob(job.ID)
 		return err == nil && j.State == "running"
 	})
+	// the worker status snapshot can race the worker registration (the
+	// record is saved before the pool spins up); wait for both workers to
+	// appear within the job's runtime, then spot-check the queues
+	pollFor(t, "two workers registered", 10*time.Second, func() bool {
+		j, err := c.InspectJob(job.ID)
+		return err == nil && len(j.Workers) == 2
+	})
 	// spot-check the worker queues while the job is in flight
 	for i := 0; i < 10; i++ {
 		j, err := c.InspectJob(job.ID)

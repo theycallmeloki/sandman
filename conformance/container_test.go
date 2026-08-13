@@ -872,7 +872,12 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 	repo := uniq(t) + "r"
 	pipe := uniq(t) + "p"
 	mustRepo(t, repo)
-	mustPipeline(t, client.Pipeline{Name: pipe, Standby: true, Transform: standbyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}})
+	// the wake transform sleeps so the run container is observable for a
+	// full second — a near-instant transform can complete between the
+	// commit and the first docker ps, and the D-01 wake assertion is
+	// about the container existing while the job runs
+	wake := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 2; cp -r ${" + repo + "}/* ${OUT}/"}}
+	mustPipeline(t, client.Pipeline{Name: pipe, Standby: true, Transform: wake, Input: &client.Input{Repo: repo, Glob: "/*"}})
 	pollFor(t, "idle in standby", 30*time.Second, func() bool {
 		return standbyState(t, pipe) == "standby"
 	})
