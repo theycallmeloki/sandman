@@ -61,15 +61,26 @@ func (d *daemon) restartDatum(jobID, datumID string) error {
 		// execution context is not built yet)
 		return fmt.Errorf("job %q is not running", jobID)
 	}
+	// the worker registry entry can lag the datum record's "running"
+	// state by a few hundred ms (the record is written on pick-up, the
+	// worker's jx entry just after): retry the lookup briefly so a
+	// restart issued the instant a datum appears never 400s on the gap
+	// (SB-064; observed on slow runners)
 	var cname string
-	jx.workersMu.Lock()
-	for _, ws := range jx.workers {
-		if ws.Datum == datumID {
-			cname = ws.Cname
+	for i := 0; i < 25; i++ { // ~2.5s
+		jx.workersMu.Lock()
+		for _, ws := range jx.workers {
+			if ws.Datum == datumID {
+				cname = ws.Cname
+				break
+			}
+		}
+		jx.workersMu.Unlock()
+		if cname != "" {
 			break
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	jx.workersMu.Unlock()
 	if cname == "" {
 		return fmt.Errorf("datum %q is not currently being processed", datumID)
 	}
