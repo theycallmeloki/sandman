@@ -1,0 +1,72 @@
+# Builds and publishes a GitHub release for every pushed v* tag. The
+# `sandman update` self-update path consumes the per-platform binary
+# assets (sandman-<os>-<arch> plus its <os>-<arch>.sha256, see
+# update.go), so cutting a release is exactly:
+#
+#   git tag v0.0.2 && git push origin v0.0.2
+#
+# No manual build or upload — the workflow builds with the tag baked in
+# (-X main.Version), checksum-ships the binaries, and creates the
+# release with a changelog of the commits since the previous tag.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog needs the previous tag
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release binaries
+        run: |
+          mkdir -p dist
+          for target in "linux amd64" "linux arm64"; do
+            set -- $target
+            GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-X main.Version=$GITHUB_REF_NAME" \
+              -o dist/sandman-$1-$2 .
+            sha256sum dist/sandman-$1-$2 > dist/sandman-$1-$2.sha256
+          done
+          ls -la dist/
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          body="Automated release $GITHUB_REF_NAME."
+          if [ -n "$prev" ]; then
+            notes=$(git log --oneline --no-merges "$prev..HEAD")
+            if [ -n "$notes" ]; then
+              body="$body
+
+## Changes since $prev
+
+$notes"
+            fi
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists; uploading assets"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            echo "$body" | gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "sandman $GITHUB_REF_NAME" --notes-file -
+          fi
+          gh release view "$GITHUB_REF_NAME" --json name,tagName,assets \
+            -q '"published " + .name + " (" + .tagName + ") with " + ([.assets[].name] | join(", "))'
