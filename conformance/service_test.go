@@ -1,4 +1,4 @@
-// Service pipelines (SB-100/168): one long-lived process serving the
+// Service pipelines: one long-lived process serving the
 // pipeline's input over HTTP, reachable on the control-plane host and
 // proxied by the control plane's API.
 package conformance
@@ -22,7 +22,7 @@ import (
 // process (clause 1), the external endpoint (clause 2), the control-plane
 // proxy (clause 3), the annotation passthrough (clause 4), and the live
 // refresh when a new revision lands (clause 5). The external port is
-// allocated per run (M10): a hardcoded port collides with a stale
+// allocated per run: a hardcoded port collides with a stale
 // leftover service from a previous run.
 func TestSB100_ServicePipeline(t *testing.T) {
 	port := freePort()
@@ -182,7 +182,7 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 // TestSB168_RemoteServiceReachable — a placed service is reachable at the
 // control-plane host's external port even though the process runs on the
 // execution host: the control plane forwards the external port to the
-// worker's internal port (SB-168). The worker is a sandman worker
+// worker's internal port. The worker is a sandman worker
 // process bearing the placement label; docker runs the service container.
 func TestSB168_RemoteServiceReachable(t *testing.T) {
 	// FIXED (api batch 60): the hang was a missing half-close propagation
@@ -228,12 +228,12 @@ func TestSB168_RemoteServiceReachable(t *testing.T) {
 	t.Cleanup(func() { _ = c.DeletePipeline(p.Name, false, false) })
 
 	// reachable at the control-plane host's external port, converged via
-	// the retry loop (SB-168 clause 4)
+	// the retry loop
 	svcURL := "http://127.0.0.1:31801/" + repo + "/file1"
 	getUntil(t, svcURL, "foo")
 
 	// a new revision is forwarded through the same path without a
-	// redeploy (SB-100 clause 5 applied to the placed service)
+	// redeploy
 	commitFiles(t, repo, "master", map[string]string{"file2": "bar"})
 	getUntil(t, "http://127.0.0.1:31801/"+repo+"/file2", "bar")
 }

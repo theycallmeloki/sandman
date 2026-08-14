@@ -1,6 +1,6 @@
 package conformance
 
-// Transactions (SB-162/163): pipeline creations and updates stage into an
+// Transactions: pipeline creations and updates stage into an
 // open transaction and apply atomically on finish — all or nothing. A
 // pipeline staged in a transaction may consume another pipeline staged in
 // the same transaction (its output repo does not exist yet); after finish
@@ -29,7 +29,7 @@ func TestSB162_TransactionAtomicApply(t *testing.T) {
 
 	// creation transaction: A consumes the input, B consumes A — the
 	// cross-reference resolves inside the transaction even though A's
-	// output repo does not exist yet (SB-162)
+	// output repo does not exist yet
 	tx, err := c.StartTransaction()
 	if err != nil {
 		t.Fatalf("start transaction: %v", err)
@@ -166,7 +166,7 @@ func TestSB163_TransactionInvalidatedByExternalUpdate(t *testing.T) {
 
 // TestSB164_TxAbortLeavesNoSpecCommits — an aborted transaction cleans up
 // the spec commits its applied operations wrote: no orphaned entries on
-// the failure path (SB-164's literal 0-spec-commits-on-abort clause). The
+// the failure path (the literal 0-spec-commits-on-abort clause). The
 // update's statistics one-way check fails only at apply time, forcing a
 // real mid-apply rollback after the create already wrote its spec commit.
 func TestSB164_TxAbortLeavesNoSpecCommits(t *testing.T) {
@@ -174,7 +174,7 @@ func TestSB164_TxAbortLeavesNoSpecCommits(t *testing.T) {
 	mustRepo(t, repo)
 	// the spec repository is shared across the daemon's lifetime (and may
 	// not exist yet), so the assertion is the delta: the aborted
-	// transaction writes no spec commits (SB-164's 0-on-abort clause)
+	// transaction writes no spec commits (the 0-on-abort clause)
 	specCount := func() int {
 		ch, err := c.CommitHistory("spec", "master")
 		if err != nil {

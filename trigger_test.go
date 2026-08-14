@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestClearTriggerLedgersExactOwner pins M2: ledger names are
+// TestClearTriggerLedgersExactOwner pins the rule that ledger names are
 // <pipeline>-<pos>.json with an integer pos, so a prefix match would let
 // a "foo" cleanup remove "foo-bar"'s ledgers. The cleanup must remove
 // exactly the ledger names whose suffix parses as an integer — both

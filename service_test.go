@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TestServiceProxyForwardsQuery pins M4: the proxy must forward the
+// TestServiceProxyForwardsQuery pins the rule that the proxy must forward the
 // client's query string to the service — GET /api/v1/services/svc/x?a=1
 // must reach the service as /x?a=1, not /x (a dropped query silently
 // changes the service's behavior).
@@ -34,7 +34,7 @@ func TestServiceProxyForwardsQuery(t *testing.T) {
 	}
 }
 
-// TestServiceProxyTimesOut pins M4: a wedged service must fail the
+// TestServiceProxyTimesOut pins the rule that a wedged service must fail the
 // proxy request (bounded client), not hold the handler goroutine and
 // the client's connection forever.
 func TestServiceProxyTimesOut(t *testing.T) {

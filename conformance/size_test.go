@@ -8,7 +8,7 @@ import (
 
 // TestSB002_RepoSize — a repository's reported size is the total bytes of
 // its primary branch's head revision, for data repos and pipeline output
-// repos alike, and stays in sync across commit deletion (SB-002; the
+// repos alike, and stays in sync across commit deletion (the
 // upstream #3330 regression: output repos reporting 0B).
 func TestSB002_RepoSize(t *testing.T) {
 	repo := uniq(t)

@@ -1,4 +1,4 @@
-// Server-side blocking waits (TESTING_ARCHITECTURE.md, D-23 R-5): the
+// Server-side blocking waits: the
 // control plane broadcasts state changes and exposes long-polling wait
 // endpoints, so clients and the harness block on server-signaled
 // conditions instead of deadline-polling. The notifier is a broadcast
@@ -50,7 +50,7 @@ func (n *notifier) changed() chan struct{} {
 // stabilityWindow is how long a terminal flush snapshot must hold quiet
 // before it is returned — the server-side analogue of the client's
 // double-read: short enough not to tax the flush, long enough to absorb a
-// trailing trigger (D-23 R-5).
+// trailing trigger.
 const stabilityWindow = 250 * time.Millisecond
 
 // waitFor polls cond on every state-change broadcast until it holds,
@@ -146,9 +146,10 @@ func (d *daemon) flushH(w http.ResponseWriter, r *http.Request) error {
 
 // flushSet waits until every job triggered by the commits — including
 // jobs of downstream stages — is terminal, and returns them, deduplicated
-// per pipeline keeping the latest (the flush contract of SB-021 and
-// friends; the algorithm mirrors the client's, but the waits are
-// server-signaled state broadcasts, not deadline polls). A terminal
+// per pipeline keeping the latest (the flush contract: exactly one job
+// per pipeline stage per input wave; the algorithm mirrors the client's,
+// but the waits are server-signaled state broadcasts, not deadline
+// polls). A terminal
 // snapshot is only final once no state change arrives to contradict it:
 // the job graph can still be growing (head backfill, downstream
 // triggers). When no job exists, the flush terminates empty once every
@@ -187,7 +188,7 @@ func (d *daemon) flushSet(commitIDs []string, timeout time.Duration) ([]client.J
 			// the trigger watcher is asynchronous: a terminal job's
 			// finished output commit may not have spawned its downstream
 			// job yet (the watcher goroutine can lag under load). A flush
-			// returning now would miss that growth (SB-021: 4 of 5
+			// returning now would miss that growth (4 of 5
 			// stages returned). Wait while a trigger is still owed.
 			if d.triggerPending(relevant) {
 				continue
@@ -198,7 +199,7 @@ func (d *daemon) flushSet(commitIDs []string, timeout time.Duration) ([]client.J
 			// closure below. Re-read the closure with a fresh wait
 			// channel registered first (grab-then-check) — any change,
 			// landed or landing, forces a re-evaluation instead of
-			// returning a stale snapshot (SB-021: 4 of 5 stages).
+			// returning a stale snapshot (4 of 5 stages).
 			ch2 := d.stateChanged.changed()
 			fresh := client.LatestPerPipeline(client.DownstreamJobsSet(d.mustListJobs(), commitIDs))
 			if len(fresh) != len(relevant) {
@@ -285,7 +286,7 @@ func (d *daemon) consumersSettled(repo, branch string) bool {
 // (its finish will fire the downstream trigger), or an active (running or
 // standby) consumer of a relevant finished commit has no job for that
 // pairing yet. The watcher processes commit finishes asynchronously, so
-// the flush must not return while a spawn is pending (SB-021).
+// the flush must not return while a spawn is pending.
 func (d *daemon) triggerPending(jobs []client.Job) bool {
 	for _, j := range jobs {
 		if j.OutputCommit == "" {
@@ -294,7 +295,7 @@ func (d *daemon) triggerPending(jobs []client.Job) bool {
 		cm, err := d.store.InspectCommit(j.OutputCommit)
 		if err != nil || !cm.Finished {
 			// a terminal failure job's unfinished commit is orphaned (its
-			// output repo was deleted mid-job, SB-146): no trigger comes
+			// output repo was deleted mid-job): no trigger comes
 			// from it, and waiting would stall the flush to its deadline.
 			// A success job's unfinished commit is the finish still in
 			// flight — wait for it.
@@ -313,7 +314,7 @@ func (d *daemon) triggerPending(jobs []client.Job) bool {
 			}
 			rec, err := d.loadPipeline(p.Name)
 			if err != nil || rec.Pipeline.Service != nil {
-				continue // services never spawn per commit (SB-100)
+				continue // services never spawn per commit
 			}
 			if !pipelineConsumes(rec.Pipeline.Input, cm.Repo, cm.Branch) {
 				continue

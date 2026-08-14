@@ -2,7 +2,7 @@ package main
 
 // Meta plane, log store: every job's container output is captured as
 // timestamped JSON lines under <state>/logs/<jobid>.jsonl and served
-// through GET /api/v1/logs (SB-059/060/061, D-21). Plain files, no
+// through GET /api/v1/logs. Plain files, no
 // external backend: a job's logs are complete, streamable in follow mode
 // at any volume, and searchable globally.
 
@@ -136,6 +136,15 @@ type logFilter struct {
 	follow    bool
 }
 
+// resolveLogFilter resolves GET /api/v1/logs's query into a filter of
+// pipeline, job (a job id or the output commit it produced), datum path,
+// datum value (a path or its content hash), a since-window, and a follow
+// flag. A datum filter with neither a pipeline nor a job is an error; a
+// since-window excludes lines older than the window relative to query
+// time; follow mode re-resolves the matching job set each tick so logs
+// produced by a mid-stream commit are streamed without a fresh query;
+// and a literal %s in the transform output must pass through verbatim
+// (never a MISSING placeholder).
 func (d *daemon) resolveLogFilter(r *http.Request) (*logFilter, error) {
 	q := r.URL.Query()
 	f := &logFilter{
@@ -153,7 +162,7 @@ func (d *daemon) resolveLogFilter(r *http.Request) (*logFilter, error) {
 		f.since = time.Now().UTC().Add(-win)
 	}
 	if f.job != "" {
-		j, err := d.inspectJob(f.job) // also accepts an output commit (SB-135)
+		j, err := d.inspectJob(f.job) // also accepts an output commit
 		if err != nil {
 			return nil, err
 		}
@@ -171,6 +180,12 @@ func (d *daemon) resolveLogFilter(r *http.Request) (*logFilter, error) {
 
 // logJobIDs resolves the filter to the matching job ids. Follow mode
 // re-resolves per tick so jobs that appear mid-stream are picked up.
+// Logs are searchable globally: with no pipeline or job filter the query
+// resolves every job in the system, so a job's logs are complete and
+// streamable in follow mode at any volume — the global aggregated,
+// searchable log store contract, implemented with the daemon's own log
+// store and no external backend (the reference collector's name is not
+// contractual).
 func (d *daemon) logJobIDs(f *logFilter) ([]string, error) {
 	var ids []string
 	if f.jobID != "" {
@@ -205,7 +220,7 @@ func (d *daemon) currentLogIDs(f *logFilter) []string {
 
 // datumMatch narrows jobs by an input file: an explicit datumPath matches
 // paths only; a bare datum value matches a path or its content hash. Path
-// and hash filters therefore agree (SB-060).
+// and hash filters therefore agree.
 func datumMatch(ds []datumRef, path, raw string) bool {
 	if path != "" {
 		for _, d := range ds {
@@ -235,7 +250,19 @@ func (d *daemon) loadJobRec(id string) (*jobRec, error) {
 	return &rec, nil
 }
 
-// collectLogs gathers the matching lines, oldest first.
+// collectLogs gathers the matching lines, oldest first. Log retrieval
+// works identically whether or not the pipeline was created with
+// per-datum statistics enabled: querying by pipeline, by job, by
+// datum/file filters, in follow mode, or with a since-window returns
+// the user log lines the transform emitted. An empty query on an empty
+// system returns no lines and no error; a nonexistent pipeline or job
+// fails with a "could not get" error; a datum filter without a pipeline
+// or job fails. A job's logs are retrievable in full without loss or
+// truncation — every user log line the execution emitted comes back,
+// and the count matches exactly (a job emitting 10,000 lines returns
+// exactly 10,000 lines, never dropped, truncated, or coalesced);
+// retrieval may be retried within a bounded window because lines can
+// take time to become available after the job finishes.
 func (d *daemon) collectLogs(f *logFilter) ([]string, error) {
 	ids, err := d.logJobIDs(f)
 	if err != nil {
@@ -286,7 +313,7 @@ func (d *daemon) logsH(w http.ResponseWriter, r *http.Request) error {
 // the client disconnects.
 func (d *daemon) followLogs(w http.ResponseWriter, r *http.Request, f *logFilter) error {
 	// Snapshot current file sizes first so pre-request lines are never
-	// replayed: follow streams logs as they are produced (SB-060).
+	// replayed: follow streams logs as they are produced.
 	offsets := map[string]int64{}
 	for _, id := range d.currentLogIDs(f) {
 		if st, err := os.Stat(d.logPath(id)); err == nil {
@@ -327,7 +354,7 @@ func (d *daemon) followLogs(w http.ResponseWriter, r *http.Request, f *logFilter
 			// ReadString has no token cap: a bufio.Scanner (64KB default
 			// max token) stops on longer lines — ErrTooLong aborts the
 			// scan mid-line, the recorded offset lands mid-line, and the
-			// line is silently dropped (M9). ReadString grows as needed
+			// line is silently dropped. ReadString grows as needed
 			// and the offset stays exact (at EOF everything is consumed).
 			rd := bufio.NewReader(fh)
 			for {

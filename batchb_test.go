@@ -1,6 +1,6 @@
 package main
 
-// M10 batch B: union-trigger rejection, sub-second cron tick filenames,
+// Batch B regression tests: union-trigger rejection, sub-second cron tick filenames,
 // and the brief commit inspect.
 
 import (
@@ -53,7 +53,7 @@ func TestUnionRejectsSizeTrigger(t *testing.T) {
 // named by the tick time with fractional seconds, so two ticks in the
 // same second land in two files instead of one (whose content the
 // append-mode view would have doubled). The filenames stay RFC3339
-// (parseable) and free of glob metacharacters (SB-089).
+// (parseable) and free of glob metacharacters.
 func TestCronTickUniqueFilenames(t *testing.T) {
 	dir := t.TempDir()
 	st := store.New(dir)
@@ -84,7 +84,7 @@ func TestCronTickUniqueFilenames(t *testing.T) {
 // TestInspectCommitBriefSkipsSubvenants pins ?brief=1: the commit chain
 // walkers (CommitHistory) never read Subvenants, and the unconditional
 // subvenant scan is O(all commits) per inspection — the brief form
-// skips it while the default form still reports subvenants (SB-140).
+// skips it while the default form still reports subvenants.
 func TestInspectCommitBriefSkipsSubvenants(t *testing.T) {
 	dir := t.TempDir()
 	st := store.New(dir)

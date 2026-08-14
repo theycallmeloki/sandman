@@ -1,7 +1,7 @@
 package conformance
 
-// The container-facing subset (TESTING_ARCHITECTURE.md D-23 R-4):
-// behaviors whose contract is the execution runtime keep the container
+// The container-facing subset: behaviors whose contract is the execution
+// runtime keep the container
 // backend. Each test runs against a dedicated container-backed daemon
 // and skips cleanly when the runtime is absent; the main matrix runs on
 // the process backend (no runtime required).
@@ -26,7 +26,7 @@ import (
 // port.
 func withContainerDaemon(t *testing.T) {
 	if !dockerAvailable() {
-		t.Skip("container runtime unavailable (docker version failed): this test needs the container backend (D-23 R-4)")
+		t.Skip("container runtime unavailable (docker version failed): this test needs the container backend")
 	}
 	state := daemonStateDir + "-container"
 	os.RemoveAll(state)
@@ -115,7 +115,7 @@ func TestSB067_ResourceRequestsApplied(t *testing.T) {
 	if cpu != halfCPU {
 		t.Fatalf("cpu = %d, want %d (0.5)", cpu, halfCPU)
 	}
-	// the disk request is accept-and-record (D-15): docker has no portable
+	// the disk request is accept-and-record: docker has no portable
 	// per-container ephemeral-storage knob (the runner comment documents
 	// the deviation), so the observable contract is the round-trip
 	pi, err := c.InspectPipeline(name)
@@ -772,8 +772,8 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 }
 func TestSB158_StandbyLifecycle(t *testing.T) {
 	withContainerDaemon(t)
-	// D-09: no degraded/crashing standby state in Sandman — partial
-	// capacity surfaces as failure or crashed; the extracted contract is
+	// no degraded/crashing standby state in Sandman — partial capacity
+	// surfaces as failure or crashed; the extracted contract is
 	// the lifecycle: idle in standby, wake on input, rest after the work.
 	repo := uniq(t) + "r"
 	pipe := uniq(t) + "p"
@@ -793,8 +793,8 @@ func TestSB158_StandbyLifecycle(t *testing.T) {
 		return standbyState(t, pipe) == "standby"
 	})
 
-	// a provisioning failure degrades to crashed (SB-043), never to a
-	// standby-resting state — the D-09 mapping of partial capacity
+	// a provisioning failure degrades to crashed, never to a
+	// standby-resting state — partial capacity surfaces as crashed
 	bad := uniq(t) + "bad"
 	mustPipeline(t, client.Pipeline{Name: bad, Standby: true,
 		Transform: &client.Transform{Image: "INVALID_IMAGE_REF", Cmd: []string{"true"}},
@@ -871,14 +871,14 @@ func TestSB169_UnplaceableRecovery(t *testing.T) {
 
 	// the job triggered by the commit cannot be placed: the pipeline's
 	// inspected state must become the failed (crashed) state within a
-	// bounded retry window — never a silent hang (SB-169 clause 1)
+	// bounded retry window — never a silent hang
 	pollFor(t, "pipeline crashed", 30*time.Second, func() bool {
 		pi, err := c.InspectPipeline(name)
 		return err == nil && pi.State == "crashed"
 	})
 
 	// a host bearing the label registers: the pending work re-places
-	// automatically and the same job completes (SB-169 clause 2)
+	// automatically and the same job completes
 	w := startWorker(t, "hostB", "offline")
 	waitHostRegistered(t, "hostB")
 	defer func() { _ = w.cmd.Process.Kill() }()
@@ -910,7 +910,7 @@ func TestSB169_UnplaceableRecovery(t *testing.T) {
 	}
 }
 
-// TestD01_StandbyIdlesWithZeroContainers — the D-01 scale-to-zero
+// TestD01_StandbyIdlesWithZeroContainers — the scale-to-zero
 // assertion: a standby pipeline with no pending work holds NO standing
 // execution participants (docker ps shows zero sandman-* containers).
 // The standby family asserts state transitions only; this pins the
@@ -926,7 +926,7 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 	mustRepo(t, repo)
 	// the wake transform sleeps so the run container is observable for a
 	// full second — a near-instant transform can complete between the
-	// commit and the first docker ps, and the D-01 wake assertion is
+	// commit and the first docker ps, and the wake assertion is
 	// about the container existing while the job runs
 	wake := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 2; cp -r ${" + repo + "}/* ${OUT}/"}}
 	mustPipeline(t, client.Pipeline{Name: pipe, Standby: true, Transform: wake, Input: &client.Input{Repo: repo, Glob: "/*"}})
@@ -934,7 +934,7 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 		return standbyState(t, pipe) == "standby"
 	})
 	if n := sandmanContainerCount(); n != 0 {
-		t.Fatalf("%d standing containers while idle in standby, want 0 (D-01)", n)
+		t.Fatalf("%d standing containers while idle in standby, want 0", n)
 	}
 	// a commit wakes it: a container exists while the job runs. The
 	// container must start within the poll; a slow runner's docker
@@ -974,14 +974,14 @@ func sandmanContainerCount() int {
 	return len(strings.Fields(string(out)))
 }
 
-// TestD15_UnsatisfiableResourcesAcceptedAndRecorded — D-15's
-// accept-and-record contract: a provably-unsatisfiable declaration
+// TestD15_UnsatisfiableResourcesAcceptedAndRecorded — the accept-and-record
+// contract: a provably-unsatisfiable declaration
 // (memory beyond any host's RAM) is NOT a creation gate — the spec is
 // accepted, the declared values are recorded, and the pipeline is not
 // prevented from running. Enforcement is the worker runtime's: docker
 // refuses to provision the over-large container, and the failure
-// converges on the crashed state with a reason (SB-091's provisioning
-// path) rather than a rejection or a hang.
+// converges on the crashed state with a reason (the provisioning path)
+// rather than a rejection or a hang.
 func TestD15_UnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)

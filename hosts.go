@@ -1,17 +1,20 @@
 package main
 
-// Execution hosts (SB-167/169). An operator designates execution hosts
-// with placement labels; a pipeline may require a label, and its jobs run
-// on a host that registered it. A host joins the cluster by establishing
-// contact with the control plane using configuration set at host setup
-// time (the worker's -control/-advertise flags) — the pipeline definition
-// never enumerates a host address or identity.
+// Execution hosts. An operator designates execution hosts with placement
+// labels; a pipeline may require a label, and its jobs run on a host that
+// registered it. A host joins the cluster by establishing contact with the
+// control plane using configuration set at host setup time (the worker's
+// -control/-advertise flags) — the pipeline definition never enumerates a
+// host address or identity.
 //
 // Hosts are ephemeral: registration carries a TTL that the worker's
 // heartbeat refreshes, so a vanished worker stops being schedulable on its
 // own. The registry is in-memory only — a control-plane restart drops the
 // fleet, and each worker re-registers within a heartbeat. Placement is a
-// live-cluster property, not durable state.
+// live-cluster property, not durable state. A pipeline whose required
+// label no live host bears surfaces the outage visibly (crashed with a
+// recorded reason) rather than hanging, and its pending work re-places
+// automatically once a host bearing the label registers.
 
 import (
 	"sort"
@@ -64,8 +67,11 @@ func (r *hostRegistry) liveLocked(h *execHost) bool {
 }
 
 // pick returns a live host bearing the label, or false when none is
-// registered. The choice is deterministic (name order) so a stable fleet
-// places the same pipeline on the same host.
+// registered — a pipeline that requires the label waits for a host that
+// bears it, since the pipeline definition never enumerates a host address
+// or identity and the registry is the only scheduling input. The choice
+// is deterministic (name order) so a stable fleet places the same
+// pipeline on the same host.
 func (r *hostRegistry) pick(label string) (execHost, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

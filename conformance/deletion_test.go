@@ -35,7 +35,7 @@ func pipelineGone(t *testing.T, name string) {
 
 // TestSB026_DeleteMidDAGGuard — a pipeline whose output feeds a downstream
 // pipeline cannot be deleted without force; leaf-first deletion succeeds
-// and removes the jobs; listing jobs of a deleted pipeline errors (SB-026).
+// and removes the jobs; listing jobs of a deleted pipeline errors.
 func TestSB026_DeleteMidDAGGuard(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -91,7 +91,7 @@ func TestSB026_DeleteMidDAGGuard(t *testing.T) {
 
 // TestSB027_SplitTransactionDelete — the same deletion contract holds when
 // each pipeline is deleted as a multi-step transaction: jobs first, then
-// the pipeline (SB-027).
+// the pipeline.
 func TestSB027_SplitTransactionDelete(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -155,7 +155,7 @@ func TestSB027_SplitTransactionDelete(t *testing.T) {
 
 // TestSB030_DeleteRepoAfterMembershipChange — a repository with a finished
 // commit stays deletable after the serving membership changes (approximated
-// for a single-node fabric by a control-plane restart; SB-030).
+// for a single-node fabric by a control-plane restart).
 func TestSB030_DeleteRepoAfterMembershipChange(t *testing.T) {
 	for pass := 0; pass < 2; pass++ {
 		repo := uniq(t)
@@ -176,9 +176,9 @@ func TestSB030_DeleteRepoAfterMembershipChange(t *testing.T) {
 }
 
 // TestSB037_FullReset — a reset removes every repository, pipeline, and
-// job, and is idempotent (SB-037).
+// job, and is idempotent.
 func TestSB037_FullReset(t *testing.T) {
-	withIsolatedDaemon(t) // resetting the shared daemon would wipe every test's state (M10)
+	withIsolatedDaemon(t) // resetting the shared daemon would wipe every test's state
 	noPanic(t, c.Reset()) // the test itself begins with a reset
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -200,7 +200,7 @@ func TestSB037_FullReset(t *testing.T) {
 		t.Fatalf("jobs after reset: %d (err %v), want 0", len(js), err)
 	}
 	noPanic(t, c.Reset()) // idempotent
-	mustRepo(t, repo)     // names are reusable (SB-130)
+	mustRepo(t, repo)     // names are reusable
 }
 
 // mustList applies f and returns the entries, failing on error.
@@ -214,7 +214,7 @@ func mustList[T any](t *testing.T, f func() ([]T, error)) []T {
 }
 
 // TestSB127_SpecRepoProtected — the internal specification repository
-// cannot be deleted through the public repository API (SB-127).
+// cannot be deleted through the public repository API.
 func TestSB127_SpecRepoProtected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -231,12 +231,12 @@ func TestSB127_SpecRepoProtected(t *testing.T) {
 }
 
 // TestSB131_ResetRobustness — reset always completes with healthy metadata
-// and names stay reusable (SB-130/131). Sandman's product decision D-08
-// overrides the reference's corruption tolerance: corrupted metadata makes
-// the reset error rather than being silently ignored, and removing the
-// corrupted record restores the reset path.
+// and names stay reusable. Sandman's product decision overrides the
+// reference's corruption tolerance: corrupted metadata makes the reset
+// error rather than being silently ignored, and removing the corrupted
+// record restores the reset path.
 func TestSB131_ResetRobustness(t *testing.T) {
-	withIsolatedDaemon(t) // corrupts daemon state; never the shared one (M10)
+	withIsolatedDaemon(t) // corrupts daemon state; never the shared one
 	for i := 0; i < 3; i++ {
 		repo := uniq(t)
 		mustRepo(t, repo)
@@ -245,7 +245,7 @@ func TestSB131_ResetRobustness(t *testing.T) {
 		commitFiles(t, repo, "master", map[string]string{"file": "x"})
 		noPanic(t, c.Reset())
 	}
-	// D-08: corrupted metadata is an error for the reset path
+	// corrupted metadata is an error for the reset path
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -263,7 +263,7 @@ func TestSB131_ResetRobustness(t *testing.T) {
 
 // TestSB144_IncompletePipeline — a pipeline whose definition content is
 // lost becomes incomplete: unlistable and un-updatable in ordinary modes,
-// listed by name with AllowIncomplete, and deletable (SB-144).
+// listed by name with AllowIncomplete, and deletable.
 func TestSB144_IncompletePipeline(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -316,7 +316,7 @@ func TestSB144_IncompletePipeline(t *testing.T) {
 // TestSB146_SurvivesDeletedOutputRepo — force-deleting a running pipeline's
 // output repository fails the pipeline with a reason, does not wedge the
 // scheduler, and the pipeline recovers after the repository is recreated
-// and the pipeline updated (SB-146, product decision D-10).
+// and the pipeline updated.
 func TestSB146_SurvivesDeletedOutputRepo(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -391,7 +391,7 @@ func TestSB146_SurvivesDeletedOutputRepo(t *testing.T) {
 		}
 	}
 
-	// recovery (D-10): recreate the repository, then update the pipeline
+	// recovery: recreate the repository, then update the pipeline
 	noPanic(t, c.CreateRepo(name))
 	mustUpdate(t, name, copyTransform(repo), &client.Input{Repo: repo, Glob: "/*"}, false)
 	pollFor(t, "pipeline running again", 30*time.Second, func() bool {
@@ -404,7 +404,7 @@ func TestSB146_SurvivesDeletedOutputRepo(t *testing.T) {
 
 // TestSB157_KeepRepoOnDelete — deleting a pipeline with KeepRepo preserves
 // its output repository; recreating the pipeline reuses it; deleting
-// without the flag removes the repository too (SB-157).
+// without the flag removes the repository too.
 func TestSB157_KeepRepoOnDelete(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)

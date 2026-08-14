@@ -1,16 +1,16 @@
 package conformance
 
-// Logs family (SB-059/060/061, D-21): per-job capture with pipeline, job,
+// Logs family: per-job capture with pipeline, job,
 // and datum filters, since-windows, follow-mode streaming, complete
 // retrieval at volume, and global searchability. The daemon's own log
-// store implements the mechanism-free contract of SB-062/D-21 — no
+// store implements the mechanism-free contract — no
 // external backend (the reference's Loki collector is not contractual).
 //
-// Datum filters: with the datum engine deferred (D-13), a datum is an
+// Datum filters: with the datum engine deferred, a datum is an
 // input file of the job — matched by path or by content hash (hex sha256,
 // as exposed by file listings). A filter selects the jobs whose input
 // contained that file; path and hash filters therefore agree exactly, and
-// a nonexistent file matches nothing, per SB-060.
+// a nonexistent file matches nothing.
 
 import (
 	"bufio"
@@ -25,8 +25,8 @@ import (
 )
 
 // logsEchoTransform emits the classic log lines: a literal value and a
-// literal %s that must pass through verbatim (SB-060: no MISSING
-// substitution), plus six numbered lines so follow mode has volume.
+// literal %s that must pass through verbatim, plus six numbered lines so
+// follow mode has volume.
 func logsEchoTransform(inName string) *client.Transform {
 	return &client.Transform{
 		Image: "alpine:3.21",
@@ -35,12 +35,12 @@ func logsEchoTransform(inName string) *client.Transform {
 	}
 }
 
-// assertLogCore runs the SB-060 core contract (steps 1–7) against one
+// assertLogCore runs the core log contract (steps 1–7) against one
 // pipeline and one flushed job: empty-query, nonexistent targets, by
 // pipeline, by job, datum errors, path/hash equivalence, nonexistent file.
-// SB-059 shares it: the record is the same contract with the pipeline's
-// statistics flag disabled — this run disables EnableStats for parity with
-// that record (the flag itself is asserted by the SB-041/SB-139 suites).
+// The statistics-disabled record shares it — the same contract with the
+// pipeline's statistics flag disabled: this run disables EnableStats for
+// parity with that record.
 func assertLogCore(t *testing.T, pipe string, cm1 client.Commit, job1 client.Job) {
 	t.Helper()
 
@@ -261,7 +261,7 @@ func TestSB061_ManyLogs(t *testing.T) {
 }
 
 func TestSB062_GlobalLogStore(t *testing.T) {
-	// D-21: a global aggregated log store is required; the contract is
+	// a global aggregated log store is required; the contract is
 	// mechanism-free — a job's logs are complete (one line per datum) and
 	// streamable in follow mode, and logs from all jobs are searchable
 	// globally. The daemon's own store is the implementation.
@@ -326,7 +326,7 @@ func TestSB062_GlobalLogStore(t *testing.T) {
 
 	// follow mode streams new lines as they are produced, across pipelines.
 	// cm2 changes one file: pa's job runs the one changed datum (1 foo),
-	// pb's job emits its bar — the stream sees both pipelines (D-21).
+	// pb's job emits its bar — the stream sees both pipelines.
 	rc, err := c.FollowLogs(client.LogParams{})
 	if err != nil {
 		t.Fatalf("open global follow stream: %v", err)

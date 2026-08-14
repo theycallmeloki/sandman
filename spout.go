@@ -1,4 +1,4 @@
-// Spout pipelines (SB-139): a pipeline with no input whose transform runs
+// Spout pipelines: a pipeline with no input whose transform runs
 // in the background; the daemon watches the container's output directory
 // and commits each data-bearing cycle to the output branch (accumulating
 // or replacing per the overwrite option), and the marker directory's
@@ -26,7 +26,7 @@ import (
 const markerBranch = "markers"
 
 // validateSpout enforces the spout contracts: no inputs, and a marker
-// name without glob metacharacters (SB-139 clauses 11/13).
+// name without glob metacharacters.
 func validateSpout(p client.Pipeline) error {
 	if p.Spout == nil {
 		return nil
@@ -45,8 +45,7 @@ func validateSpout(p client.Pipeline) error {
 }
 
 // spawnSpoutJob starts a spout's background job. fresh marks a restart
-// after a reprocess update: the marker state is reset (SB-139 clause 10,
-// SB-140 clause 4).
+// after a reprocess update: the marker state is reset.
 func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 	id := newJobID(d.name)
 	if fresh {
@@ -54,7 +53,7 @@ func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 			os.RemoveAll(dir)
 		}
 	}
-	// mirror spawnJob (SB-045): the running handle is registered before
+	// mirror spawnJob: the running handle is registered before
 	// the goroutine starts, so a stop/delete arriving the instant the
 	// spout spawns can always find it — a not-yet-registered handle
 	// would escape the cancel and keep running (container up, cycles
@@ -67,8 +66,10 @@ func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 // runSpoutJob runs one spout: the transform container runs detached, and
 // the daemon polls its output directory, committing each data-bearing
 // cycle (a set of new or changed files) to the output branch, and the
-// marker directory's changes to the marker branch. The job settles when
-// the container exits; a cancel kills the container and settles killed.
+// marker directory's changes to the marker branch — empty-payload cycles
+// surface no commit, and the spout keeps producing after its head commit
+// is deleted. The job settles when the container exits; a cancel kills
+// the container and settles killed.
 // rj is the pre-registered running handle (spawnSpoutJob) and is
 // unregistered on every exit, including the early MkdirAll failure.
 func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
@@ -278,8 +279,8 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 }
 
 // spoutMarkerDir is the spout's per-pipeline marker directory: it lives
-// across spout restarts, so a plain update preserves the marker file
-// (SB-139 clause 10) — a reprocess update clears it via spawnSpoutJob.
+// across spout restarts, so a plain update preserves the marker file — a
+// reprocess update clears it via spawnSpoutJob.
 func (d *daemon) spoutMarkerDir(pipeline string) string {
 	return filepath.Join(d.state, "spout", pipeline, "marker")
 }
@@ -287,7 +288,8 @@ func (d *daemon) spoutMarkerDir(pipeline string) string {
 // spoutCommit commits a data-bearing cycle: the changed files with their
 // current content, one finished commit that triggers the consumers. The
 // commit records the pipeline's specification commit as its provenance —
-// the epoch anchor (SB-139 clause 7, SB-140 clause 3).
+// the epoch anchor: an update that writes a new spec commit starts a new
+// provenance epoch shared by all commits after it.
 func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo string, rj *runningJob, specCommit string) {
 	if rj.cancelled.Load() {
 		return

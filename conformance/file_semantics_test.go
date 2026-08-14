@@ -1,10 +1,9 @@
 package conformance
 
-// FILE_SEMANTICS.md contract (Q5, 2026-08-10): within-commit append
-// (FS-1), ancestry accumulation (FS-2), overwrite (FS-3), tombstone
-// (FS-4), job-output replacement with same-path datum concatenation
-// (FS-5/FS-6), split-upload numbering (FS-7), empty files (FS-8), and
-// mid-commit visibility (FS-9). FS-10 (chunking never changes content) is
+// File-semantics contract: within-commit append, ancestry accumulation,
+// overwrite, tombstone deletion, job-output replacement with same-path
+// datum concatenation, split-upload numbering, empty files, and
+// mid-commit visibility. Chunking never changes content — it is
 // N-A by design: sandman stores whole-file blobs.
 
 import (
@@ -33,7 +32,7 @@ func TestFS1_AppendWithinCommit(t *testing.T) {
 	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "foofoo" {
 		t.Fatalf("x after two puts = %q (err %v), want foofoo", string(b), err)
 	}
-	// an overwrite replaces even within the same commit (FS-3)
+	// an overwrite replaces even within the same commit
 	if err := c.PutFileOverwrite(cm.ID, "x", []byte("bar")); err != nil {
 		t.Fatalf("overwrite: %v", err)
 	}
@@ -41,7 +40,7 @@ func TestFS1_AppendWithinCommit(t *testing.T) {
 		t.Fatalf("x after overwrite = %q (err %v), want bar", string(b), err)
 	}
 	// a path that is both a file and a directory prefix is a type
-	// conflict; finishing fails (FS-1 edge)
+	// conflict; finishing fails
 	if err := c.PutFile(cm.ID, "y", []byte("1")); err != nil {
 		t.Fatalf("put y: %v", err)
 	}
@@ -58,7 +57,7 @@ func TestFS2_AccumulateAcrossCommits(t *testing.T) {
 	mustRepo(t, repo)
 	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
 	// a child commit's plain write to the same path appends to the
-	// parent's content (FS-2)
+	// parent's content
 	commitFiles(t, repo, "master", map[string]string{"x": "bar"})
 	head, err := c.HeadCommit(repo, "master")
 	if err != nil {
@@ -88,7 +87,7 @@ func TestFS3_OverwriteReplaces(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
-	// an explicit overwrite replaces the accumulated content (FS-3); a
+	// an explicit overwrite replaces the accumulated content; a
 	// plain put would append
 	cm, err := c.StartCommit(repo, "master", "")
 	if err != nil {
@@ -233,7 +232,7 @@ func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
 	flushOK(t, cm1.ID)
 	// a reprocess update re-runs the same datum: its prior output path is
-	// replaced with the fresh output, not accumulated (FS-6 — without the
+	// replaced with the fresh output, not accumulated (a without the
 	// replacement the path would double)
 	mustUpdate(t, pipe, copyTransform(repo), in, true)
 	jobs := flushOK(t, cm1.ID)
@@ -272,7 +271,7 @@ func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
 		// a third cycle must not resurrect the stale content either: the
 		// old-transform datum's carried "v1" stays superseded, while the
 		// new-transform datum's carried "v3" is re-run-equivalent and
-		// concatenates with the fresh datum's "v3" (FS-5)
+		// concatenates with the fresh datum's "v3"
 		cm3 := commitFiles(t, repo, "master", map[string]string{"f3": "y"})
 		jobs = flushOK(t, cm3.ID)
 		if b, err := c.GetFile(jobs[0].OutputCommit, "ver.txt"); err != nil || string(b) != "v3\nv3\n" {
@@ -307,7 +306,7 @@ func TestFS7_SplitNumberingAcrossCommits(t *testing.T) {
 		t.Fatalf("d/2 = %q (err %v), want the third record at index 2", string(b), err)
 	}
 	// a changed header swaps the header for every record without changing
-	// the record count or numbering (FS-7)
+	// the record count or numbering
 	cm3 := upload("HDR2", "r1", "r2", "r3")
 	for i, want := range []string{"HDR2\nr1", "HDR2\nr2", "HDR2\nr3"} {
 		if b, err := c.GetFile(cm3.ID, fmt.Sprintf("d/%d", i)); err != nil || string(b) != want {
@@ -383,7 +382,7 @@ func TestFS9_MidCommitVisibility(t *testing.T) {
 		t.Fatal("put into a finished commit succeeded, want error")
 	}
 
-	// pipeline output commits are NOT readable until finished (FS-9):
+	// pipeline output commits are NOT readable until finished:
 	// the output commit is opened at job start but carries nothing until
 	// the job finishes assembling it
 	repo2 := uniq(t)

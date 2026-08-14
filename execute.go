@@ -1,6 +1,6 @@
 package main
 
-// Job execution: runJob and the execution-backend seam (D-23) — the
+// Job execution: runJob and the execution-backend seam — the
 // containerRunner/processRunner that run one pipeline transform, and the
 // datum execution glue. The rest of the control plane lives in
 // pipeline.go (spec validation + CRUD) and jobs.go (lifecycle).
@@ -20,14 +20,14 @@ import (
 	"sandman/internal/store"
 )
 
-// runJob coordinates one job: enumerate the input sides' datums, take
-// their cartesian product, run the datums with a bounded worker pool, merge
-// their outputs into the single output commit, and record the per-datum
-// outcomes in the pipeline's dedup table. heads is the input pairing — one
-// commit per side, empty where a side has no head (SB-120's lone-input
-// job; its cross contributes no datums).
 // outputBranch returns the branch a pipeline's output commits land on
-// (default "master", SB-142).
+// (default "master"). A pipeline triggers only on commits on the branches
+// it watches, and writes its output commits to its configured output
+// branch. Because the output lands on a possibly non-watched branch, a
+// downstream pipeline that watches the default branch does not run until
+// that branch is promoted onto the output commit (via CreateBranch
+// retargeting) — scheduling keys off branch pointers rather than commit
+// existence.
 func outputBranch(pl pipelineRec) string {
 	if pl.Pipeline.OutputBranch == "" {
 		return defaultBranch
@@ -35,6 +35,69 @@ func outputBranch(pl pipelineRec) string {
 	return pl.Pipeline.OutputBranch
 }
 
+// runJob coordinates one job: enumerate the input sides' datums, take
+// their cartesian product, run the datums with a bounded worker pool, merge
+// their outputs into the single output commit, and record the per-datum
+// outcomes in the pipeline's dedup table. heads is the input pairing — one
+// commit per side, empty where a side has no head (a lone cross side whose
+// partner has no head yet still gets a job; its cross contributes no
+// datums).
+// Datum dedup: a datum whose content hash is unchanged from a previous
+// successful run is skipped rather than re-executed — the job still
+// produces its output commit but does not re-run the transform for
+// unchanged datums, so the job completes promptly. Skip detection compares
+// the datum's final content against the last successful processing, not
+// the sequence of intermediate changes, so a file deleted and re-added
+// with byte-identical content is skipped, not reprocessed; the skip is
+// recorded on the job, never on the shared record, so the record keeps its
+// last successful outcome for later jobs to skip on. A pipeline configured
+// to reprocess on every job instead re-executes all of its datums on each
+// job, regenerating each datum's output from the data current at
+// processing time rather than carrying forward prior output.
+// Failure propagation: when a job's upstream stage failed, the propagated
+// failure marks this stage failed without executing, and its empty output
+// commit keeps the DAG continuous so the failure reaches every downstream
+// stage and the flush can walk the chain; the terminal state is durably
+// recorded before the output commit finishes. A failed output is still a
+// revision, so each downstream stage is triggered and fails in turn, and
+// flushing the failing commit returns every stage's job with its terminal
+// failed state rather than erroring.
+// One-commit contract: each finished input commit triggers exactly one job
+// per pipeline, and a job that recursively copies whole input directories
+// (even a full repository directory, spanning many files) completes to
+// exactly one output commit serving the full cumulative branch state — the
+// file added by an earlier commit stays readable with its exact content
+// from a later job's output; no commit merges with another or is dropped.
+// Whole-job deadline: a job whose cumulative execution exceeds its
+// configured job timeout is killed at the boundary — its active containers
+// are killed and it settles as killed, never a plain failure — with the
+// recorded start-to-finish duration equal to the configured timeout; the
+// job stays observable while running even though it is destined to be
+// killed.
+// Cross resolution: when a cross member is a union of two branches of one
+// repository, the union's branches are resolved and keyed by branch
+// (unionBranchKey) so they stay distinct in the views, and the union
+// member contributes its own merged datums even though it has no single
+// head commit; the cross's other legs resolve to the current head of their
+// branch at job-creation time, not to a provenance-derived commit, and
+// exactly one job is created for the flush.
+// Output-repo survival: when a running pipeline's output repository is
+// force-deleted, the job must not silently resurrect the repo — the
+// output-repo existence check fails the job and marks the pipeline failed
+// with a reason, and the scheduler survives (no crash loop) so a later
+// healthy pipeline on the same input runs to completion; recovery requires
+// operator action: recreate the repository, then update the pipeline.
+// Placement: a pipeline may require its work to run on a host bearing a
+// placement label, never enumerating a host address or identity; a job
+// completes only once a host bearing the required label is available.
+// Until such a host has registered, the job waits — its record was saved
+// at trigger time, so the pending job and its input revision are durable
+// across the outage — and the pipeline surfaces the outage as the crashed
+// state with a recorded reason instead of hanging. When a host bearing
+// the label later registers, the pending work re-places automatically and
+// the same job completes producing exactly one output commit with correct
+// content, and the pipeline returns from crashed to running without
+// recreation or manual re-trigger.
 func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated string, pre *jobRec, rj *runningJob) {
 	sides := inputSides(pl.Pipeline.Input)
 	for i := range sides {
@@ -62,7 +125,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 	d.saveJob(rec)
 
-	// Per-pipeline serialization (SB-123): one job at a time, in spawn
+	// Per-pipeline serialization: one job at a time, in spawn
 	// order — the record is already saved, so a queued job is visible and
 	// cancellable. A cancel that arrived while queued settles the job
 	// killed without doing any work and passes the slot on.
@@ -82,7 +145,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 
 	if propagated != "" {
 		// an upstream stage failed, so this stage fails too — recorded,
-		// never executed (SB-022). The empty output commit keeps the DAG's
+		// never executed. The empty output commit keeps the DAG's
 		// commits continuous, so the failure reaches every downstream stage
 		// and the flush can walk the chain.
 		rec.State = stateFailure
@@ -105,15 +168,15 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		d.saveJob(rec)
 	}
 
-	// Placement (SB-167/169): a pipeline may require its work to run on a
-	// host bearing a placement label. Until such a host has registered,
-	// the job waits — its record was saved at trigger time, so the pending
-	// work is durable — and the pipeline surfaces the outage as the
-	// crashed state instead of hanging silently (SB-169 clause 1). When a
-	// host bearing the label registers, the wait re-places automatically
-	// and the pipeline recovers (SB-169 clause 2): the same job, the same
-	// input revision, exactly one output commit. A cancel while unplaced
-	// settles the job killed like any other in-flight cancel (SB-058).
+	// Placement: a pipeline may require its work to run on a host bearing
+	// a placement label. Until such a host has registered, the job waits —
+	// its record was saved at trigger time, so the pending work is
+	// durable — and the pipeline surfaces the outage as the crashed state
+	// instead of hanging silently. When a host bearing the label
+	// registers, the wait re-places automatically and the pipeline
+	// recovers: the same job, the same input revision, exactly one output
+	// commit. A cancel while unplaced settles the job killed like any
+	// other in-flight cancel.
 	var placedHost *execHost
 	if pl.Pipeline.Placement != "" {
 		for {
@@ -138,20 +201,20 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 
 	// Resolve each side's input revision and enumerate its datums; the
 	// job's datum set depends on the input kind: a cross takes the
-	// cartesian product (SB-063), a join pairs files by their join key
-	// (SB-074/075), a group collects files by their group key (SB-076). A
-	// side without a head contributes no datums, so the product is empty.
+	// cartesian product, a join pairs files by their join key, a group
+	// collects files by their group key. A side without a head contributes
+	// no datums, so the product is empty.
 	views := map[string]map[string]store.ViewEntry{}
 	sideLists := make([][]datumSide, len(sides))
 	in := pl.Pipeline.Input
 	// Resolve every consumed repo's head into the views: union branches
 	// nested anywhere — including inside a cross — contribute their own
 	// branches' heads, keyed by branch so two branches of one repo stay
-	// distinct (SB-141). Sides already covered by the pairing heads are
+	// distinct. Sides already covered by the pairing heads are
 	// left to the loop below — a manual run pins the job to specific
 	// commits, and the current head must not leak into the recorded
-	// input set (SB-010). The full resolved input set is recorded on the
-	// job so the flush can find it (SB-078).
+	// input set. The full resolved input set is recorded on the
+	// job so the flush can find it.
 	seenInput := map[string]bool{}
 	covered := map[string]bool{} // repo/branch covered by the pairing heads
 	for _, h := range heads {
@@ -184,8 +247,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 					// the record grows to the full pairing, and the datum
 					// loop below must enumerate it too — otherwise the
 					// record claims a pairing the job never executed and
-					// the trigger dedup suppresses the real job (SB-019:
-					// D's wave-1 commit lost)
+					// the trigger dedup suppresses the real job
 					resolvedHead[key] = h
 				}
 			}
@@ -204,10 +266,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// A late head picked up while queued must not duplicate a pairing a
 	// sibling job already covers: the lone side job and the pairing job
 	// race — whichever runs first claims the pairing, the other settles as
-	// the lone job with no output (SB-056: the lone C job for E1 must not
-	// produce a second wave-1 output after the B1×E1 pairing job spawned;
-	// SB-019: when no sibling exists the lone job grows into the pairing
-	// itself and the trigger's dedup suppresses the duplicate). The check
+	// the lone job with no output: the lone C job for E1 must not produce
+	// a second wave-1 output after the B1×E1 pairing job spawned; when no
+	// sibling exists the lone job grows into the pairing itself and the
+	// trigger's dedup suppresses the duplicate. The check
 	// runs under the trigger mutex, so it cannot interleave with the
 	// trigger's own dedup+save.
 	if len(resolvedHead) > 0 {
@@ -235,7 +297,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	for i, s := range sides {
 		if len(s.Union) > 0 {
 			// a union member of a cross contributes its own merged datums
-			// even though it has no single head commit (SB-141)
+			// even though it has no single head commit
 			var us []datumSide
 			for _, dt := range d.unionDatums(views, &s) {
 				us = append(us, dt.Sides[0])
@@ -286,8 +348,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		rec.DatumIDs = append(rec.DatumIDs, dt.ID)
 	}
 	d.saveJob(rec)
-	// the datum set for log filters is the first side's full input files
-	// (SB-060); cross jobs filter by their sides' files.
+	// the datum set for log filters is the first side's full input files;
+	// cross jobs filter by their sides' files.
 	var logDatums []datumRef
 	for i := range sides {
 		head := client.Commit{}
@@ -308,8 +370,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 
 	// a job whose inputs contribute no datums settles successful with
 	// nothing to produce — no output commit, so an empty wave never
-	// propagates through the DAG (SB-056: exactly one commit per wave;
-	// SB-120's lone cross jobs produce nothing downstream)
+	// propagates through the DAG (exactly one commit per wave; lone cross
+	// jobs produce nothing downstream)
 	if len(datums) == 0 {
 		rec.State = stateSuccess
 		rec.Finished = now()
@@ -324,7 +386,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	if err != nil {
 		fail("start output commit: " + err.Error())
 		if errors.Is(err, errNotFound) || errors.Is(err, store.ErrNotFound) {
-			// the output repository vanished (D-10): the pipeline fails with
+			// the output repository vanished: the pipeline fails with
 			// a recorded reason and stops scheduling
 			d.markPipelineFailed(pl.Pipeline.Name, "output repository missing")
 		}
@@ -333,14 +395,13 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	rec.OutputCommit = outCommit.ID
 	d.saveJob(rec)
 
-	// Dedup (D-13): a datum whose content is unchanged from a previous
-	// successful run is skipped — the pipeline does not pay for data it
-	// already processed — unless the pipeline reprocesses every job
-	// (SB-166). The skip is recorded on the job, never on the shared
-	// record: the record must keep its last successful outcome so later
-	// jobs can still skip on it (SB-085). Every datum gets a placeholder
-	// record so the job's full datum set is listable mid-flight with its
-	// input files (SB-080).
+	// Dedup: a datum whose content is unchanged from a previous successful
+	// run is skipped — the pipeline does not pay for data it already
+	// processed — unless the pipeline reprocesses every job. The skip is
+	// recorded on the job, never on the shared record: the record must
+	// keep its last successful outcome so later jobs can still skip on it.
+	// Every datum gets a placeholder record so the job's full datum set is
+	// listable mid-flight with its input files.
 	dedup := d.loadDedup(pl.Pipeline.Name)
 	reprocess := pl.Pipeline.Reprocess
 	rec.DatumStates = map[string]string{}
@@ -371,8 +432,8 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		viewDirs: map[string]string{}, dedup: dedup, rj: rj, host: placedHost,
 		transformHash: transformHash(pl.Pipeline.Transform)}
 	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
-	// apply the pipeline's execution-environment customization
-	// (SB-072/152): the document's env vars join the job environment and
+	// apply the pipeline's execution-environment customization: the
+	// document's env vars join the job environment and
 	// its volumes become mounts at /sandman/volumes/<name> — an
 	// emptyDir volume is a fresh per-job directory
 	if custom, err := parseCustomization(pl.Pipeline.Transform); err != nil {
@@ -395,7 +456,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			jx.extraMounts = append(jx.extraMounts, "-v", host+":/sandman/volumes/"+name)
 		}
 	}
-	// secret bindings (SB-051 clause 2, D-05): each reference's key is
+	// secret bindings: each reference's key is
 	// written as a file at MountPath/<key> and/or injected as the env
 	// var, so secret values reach the execution environment before the
 	// job starts. References sharing a MountPath merge into one bind
@@ -465,12 +526,13 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			}
 		}
 	}
-	// the live execution context is visible to the datum API (restart,
-	// SB-064) while the job runs; it leaves the registry with the running
-	// handle when the job settles
+	// the live execution context is visible to the datum API (a restart
+	// aborts a datum's processing and re-runs it from scratch) while the
+	// job runs; it leaves the registry with the running handle when the
+	// job settles
 	d.setJobExec(id, jx)
 
-	// Whole-job deadline (SB-116): at the boundary the job is cancelled and
+	// Whole-job deadline: at the boundary the job is cancelled and
 	// its active containers killed; it settles as killed, never as a plain
 	// failure. A job that already settled is unaffected (its containers are
 	// unregistered by then). The timer is stopped when the job settles
@@ -514,7 +576,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	if failedAny {
 		// All-or-nothing output: finish the commit explicitly empty. A
 		// failed datum still leaves the job inspectable and the pipeline
-		// schedulable (SB-082).
+		// schedulable.
 		killed := rj.cancelled.Load()
 		if killed {
 			rec.State = stateKilled
@@ -525,23 +587,23 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		}
 		rec.Finished = now()
 		// the terminal state is durable before the output commit finishes,
-		// so the downstream trigger observes the failure (SB-022)
+		// so the downstream trigger observes the failure
 		d.saveJob(rec)
 		d.finishOutput(pl, outCommit, "", true)
 		d.recordProvenance(outCommit.ID, rec.InputCommits)
 		if !killed && !rec.Manual {
 			// a failed output is still a revision: every downstream stage
-			// is triggered and fails in turn (SB-022). A killed job's empty
+			// is triggered and fails in turn. A killed job's empty
 			// output is not a processing event — stopping a pipeline must
-			// not create spurious downstream commits (SB-020); neither is a
-			// manual run's (SB-010).
+			// not create spurious downstream commits; neither is a
+			// manual run's.
 			if fin, err := d.store.InspectCommit(outCommit.ID); err == nil {
 				d.triggerForCommit(fin)
 			}
 		}
 		if pl.Pipeline.EnableStats {
 			// the failed job's datum records are still published on the
-			// stats branch (SB-113: output + statistics commits)
+			// stats branch (output + statistics commits)
 			if statsID := d.writeStatsCommit(pl, dedup, datums); statsID != "" {
 				rec.StatsCommit = statsID
 			}
@@ -566,7 +628,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 
 	// Upload OUT into the output commit in one batch, then finish it (which
 	// may trigger downstream pipelines). The output repository may have
-	// been force-deleted while the job ran (SB-146): that fails the job and
+	// been force-deleted while the job ran: that fails the job and
 	// the pipeline rather than silently resurrecting the repo.
 	if _, err := os.Stat(d.store.RepoDir(pl.Pipeline.Name)); err != nil {
 		d.finishOutput(pl, outCommit, "", true)
@@ -582,7 +644,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	d.recordProvenance(fin.ID, rec.InputCommits)
 	// statistics-enabled pipelines also produce a per-job statistics
 	// commit on the output repo's "stats" branch, consumable downstream
-	// (SB-086, SB-113's two-commit count)
+	// (two commits per job: output + statistics)
 	if pl.Pipeline.EnableStats {
 		if statsID := d.writeStatsCommit(pl, dedup, datums); statsID != "" {
 			rec.StatsCommit = statsID
@@ -591,7 +653,6 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// the egress step runs after the output commit succeeds: a failure to
 	// write the external destination fails the job with an egress-related
 	// reason — output success alone does not make the job successful
-	// (SB-013)
 	if pl.Pipeline.Egress != nil {
 		if err := d.runEgress(pl, fin); err != nil {
 			rec.State = stateFailure
@@ -608,8 +669,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	d.saveDedup(pl.Pipeline.Name, dedup)
 
 	// The output commit is a real revision of the output repo: propagate —
-	// unless this was a manual run, whose output is not a processing wave
-	// (SB-010: runs never propagate downstream).
+	// unless this was a manual run, whose output is not a processing wave.
 	if rec.Manual {
 		return
 	}
@@ -621,8 +681,12 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 }
 
-// copyDir copies every file under src into dst, preserving relative paths
-// (the default entry point). Returns 0 on success, 1 on any failure.
+// copyDir copies every file under src into dst, preserving relative paths.
+// It is the default entry point: a pipeline declared with no command and
+// no stdin runs this, so a single-input pipeline's output commit contains
+// one file per input file, same relative name and identical content (the
+// core copy pipeline contract; a bare default command must never drop or
+// alter a matched input file). Returns 0 on success, 1 on any failure.
 func copyDir(src, dst string) int {
 	ok := true
 	filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
@@ -659,8 +723,8 @@ func copyDir(src, dst string) int {
 	return 0
 }
 
-// datumSpec describes one command run through the execution-backend seam
-// (D-23): the transform's image, argv, env, mounts, resources, identity,
+// datumSpec describes one command run through the execution-backend seam:
+// the transform's image, argv, env, mounts, resources, identity,
 // and stdin, plus the PathMap translating the execution-internal paths
 // (/sandman/out, /sandman/in/<side>, /sandman/view/<side>, /tmp) to the
 // staging directories the process backend runs against directly.
@@ -703,7 +767,7 @@ func (d *daemon) runSpec(tr *client.Transform, nodeName, cname string, env []str
 }
 
 // runDatumContainer runs one command through the container backend — the
-// remote execution host's worker executor (SB-167): nodeName is the host
+// remote execution host's worker executor: nodeName is the host
 // identity the container is labelled with.
 func runDatumContainer(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
 	res := containerRunner{}.Run(datumSpec(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin))

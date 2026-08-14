@@ -1,8 +1,8 @@
 // Scheduling knobs and worker visibility: chunking changes only internal
-// granularity (SB-102), the per-worker queue bound holds under load
-// (SB-097), autoscaling ramps to the datum count capped at the parallelism
-// (SB-165), and worker status / datum restart make execution observable
-// and steerable (SB-064/065).
+// granularity, the per-worker queue bound holds under load,
+// autoscaling ramps to the datum count capped at the parallelism,
+// and worker status / datum restart make execution observable
+// and steerable.
 package conformance
 
 import (
@@ -17,7 +17,7 @@ import (
 
 // TestSB102_ChunkSpecOutputComplete — chunking configures only scheduling
 // granularity: whatever the chunk target, the output commit contains every
-// input file with identical content (SB-102).
+// input file with identical content.
 func TestSB102_ChunkSpecOutputComplete(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -75,7 +75,7 @@ func TestSB102_ChunkSpecOutputComplete(t *testing.T) {
 
 // TestSB097_MaxQueueSize — no worker's pending-datum queue exceeds the
 // configured bound, even while workers are busy with slow datums; the job
-// still completes (SB-097).
+// still completes.
 func TestSB097_MaxQueueSize(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -129,7 +129,7 @@ func TestSB097_MaxQueueSize(t *testing.T) {
 
 // TestSB165_AutoscalingRampsToDatumCount — the execution scale ramps to
 // the number of datums, capped at the configured parallelism, and never
-// exceeds the datum count (SB-165; the ramp is instant — workers are
+// exceeds the datum count (the ramp is instant — workers are
 // sized upfront — so a short transform suffices to observe it).
 func TestSB165_AutoscalingRampsToDatumCount(t *testing.T) {
 	repo := uniq(t)
@@ -185,7 +185,7 @@ func TestSB165_AutoscalingRampsToDatumCount(t *testing.T) {
 
 // TestSB064_DatumStatusRestart — restarting a datum aborts its current
 // processing and starts it over with a fresh, later start time; the job
-// still completes with exactly one output commit (SB-064).
+// still completes with exactly one output commit.
 func TestSB064_DatumStatusRestart(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -264,7 +264,7 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 }
 
 // TestSB065_UseMultipleWorkers — a parallelism-2 job reports exactly two
-// worker status entries while it runs (SB-065).
+// worker status entries while it runs.
 func TestSB065_UseMultipleWorkers(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)

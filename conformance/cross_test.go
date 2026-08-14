@@ -1,8 +1,7 @@
 // Cross inputs: a pipeline whose input is the cartesian product of several
 // file-scoped inputs — same branch, different branches, different repos —
 // fires one job per input commit pairing each side's current head, and its
-// datum set is the product of the sides' glob matches (SB-008/009/063/
-// 120/161).
+// datum set is the product of the sides' glob matches.
 package conformance
 
 import (
@@ -88,7 +87,7 @@ func TestSB008_MultipleInputsFromTheSameBranch(t *testing.T) {
 // TestSB009_CrossInputsTwoBranchesSameRepo — a cross of two named inputs
 // on two branches of the same repository combines into one output commit
 // once both branches have revisions, each side's data addressed by its own
-// input name (SB-009).
+// input name.
 func TestSB009_CrossInputsTwoBranchesSameRepo(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -129,7 +128,7 @@ func TestSB009_CrossInputsTwoBranchesSameRepo(t *testing.T) {
 // TestSB063_CrossInputProcessesEveryCombination — a cross over two
 // repositories processes every combination of per-side datums: 2 files × 2
 // files = 4 datums, each emitting both sides' files, concatenated in the
-// single output file (8 lines) (SB-063).
+// single output file (8 lines).
 func TestSB063_CrossInputProcessesEveryCombination(t *testing.T) {
 	r1, r2 := uniq(t)+"1", uniq(t)+"2"
 	mustRepo(t, r1)
@@ -183,7 +182,7 @@ func TestSB063_CrossInputProcessesEveryCombination(t *testing.T) {
 
 // TestSB120_ListJobInputCommits — a cross pipeline creates a job on every
 // input commit, pairing it with the other sides' current heads; job
-// listing filters by the exact input commits a job consumed (SB-120).
+// listing filters by the exact input commits a job consumed.
 func TestSB120_ListJobInputCommits(t *testing.T) {
 	repoA, repoB := uniq(t)+"a", uniq(t)+"b"
 	mustRepo(t, repoA)
@@ -269,7 +268,7 @@ func TestSB120_ListJobInputCommits(t *testing.T) {
 }
 
 // TestSB161_ListDatum — datum enumeration of a cross input yields the full
-// cartesian product, standalone (no pipeline) (SB-161).
+// cartesian product, standalone (no pipeline).
 func TestSB161_ListDatum(t *testing.T) {
 	r1, r2 := uniq(t)+"1", uniq(t)+"2"
 	mustRepo(t, r1)

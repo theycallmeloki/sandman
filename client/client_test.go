@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// TestBackupRejectsTruncatedGzip pins the H3 invariant: a server that
+// TestBackupRejectsTruncatedGzip pins the invariant: a server that
 // fails mid-stream (returns without closing its gzip writer, so the
 // stream ends with no trailer) must surface as an error — never as a
 // nil return over a corrupt archive. backupH has exactly this shape:
@@ -93,7 +93,7 @@ func TestBackupSucceedsOnCompleteGzip(t *testing.T) {
 	}
 }
 
-// M10-batch B: the raw-GET caps, the streaming FetchFileTo, the per-call
+// batch B: the raw-GET caps, the streaming FetchFileTo, the per-call
 // timeout override, and CommitHistory's cycle guard.
 
 func TestReadCappedLimit(t *testing.T) {
@@ -116,7 +116,7 @@ func TestCopyCapped(t *testing.T) {
 	}
 }
 
-// TestFetchFileToStreamsAndOverridesTimeout pins the M10-batch B client
+// TestFetchFileToStreamsAndOverridesTimeout pins the batch B client
 // IO: FetchFileTo streams the body to the writer without buffering it in
 // the FileFetch (Data stays nil), and a per-call timeout override can be
 // shorter than the client's default 60s without touching other calls.

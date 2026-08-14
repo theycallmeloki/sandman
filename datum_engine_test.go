@@ -17,9 +17,9 @@ type killRecorder struct{ kills atomic.Int32 }
 func (*killRecorder) Run(JobSpec) RunResult { return RunResult{} }
 func (k *killRecorder) Kill(string) error   { k.kills.Add(1); return nil }
 
-// TestDatumTimeoutTimerStopsOnCompletion pins H4: the per-attempt datum
+// TestDatumTimeoutTimerStopsOnCompletion pins the rule that the per-attempt datum
 // timeout timer must be stopped when the attempt completes. A datum
-// restart (SB-064) re-runs from attempt=1 with the SAME container name
+// restart re-runs from attempt=1 with the SAME container name
 // (sandman-<job>-<index>-<attempt>), so a pending timer from a completed
 // attempt would fire during the restarted attempt and kill its container
 // mid-flight. The attempt completes well inside the 50ms timeout; a

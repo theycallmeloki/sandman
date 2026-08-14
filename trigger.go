@@ -1,4 +1,4 @@
-// Size-based commit triggers (SB-160): bytes newly committed to a watched
+// Size-based commit triggers: bytes newly committed to a watched
 // branch accumulate durably, and every completed threshold unit commits
 // the accumulated data to the input's dedicated accumulation branch and
 // runs the pipeline on it. The branch name is deterministic (pipeline +
@@ -21,7 +21,7 @@ import (
 
 // triggerBranch is a trigger input's deterministic accumulation branch:
 // the pipeline name plus the input's position, stable across pipeline
-// updates (SB-160 clause 7).
+// updates.
 func triggerBranch(pipeline string, pos int) string {
 	return fmt.Sprintf("%s-%d", pipeline, pos)
 }
@@ -53,7 +53,7 @@ func (d *daemon) deriveTriggerBranches(p *client.Pipeline) {
 }
 
 // triggerLedgerPath is a trigger's durable accumulation state: the bytes
-// accumulated since the last firing (SB-160: durable across commits so an
+// accumulated since the last firing (durable across commits so an
 // interruption never loses or double-counts bytes).
 func (d *daemon) triggerLedgerPath(pipeline string, pos int) string {
 	return filepath.Join(d.state, "triggers", triggerBranch(pipeline, pos)+".json")
@@ -105,9 +105,10 @@ func (d *daemon) commitDelta(cm client.Commit) int64 {
 }
 
 // accumulateTriggers applies every size trigger watching the commit's
-// branch: the commit's new bytes accumulate, and each completed threshold
-// unit fires by committing the accumulated view to the trigger's
-// accumulation branch — whose finish triggers the pipeline normally.
+// branch: the commit's newly committed bytes accumulate in the durable
+// ledger, and each completed threshold unit fires by committing the
+// watched branch's accumulated view to the trigger's accumulation branch
+// — whose finish triggers the pipeline normally.
 func (d *daemon) accumulateTriggers(cm client.Commit) {
 	pipes, err := d.listPipelinesFiltered(nil, "", false)
 	if err != nil {
@@ -149,10 +150,14 @@ func (d *daemon) accumulateTriggers(cm client.Commit) {
 // would deadlock; the ledger arithmetic is what must be atomic.
 var triggerLedgerMu sync.Mutex
 
-// fireTrigger accumulates the commit's delta and fires the trigger once
-// per completed threshold unit: each firing commits the watched branch's
-// accumulated view to the accumulation branch (the pipeline runs on it)
-// and deducts one threshold from the ledger.
+// fireTrigger accumulates the commit's newly committed bytes in the
+// durable ledger and fires the trigger once per completed threshold
+// unit: each firing commits the watched branch's full accumulated view
+// to the accumulation branch (the pipeline runs on it) and deducts one
+// threshold from the ledger, so accumulation resets after firing. A
+// single oversized commit fires once per threshold unit, sub-threshold
+// commits never run the pipeline, and the ledger survives control-plane
+// restarts without losing or double-counting bytes.
 func (d *daemon) fireTrigger(pipeline string, pos int, in client.Input, cm client.Commit) {
 	key := triggerBranch(pipeline, pos)
 	triggerLedgerMu.Lock()
@@ -170,8 +175,8 @@ func (d *daemon) fireTrigger(pipeline string, pos int, in client.Input, cm clien
 }
 
 // fireOnce creates one trigger commit: the watched branch's current view
-// (all accumulated data, not just the newest delta — SB-160 clause 2) on
-// the accumulation branch.
+// (all accumulated data, not just the newest delta) on the accumulation
+// branch.
 func (d *daemon) fireOnce(pipeline, branch string, in client.Input, cm client.Commit) {
 	snapshot, err := d.store.ResolveViewByID(cm.ID)
 	if err != nil {
@@ -192,7 +197,7 @@ func (d *daemon) fireOnce(pipeline, branch string, in client.Input, cm client.Co
 // <pipeline>-<pos>.json with an integer pos, so a name belongs to this
 // pipeline only when the suffix after <pipeline>- parses as an integer
 // — a plain prefix match would also remove another pipeline's ledgers
-// ("foo" must not clear "foo-bar"'s, M2).
+// ("foo" must not clear "foo-bar"'s).
 func (d *daemon) clearTriggerLedgers(pipeline string) {
 	prefix := pipeline + "-"
 	entries, err := os.ReadDir(filepath.Join(d.state, "triggers"))

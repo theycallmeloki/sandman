@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// downstreamReference is the pre-M6 closure algorithm, verbatim: the
+// downstreamReference is the previous closure algorithm, verbatim: the
 // indexed walk must produce byte-identical results (same jobs, same
 // order) or a flush's intersection semantics change.
 func downstreamReference(jobs []Job, commitIDs []string) []Job {
@@ -101,9 +101,9 @@ func sameIDs(a, b []Job) bool {
 	return true
 }
 
-// TestDownstreamJobsSetMatchesReference pins M6: the indexed closure walk
+// TestDownstreamJobsSetMatchesReference pins that the indexed closure walk
 // must produce byte-identical results to the previous algorithm — same
-// jobs, same order — across the intersection semantics (SB-056 wave 1),
+// jobs, same order — across the intersection semantics (wave 1),
 // sink jobs (no output commit: not a downstream consumer), stats-commit
 // chains, duplicate input commits, and random graphs.
 func TestDownstreamJobsSetMatchesReference(t *testing.T) {

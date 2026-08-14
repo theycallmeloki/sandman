@@ -1,7 +1,7 @@
 // Package conformance is Sandman's black-box behaviour suite: one Go test
-// per behaviour record (SB-NNN) from ../sandman-behaviour-notes, driving
-// the system through the client package exactly as the spec describes —
-// Given/When/Then against the observable surface.
+// per behaviour record, driving the system through the client package
+// exactly as the spec describes — Given/When/Then against the observable
+// surface.
 //
 // The suite is currently RED by design: the HTTP API the tests exercise
 // does not exist yet. The tests are the contract; the interfaces phase
@@ -102,8 +102,8 @@ func TestMain(m *testing.M) {
 	// inherited stderr pipe open and go test waits out its WaitDelay.
 	// Graceful first: a SIGKILLed daemon strands running spout
 	// containers, orphaned with the daemon's stale label — they poison
-	// later tests' container assertions (SB-139/140 leave spouts
-	// mid-cycle at teardown by design).
+	// later tests' container assertions (spouts are left mid-cycle at
+	// teardown by design).
 	stopDaemon()
 	// belt and braces: whatever the daemon's exit left behind (a spout
 	// straggler whose cleanup raced the process exit), remove it now —
@@ -141,7 +141,7 @@ func stopDaemon() {
 }
 
 func startDaemon(state string) {
-	// the matrix runs on the process backend (D-23 R-3): deterministic,
+	// the matrix runs on the process backend: deterministic,
 	// no container runtime required; the container-facing subset spins
 	// its own container daemon (container_test.go)
 	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(daemonPort), "-state", state, "-runner", "process")
@@ -155,7 +155,7 @@ func startDaemon(state string) {
 }
 
 // dockerAvailable reports whether the container runtime is present (the
-// container-facing subset runs only when it is; D-23 R-4).
+// container-facing subset runs only when it is).
 func dockerAvailable() bool {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return false
@@ -186,13 +186,13 @@ func procPPID(pid string) int {
 }
 
 // restartDaemon kills the daemon and starts a fresh one on the same port
-// and state dir (SB-034, SB-035). The daemon must be fully dead before the
+// and state dir. The daemon must be fully dead before the
 // new one binds the port.
 func restartDaemon(t *testing.T) {
 	t.Helper()
 	// restart simulates a CRASH: SIGKILL, no graceful cleanup — the
 	// tests assert the crash-recovery paths (a mid-flight job's record
-	// is marked failed by the next daemon, SB-031). The graceful stop
+	// is marked failed by the next daemon). The graceful stop
 	// (stopDaemon) is only for the final teardown.
 	_ = daemonCmd.Process.Kill()
 	_ = daemonCmd.Wait()
@@ -228,11 +228,11 @@ func waitPort(port int, timeout time.Duration) bool {
 }
 
 // uniq derives a name-unique, shell-identifier-safe identifier from the
-// test name. Repo names become environment variable names in jobs
-// (SB-096), so they must match [A-Za-z_][A-Za-z0-9_]* — docker rejects
+// test name. Repo names become environment variable names in jobs, so
+// they must match [A-Za-z_][A-Za-z0-9_]* — docker rejects
 // other characters in -e names and sh misparses hyphens in ${...}.
 // Underscores stay; every other non-identifier character becomes one.
-// (SB-172 covers hyphens/underscores for pipeline names separately.)
+// (Hyphens/underscores for pipeline names are covered separately.)
 var uniqN int
 
 func uniq(t *testing.T) string {
@@ -281,7 +281,7 @@ func commitFiles(t *testing.T, repo, branch string, files map[string]string) cli
 
 // replaceCommit commits each path as a replacement: tombstoned then
 // re-written in the same commit, so the new content replaces the old
-// (FS-4 — a plain put would append to the accumulated content, FS-1/2).
+// (a a plain put would append to the accumulated content.
 // Deleting a path that does not exist is a no-op, so new paths work too.
 func replaceCommit(t *testing.T, repo, branch string, files map[string]string) client.Commit {
 	t.Helper()
@@ -306,7 +306,7 @@ func replaceCommit(t *testing.T, repo, branch string, files map[string]string) c
 	return fin
 }
 
-// overwriteCommit commits files with explicit overwrite semantics (FS-3):
+// overwriteCommit commits files with explicit overwrite semantics:
 // each path's accumulated content is replaced, not appended to.
 func overwriteCommit(t *testing.T, repo, branch string, files map[string]string) client.Commit {
 	t.Helper()
@@ -361,7 +361,7 @@ func wantErr(t *testing.T, err error, substr string) {
 
 // noPanic asserts the call produced a well-formed HTTP response — a
 // *client.Error (any status) or nil. Anything else is a transport-level
-// failure, the signature of a panicking handler (SB-155).
+// failure, the signature of a panicking handler.
 func noPanic(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
@@ -406,7 +406,7 @@ func waitJobFor(t *testing.T, pipeline string, timeout time.Duration) client.Job
 // daemon on its own state dir, restored to the shared daemon on cleanup.
 // Tests that reset the daemon (or corrupt its state) run under it: a
 // mid-suite Reset on the shared daemon wipes every test's state and
-// makes correctness depend on alphabetical execution order (M10). The
+// makes correctness depend on alphabetical execution order. The
 // shared daemon keeps running untouched on its own port.
 func withIsolatedDaemon(t *testing.T) {
 	t.Helper()
@@ -444,14 +444,14 @@ func withIsolatedDaemon(t *testing.T) {
 // cleanupPipeline registers deletion of the pipeline when the test ends.
 // A cron pipeline left on the shared daemon ticks for the whole suite,
 // spawning background jobs that pollute GC, metrics, and job-count
-// assertions (M10); force covers a downstream consuming the output repo.
+// assertions; force covers a downstream consuming the output repo.
 func cleanupPipeline(t *testing.T, name string) {
 	t.Helper()
 	t.Cleanup(func() { noPanic(t, c.DeletePipeline(name, true, false)) })
 }
 
 // copyTransform is the standard pipeline transform: copy every input file
-// matched by the glob into the output directory (per SB-001).
+// matched by the glob into the output directory.
 func copyTransform(inputName string) *client.Transform {
 	return &client.Transform{
 		Image: "alpine:3.21",

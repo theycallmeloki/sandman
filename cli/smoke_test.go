@@ -8,7 +8,7 @@
 //
 // The suite is docker-gated (the daemon runs its default container
 // runner): without a runtime it self-skips, like the conformance
-// container subset (D-23 R-4).
+// container subset.
 package cli_test
 
 import (
@@ -232,7 +232,7 @@ func TestCLI_SmokeFlow(t *testing.T) {
 		t.Fatalf("missing file stderr %q: want a not-found error", errs)
 	}
 
-	// 14. negative: a spec without an input glob is rejected (SB-159)
+	// 14. negative: a spec without an input glob is rejected
 	bad := filepath.Join(t.TempDir(), "bad.json")
 	if err := os.WriteFile(bad, []byte(`{"name": "bad", "transform": {"image": "alpine"}, "input": {"repo": "r1"}}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -242,7 +242,7 @@ func TestCLI_SmokeFlow(t *testing.T) {
 		t.Fatalf("missing-glob stderr %q: want a glob error", errs)
 	}
 
-	// 15. overwrite semantics through the CLI (FS-3): the -o flag replaces
+	// 15. overwrite semantics through the CLI: the -o flag replaces
 	// accumulated content at the path
 	mustCLI(t, "bye\n", "file", "put", "-o", "r1@master:/greeting.txt", "-")
 	if got := mustCLI(t, "", "file", "get", "r1@master:/greeting.txt"); got != "bye\n" {
@@ -277,7 +277,7 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("commit inspect %q: want repo r2 finished", ci)
 	}
 
-	// 4. a pipeline with no command runs the default copy (SB-126)
+	// 4. a pipeline with no command runs the default copy
 	spec := filepath.Join(t.TempDir(), "spec2.json")
 	if err := os.WriteFile(spec, []byte(`{
 	  "name": "cap2",
@@ -326,9 +326,9 @@ func TestCLI_VerbCoverage(t *testing.T) {
 		t.Fatalf("job inspect %q: want state: success", ji)
 	}
 	// 5b. job inspect prints the per-datum aggregate counts (pachctl
-	// parity, SB-086 review). The newest cap2 job is the update-triggered
+	// parity). The newest cap2 job is the update-triggered
 	// re-run: its single datum is unchanged from the flush's successful
-	// run, so dedup (SB-006) skips it — skipped 1, processed 0 — and
+	// run, so dedup skips it — skipped 1, processed 0 — and
 	// statsCommit stays absent (stats disabled here)
 	norm := strings.Join(strings.Fields(ji), " ")
 	if !strings.Contains(norm, "processed : 0") || !strings.Contains(norm, "failed : 0") || !strings.Contains(norm, "skipped : 1") {
@@ -340,7 +340,7 @@ func TestCLI_VerbCoverage(t *testing.T) {
 
 	// 6. a downstream consumer refuses a plain delete and the error names
 	// --force; --force deletes the mid-DAG pipeline anyway, leaving the
-	// consumer with a dangling input (SB-026) — the CLI advertised the
+	// consumer with a dangling input — the CLI advertised the
 	// flag before it existed, dead-ending the delete
 	downSpec := filepath.Join(t.TempDir(), "down.json")
 	if err := os.WriteFile(downSpec, []byte(`{
@@ -674,7 +674,7 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 		t.Fatalf("pipeline inspect after update %q: want version: 2", pi)
 	}
 	// a new input file is what makes the v2 transform actually run: an
-	// unchanged datum is dedup-skipped (D-13), so the update's own head
+	// unchanged datum is dedup-skipped, so the update's own head
 	// job would complete without touching the container
 	mustCLI(t, "D", "file", "put", "rw@master:/d.txt", "-")
 	// the v2 job (triggered by d.txt) fails: wait for it by polling

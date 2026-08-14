@@ -1,4 +1,4 @@
-// Cron inputs (SB-089, SB-133): a scheduled input whose ticks commit a
+// Cron inputs: a scheduled input whose ticks commit a
 // time-stamped file into an auto-created repository, triggering the
 // pipeline. A manual trigger creates the tick immediately.
 package main
@@ -13,7 +13,7 @@ import (
 )
 
 // cronRepo is a cron input's derived repository name: named after the
-// pipeline and the input (SB-089).
+// pipeline and the input.
 func cronRepo(pipeline, name string) string {
 	return pipeline + "-" + name
 }
@@ -33,7 +33,7 @@ func cronDuration(schedule string) (time.Duration, error) {
 // deriveCronRepos resolves a pipeline spec's cron inputs: each cron
 // side's repository is derived from the pipeline and the input's name and
 // created, and the side gets the default glob — the stored spec's sides
-// then carry real repos for triggering, pairing, and enumeration (SB-089).
+// then carry real repos for triggering, pairing, and enumeration.
 func (d *daemon) deriveCronRepos(p *client.Pipeline) {
 	var walk func(in *client.Input)
 	walk = func(in *client.Input) {
@@ -59,7 +59,7 @@ func (d *daemon) deriveCronRepos(p *client.Pipeline) {
 // cronTicker is one pipeline's cron schedule: the owning pipeline and
 // the ticker's cancel. The owner enables exact-name cleanup: cron repos
 // are named <pipeline>-<input>, so a prefix match would let a "foo"
-// cleanup stop "foo-bar"'s schedule (M2).
+// cleanup stop "foo-bar"'s schedule.
 type cronTicker struct {
 	owner  string
 	cancel context.CancelFunc
@@ -67,8 +67,9 @@ type cronTicker struct {
 
 // startCronTicker begins a cron input's schedule: every interval a tick
 // commit lands in the cron repository, triggering the pipeline. The
-// ticker is keyed by the cron repository, so pipeline updates never
-// restart the clock (SB-133); pipeline deletion stops it.
+// ticker is keyed by the cron repository, not the pipeline version, so
+// rapid spec updates — even with reprocessing — never restart the clock,
+// stall it, or double-schedule a tick; pipeline deletion stops it.
 func (d *daemon) startCronTicker(pipeline, name, schedule string, overwrite bool) {
 	dur, err := cronDuration(schedule)
 	if err != nil {
@@ -103,7 +104,7 @@ func (d *daemon) startCronTicker(pipeline, name, schedule string, overwrite bool
 // stopCronTickers stops every ticker owned by the pipeline (used by
 // deletion and reset). Ownership is exact: cron repos are named
 // <pipeline>-<input>, so a prefix match would also stop another
-// pipeline's schedule — a "foo" cleanup must not kill "foo-bar"'s (M2).
+// pipeline's schedule — a "foo" cleanup must not kill "foo-bar"'s.
 func (d *daemon) stopCronTickers(pipeline string) {
 	d.cronMu.Lock()
 	for repo, t := range d.cronTickers {
@@ -129,9 +130,11 @@ func (d *daemon) stopAllCronTickers() {
 
 // cronTick creates one tick commit: a file named by the tick time (UTC
 // RFC3339 with fractional seconds — a legal path with no glob
-// metacharacters, SB-089; the fractional part keeps a sub-second schedule
-// from writing two ticks into one filename). With overwrite the previous
-// tick's file is tombstoned so the branch holds exactly one tick file.
+// metacharacters; the fractional part keeps a sub-second schedule from
+// writing two ticks into one filename) lands in the cron input's
+// auto-created repository. With overwrite the previous tick's file is
+// tombstoned so the branch holds exactly one tick file; otherwise ticks
+// accumulate.
 func (d *daemon) cronTick(repo string, overwrite bool) {
 	name := time.Now().UTC().Format(time.RFC3339Nano)
 	d.commitRevision(repo, defaultBranch, func(commitID string) bool {
@@ -148,7 +151,7 @@ func (d *daemon) cronTick(repo string, overwrite bool) {
 }
 
 // triggerCron creates an immediate tick on every cron input of the
-// pipeline (SB-089 clauses 4-6): scheduled ticks keep flowing, and a
+// pipeline: scheduled ticks keep flowing, and a
 // pipeline with no cron input errors.
 func (d *daemon) triggerCron(pipeline string) error {
 	rec, err := d.loadPipeline(pipeline)

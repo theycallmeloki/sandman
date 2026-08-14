@@ -1,6 +1,6 @@
 package conformance
 
-// Placement (SB-167/169): work can be placed on execution hosts selected
+// Placement: work can be placed on execution hosts selected
 // by placement label — a host joins the cluster by registering with the
 // control plane (configuration set at host setup time), and a pipeline
 // requiring a label never names a host address. Unplaceable work surfaces

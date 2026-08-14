@@ -5,6 +5,13 @@ package main
 // connection: an HTTP method line is handed to the API server, anything
 // else (HELLO…) to the text protocol. One port, one discovery story, two
 // protocols — each connection routed by its own shape.
+//
+// Every data-plane API endpoint validates its request before dereferencing
+// fields: calls with missing required fields (empty names, unknown refs,
+// empty paths) and malformed bodies are rejected with a well-formed error
+// response rather than panicking. No handler may drop the connection on
+// bad input — validation lives at the API boundary so the service survives
+// arbitrary malformed requests.
 
 import (
 	"bufio"
@@ -298,7 +305,7 @@ func (d *daemon) headCommitH(w http.ResponseWriter, r *http.Request) error {
 }
 
 // createBranchH points a branch at an existing commit, creating the branch
-// or retargeting it (SB-142).
+// or retargeting it.
 func (d *daemon) createBranchH(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		Head string `json:"head"`
@@ -345,7 +352,7 @@ func (d *daemon) deleteBranchH(w http.ResponseWriter, r *http.Request) error {
 // createBranch points a branch at an existing commit — creating the branch
 // or retargeting it. Pipelines watch branch heads, so the retarget is
 // itself a trigger: the commit is now on the watched branch and is
-// processed exactly once (SB-142).
+// processed exactly once.
 func (d *daemon) createBranch(repo, branch, head string) error {
 	if branch == "" {
 		return fmt.Errorf("branch must specify a name")
@@ -397,7 +404,7 @@ func (d *daemon) inspectCommitH(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	// Subvenants are the commits that derive from this one: every commit
-	// whose recorded provenance includes it (SB-140 — a spec commit's
+	// whose recorded provenance includes it (a spec commit's
 	// subvenants are its pipeline's spout output and the downstream
 	// output; an epoch's commits all derive from their spec commit). The
 	// scan is unconditional: the inspected commit needs no provenance of
@@ -418,7 +425,7 @@ func (d *daemon) inspectCommitH(w http.ResponseWriter, r *http.Request) error {
 }
 
 // deleteCommitH deletes a commit (by id or repo@branch reference) and
-// everything derived from it across the DAG (SB-124/125).
+// everything derived from it across the DAG.
 func (d *daemon) deleteCommitH(w http.ResponseWriter, r *http.Request) error {
 	if err := d.deleteCommit(r.PathValue("id")); err != nil {
 		return err
@@ -427,7 +434,7 @@ func (d *daemon) deleteCommitH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---- runtime metrics (SB-132) ----
+// ---- runtime metrics ----
 
 // hist is a latency histogram's aggregate: a sum and a count, so an
 // average is computable.
@@ -437,7 +444,7 @@ type hist struct {
 }
 
 // metricsStore accumulates the instrumented operations' invocation counts
-// and latency aggregates. File-read latency is split by outcome (SB-132).
+// and latency aggregates. File-read latency is split by outcome.
 type metricsStore struct {
 	mu         sync.Mutex
 	readTotal  int64
@@ -491,7 +498,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 }
 
 // instrument wraps an HTTP handler with its operation's invocation counter
-// and latency histogram (SB-132).
+// and latency histogram.
 func (d *daemon) instrument(op string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -517,10 +524,12 @@ func (d *daemon) versionH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// metricsH renders the runtime metrics in Prometheus exposition format:
-// invocation counters and latency sum/count aggregates for file reads,
-// file writes, and job listings, with read latency split by outcome
-// (SB-132).
+// metricsH renders the runtime metrics in standard Prometheus exposition
+// format: monotone invocation counters and latency sum/count aggregates for
+// file reads, file writes, and job listings. File-read latency is split by
+// outcome into exactly two series (success and error), so an average is
+// computable even when some operations errored; write and job-listing
+// latency each yield exactly one series.
 func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	d.metrics.mu.Lock()
 	readTotal := d.metrics.readTotal
@@ -546,12 +555,13 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---- garbage collection (SB-079, D-20) ----
+// ---- garbage collection ----
 
-// checkH is the consistency check (SB-139 clause 14): every piece of
-// control-plane metadata parses; a corrupted record is reported as an
-// error, an intact system reports ok. A system-wide reset (POST
-// /api/v1/reset) runs the same check first (D-08).
+// checkH is the consistency check: every piece of control-plane metadata
+// parses; a corrupted record is reported as an error, an intact system
+// reports ok. A system-wide reset (POST /api/v1/reset) runs the same check
+// first, because a full reset requires healthy metadata — corrupted
+// metadata is an error, not tolerated.
 func (d *daemon) checkH(w http.ResponseWriter, r *http.Request) error {
 	if err := d.checkMetadata(); err != nil {
 		return err
@@ -560,8 +570,9 @@ func (d *daemon) checkH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// collectGarbageH is the manual collection trigger (D-20: automatic
-// collection defaults off).
+// collectGarbageH is the manual collection trigger: reclamation may run
+// automatically or be triggered manually, and automatic collection
+// defaults off.
 func (d *daemon) collectGarbageH(w http.ResponseWriter, r *http.Request) error {
 	if err := d.collectGarbage(); err != nil {
 		return err
@@ -570,10 +581,14 @@ func (d *daemon) collectGarbageH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// collectGarbage reclaims durable artifacts no longer referenced by any
-// commit tree, tag, or spec record (SB-079). It refuses while a job is
-// running: active processing may still be about to read the data. Only
-// unreferenced blobs are removed — reachable data is never touched.
+// collectGarbage reclaims exactly the durable artifacts no longer
+// referenced by any commit tree, tag, or spec record. It refuses while any
+// job is running — active processing may still be about to read the data.
+// Reachable data is never touched: deleting a pipeline reclaims its output
+// repo's unreferenced blobs while content-deduplicated shared blobs and
+// the pipeline's retained spec revisions survive. After collection,
+// re-creating the same pipeline and input must yield fully readable,
+// correct data — no stale cache may resurface collected storage.
 func (d *daemon) collectGarbage() error {
 	for _, j := range d.mustListJobs() {
 		if j.State == stateRunning {
@@ -592,7 +607,8 @@ func (d *daemon) collectGarbage() error {
 			}
 		}
 	}
-	// tags hold a reference to their blob (SB-150)
+	// tags hold a reference to their blob, so collection never reclaims
+	// reachable tagged data
 	if entries, err := os.ReadDir(filepath.Join(d.state, "tags")); err == nil {
 		for _, e := range entries {
 			if b, err := os.ReadFile(filepath.Join(d.state, "tags", e.Name())); err == nil {
@@ -628,11 +644,11 @@ func (d *daemon) collectGarbage() error {
 	return nil
 }
 
-// ---- secrets (SB-153/051) ----
+// ---- secrets ----
 
 // secretRec is a secret's durable record: a named metadata blob with a
-// type label and key/value data (SB-153, D-05 — durable, like every other
-// meta-plane record).
+// type label and key/value data — durable, like every other meta-plane
+// record.
 type secretRec struct {
 	Name    string            `json:"name"`
 	Type    string            `json:"type"`
@@ -644,6 +660,13 @@ func (d *daemon) secretPath(name string) string {
 	return filepath.Join(d.state, "secrets", name+".json")
 }
 
+// createSecretH stores a named secret: a metadata blob carrying key/value
+// data and a type label, supporting create, inspect, list, and delete
+// through the management API. Inspection reports the name, the type
+// (arbitrary JSON data is reported as "Opaque"), and a system-assigned
+// creation timestamp. After deletion the secret no longer appears in
+// listings and inspection errors, and deleting an already-removed secret
+// is a no-op (idempotent in effect).
 func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		Name string            `json:"name"`
@@ -726,18 +749,22 @@ func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
 	if !store.ValidName(name) {
 		return fmt.Errorf("invalid secret name %q", name)
 	}
-	os.Remove(d.secretPath(name)) // idempotent in effect (SB-153)
+	os.Remove(d.secretPath(name)) // idempotent in effect
 	writeJSON(w, map[string]string{"ok": "true"})
 	return nil
 }
 
-// ---- execution hosts (SB-167/169) ----
+// ---- execution hosts ----
 
 // registerHostH is the join endpoint an execution host calls at setup and
 // on its heartbeat: the worker reports its name, its exec endpoint, and
-// the placement labels it bears. The control plane schedules labeled
-// pipelines onto registered hosts; a pipeline definition never names a
-// host address (SB-167).
+// the placement labels it bears. An operator designates execution hosts
+// with placement labels, and a pipeline may require that its work run on a
+// host bearing a specific label; the control plane schedules labeled work
+// onto a registered host bearing the label, and a pipeline definition
+// never enumerates a host address or identity. A job completes only once a
+// host bearing the required label is available, and its output provably
+// came from that host's execution.
 func (d *daemon) registerHostH(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		Name   string   `json:"name"`
@@ -768,16 +795,29 @@ func (d *daemon) deleteHostH(w http.ResponseWriter, r *http.Request) error {
 
 // ---- files ----
 
+// putFileH stores a file in an open commit; the request body becomes the
+// file's content and ?overwrite=1 replaces accumulated content at the
+// path. With fetch=URL the file is ingested from an HTTP(S) URL: the
+// URL's body becomes the content, redirects are not followed, and
+// link-local/broadcast/metadata ranges are rejected (loopback stays
+// allowed). With split=1&delimiter=X[&header=1] the upload is split into
+// records stored at path/<index>; a header chunk is replicated into every
+// record's file so each processing participant sees it exactly once, and
+// appending records under the same header leaves earlier records'
+// identity unchanged (they are skipped by the dedup, never reprocessed).
+// A changed header re-identifies every existing record, rewriting it with
+// the new header while keeping its path and record content, so all are
+// reprocessed — none skipped.
 func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
-	// fetch=URL: ingest a remote file (SB-088) — the URL's body becomes
+	// fetch=URL: ingest a remote file — the URL's body becomes
 	// the file's content. The fetch is a server-side request to a
 	// caller-chosen URL, so it is constrained: http(s) only, link-local
 	// and broadcast destinations rejected (cloud-metadata ranges like
 	// 169.254.169.254 must not be reachable through the daemon), redirects
 	// not followed, bounded by the request context and a client timeout.
 	// Loopback stays allowed: the documented ingest story includes local
-	// HTTP servers (the conformance suite's own SB-088 fixture).
+	// HTTP servers (the conformance suite's own URL-ingest fixture).
 	if u := q.Get("fetch"); u != "" {
 		parsed, err := url.Parse(u)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -832,8 +872,8 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 	// split=1&delimiter=X[&header=1]: split the upload into records at
 	// the delimiter; with a header, the first chunk is the header and is
 	// replicated into every record's file, each stored at path/<i>
-	// (SB-137/138 — same-header appends leave earlier records' identity
-	// unchanged, so they are skipped by the dedup)
+	// (same-header appends leave earlier records' identity unchanged, so
+	// they are skipped by the dedup)
 	if q.Get("split") == "1" {
 		delim := q.Get("delimiter")
 		header := q.Get("header") == "1"
@@ -863,8 +903,8 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		}
 		// a changed header re-identifies every record: the existing record
 		// paths are overwritten with the new header + their existing record
-		// content (FS-7 — the header swaps everywhere without changing the
-		// record count or numbering), so all are reprocessed (SB-138)
+		// content (a the header swaps everywhere without changing the
+		// record count or numbering), so all are reprocessed
 		changed := false
 		if header && base > 0 {
 			if first, err := d.store.GetFile(r.PathValue("id"), prefix+"0"); err == nil {
@@ -895,7 +935,7 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 			records = records[min(base, len(records)):]
 		}
 		// new records continue the numbering after the existing records,
-		// whether or not the header changed (FS-7)
+		// whether or not the header changed
 		off := base
 		for i, rec := range records {
 			content := rec
@@ -923,10 +963,15 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// getFileH serves a file from a commit by path: a plain GET returns the
+// exact bytes with no Content-Disposition; a download=true GET returns the
+// same bytes with attachment disposition naming the path's basename. The
+// Content-Type is detected from the bytes (never a stored label), so
+// binary files are served with a correct type and round-trip
+// byte-for-byte. history=1 turns the read into a revision-history listing:
+// one FileInfo per ancestor revision where the path resolves, newest
+// first, capped by limit (negative = every revision)
 func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
-	// history=1 turns the read into a revision-history listing (SB-145):
-	// one FileInfo per ancestor revision where the path resolves, newest
-	// first, capped by limit (negative = every revision)
 	if r.URL.Query().Get("history") == "1" {
 		limit := -1
 		if l := r.URL.Query().Get("limit"); l != "" {
@@ -945,7 +990,7 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	// Content type is detected from the bytes, not a stored label (SB-099).
+	// Content type is detected from the bytes, not a stored label.
 	w.Header().Set("Content-Type", http.DetectContentType(data))
 	if r.URL.Query().Get("download") == "true" {
 		// the basename is percent-decoded untrusted input: strip quotes,
@@ -961,8 +1006,9 @@ func (d *daemon) getFileH(w http.ResponseWriter, r *http.Request) error {
 
 // fileHistory lists the revisions of a path across the commit's ancestry:
 // one FileInfo per ancestor revision where the path resolves, newest
-// first, capped at limit (negative = every revision). A cross input's
-// multi-commit provenance is just more ancestry to walk (SB-145).
+// first, capped at limit (negative = every revision). It must not fail on
+// outputs produced from multi-commit cross inputs — a cross's
+// multi-commit provenance is just more ancestry to walk.
 func (d *daemon) fileHistory(commitID, path string, limit int) ([]client.FileInfo, error) {
 	rec, err := d.store.LoadCommitByID(commitID)
 	if err != nil {
@@ -1018,7 +1064,7 @@ func (d *daemon) deleteFileH(w http.ResponseWriter, r *http.Request) error {
 
 // enumerateDatumsH serves POST /api/v1/datums: the datum set an input
 // would process at its sides' current heads, without creating or running a
-// pipeline (SB-161).
+// pipeline.
 func (d *daemon) enumerateDatumsH(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		Input client.Input `json:"input"`
@@ -1037,9 +1083,11 @@ func (d *daemon) enumerateDatumsH(w http.ResponseWriter, r *http.Request) error 
 	return nil
 }
 
-// enumerateInputDatums lists an input's datum set: the cartesian product
-// of its sides' glob matches at their current finished heads. A side with
-// no finished head contributes nothing, so the set is empty.
+// enumerateInputDatums serves the datum set an input would process at its
+// sides' current finished heads, without creating or running a pipeline:
+// each side's glob matches are enumerated and combined as the Cartesian
+// product, so two inputs of 5 files each yield 25 datums. A side with no
+// finished head contributes nothing, so the set is empty.
 func (d *daemon) enumerateInputDatums(in *client.Input) ([]client.Datum, error) {
 	sides := inputSides(in)
 	sideLists := make([][]datumSide, len(sides))
@@ -1080,12 +1128,19 @@ func (d *daemon) enumerateInputDatums(in *client.Input) ([]client.Datum, error) 
 	return out, nil
 }
 
+// listFilesH lists a commit's files. An optional prefix-glob filter
+// (glob=1*) returns exactly the paths starting with the given prefix, and
+// any pattern that is not a single 'prefix*' form is rejected as an
+// unsupported listing glob. A single job must be able to land tens of
+// thousands of files into one output commit, and the filtered counts must
+// be exact across digit-length boundaries (over names 0-19999, 1*/5*/9*
+// yield 11111/1111/1111).
 func (d *daemon) listFilesH(w http.ResponseWriter, r *http.Request) error {
 	files, err := d.store.ListFiles(r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	// a prefix-glob filter on the listing (SB-047 clause 4): "1*" lists
+	// a prefix-glob filter on the listing: "1*" lists
 	// the paths beginning with "1". Any other pattern returns an error.
 	if glob := r.URL.Query().Get("glob"); glob != "" {
 		prefix, star, ok := strings.Cut(glob, "*")
@@ -1121,7 +1176,13 @@ func (d *daemon) createPipelineH(w http.ResponseWriter, r *http.Request) error {
 	}
 	r.Body.Close()
 	if tx := r.URL.Query().Get("transaction"); tx != "" {
-		// stage the create/update into an open transaction (SB-162/163)
+		// stage the create/update into an open transaction: the staged
+		// operations apply atomically on finish — all or nothing — so a
+		// pipeline staged here may consume another pipeline staged in the
+		// same transaction (its output repo does not exist yet). Staging
+		// records the pipeline's baseline version: if the same pipeline is
+		// modified outside the transaction before finish, finish refuses
+		// to commit rather than silently overwriting.
 		if err := d.stageTxOp(tx, p.Pipeline); err != nil {
 			return err
 		}
@@ -1151,7 +1212,9 @@ func (d *daemon) listPipelinesH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// triggerCronH is the manual cron trigger (SB-089 clauses 4-6).
+// triggerCronH is the manual cron trigger: it creates a tick immediately
+// on every cron input of the pipeline regardless of schedule, and
+// scheduled ticks keep flowing around it.
 func (d *daemon) triggerCronH(w http.ResponseWriter, r *http.Request) error {
 	if err := d.triggerCron(r.PathValue("name")); err != nil {
 		return err
@@ -1195,9 +1258,16 @@ func (d *daemon) startPipelineH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// runPipelineH handles a manual pipeline run (SB-010): a new job over
-// explicit provenance commits (or the current heads), never propagating
-// downstream.
+// runPipelineH handles a manual pipeline run: with no provenance the run
+// re-processes the current branch heads, and with explicit provenance it
+// processes exactly the requested input revisions (one per side, matched
+// by the side's repo and branch), never the branch heads. Provenance
+// commits outside the pipeline's input lineage, and two commits of the
+// same branch, are rejected; a pipeline with no input commits and no
+// provenance errors as unrunnable. The run's job carries the Manual flag
+// and its output never propagates downstream — a manual run is not a
+// processing wave. A job id re-executes an existing job's input pairing,
+// adding a job rather than replacing it.
 func (d *daemon) runPipelineH(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
 		Provenance []string `json:"provenance"`
@@ -1216,7 +1286,7 @@ func (d *daemon) runPipelineH(w http.ResponseWriter, r *http.Request) error {
 
 // ---- jobs ----
 
-// listDatumsH serves GET /api/v1/jobs/{id}/datums (SB-080/083).
+// listDatumsH serves GET /api/v1/jobs/{id}/datums.
 func (d *daemon) listDatumsH(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
@@ -1229,7 +1299,7 @@ func (d *daemon) listDatumsH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// inspectDatumH serves GET /api/v1/jobs/{id}/datums/{datumID} (SB-080).
+// inspectDatumH serves GET /api/v1/jobs/{id}/datums/{datumID}.
 func (d *daemon) inspectDatumH(w http.ResponseWriter, r *http.Request) error {
 	info, err := d.inspectDatum(r.PathValue("id"), r.PathValue("datumID"))
 	if err != nil {
@@ -1239,8 +1309,10 @@ func (d *daemon) inspectDatumH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// restartDatumH serves POST /api/v1/jobs/{id}/datums/{datumID}/restart
-// (SB-064).
+// restartDatumH serves POST /api/v1/jobs/{id}/datums/{datumID}/restart:
+// aborting the datum's in-flight processing and starting it over from
+// scratch, with the next status observation showing it running with a
+// strictly later start time.
 func (d *daemon) restartDatumH(w http.ResponseWriter, r *http.Request) error {
 	if err := d.restartDatum(r.PathValue("id"), r.PathValue("datumID")); err != nil {
 		return err
@@ -1301,8 +1373,14 @@ func (d *daemon) deleteJobH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---- tags (SB-150) ----
+// ---- tags ----
 
+// putTagH binds a durable global name to file content: putting a tag
+// stores the content's reference and getting it returns the exact bytes;
+// listing enumerates every stored tag, each with a non-empty object
+// reference. Tagged objects survive garbage collection — a tag holds a
+// reference to its blob, so collection never reclaims reachable tagged
+// data.
 func (d *daemon) putTagH(w http.ResponseWriter, r *http.Request) error {
 	defer r.Body.Close()
 	data, err := readBody(r.Body, 1<<30)

@@ -1,4 +1,4 @@
-// Execution-environment customization (SB-072/152): a pipeline's
+// Execution-environment customization: a pipeline's
 // transform may carry a full customization document (PodSpec) and/or a
 // JSON modification list (PodPatch) that are validated as JSON at
 // creation and applied to every execution participant at provisioning.
@@ -9,7 +9,7 @@
 //	  "env":     {"NAME": "value", ...},            // job environment variables
 //	  "volumes": {"<name>": {                        // execution-environment mounts
 //	                "hostPath": "/host/path",        //   exactly one source kind
-//	                "emptyDir":  true,               //   per volume (SB-152 clause 3)
+//	                "emptyDir":  true,               //   per volume
 //	              }, ...},
 //	  "workdir": "/sandman/out"                       // execution working directory
 //	}
@@ -35,17 +35,26 @@ type envCustomization struct {
 }
 
 // volumeCustom is one execution-environment volume: exactly one source
-// kind — a host path or an ephemeral directory — must be set (SB-152
-// clause 3).
+// kind — a host path or an ephemeral directory — must be set.
 type volumeCustom struct {
 	HostPath string `json:"hostPath,omitempty"`
 	EmptyDir bool   `json:"emptyDir,omitempty"`
 }
 
-// parseCustomization validates a transform's PodSpec/PodPatch and resolves
-// them into the applied customization. It runs at creation (malformed
-// customization fails pipeline creation, SB-072 clause 1 / SB-152) and
-// again at provisioning (application to execution participants).
+// parseCustomization validates a transform's PodSpec/PodPatch and
+// resolves them into the applied customization. A pipeline's
+// execution-environment customization — a full PodSpec document and/or
+// a PodPatch JSON modification list (RFC 6902) — must be validated as
+// JSON at creation: malformed spec/patch JSON, unknown top-level keys,
+// and volumes specifying other than exactly one source kind fail
+// pipeline creation before any execution. A well-formed spec and a
+// well-formed patch are both applied to every execution participant at
+// provisioning (a patch adding a volume reaches the participant mounted
+// at /sandman/volumes/<name> without disturbing data processing), and a
+// declared scheduling constraint is honored alongside the customization
+// without being overwritten by it. It runs at creation (malformed
+// customization fails pipeline creation) and again at provisioning
+// (application to execution participants).
 func parseCustomization(tr *client.Transform) (*envCustomization, error) {
 	if tr == nil {
 		return &envCustomization{}, nil

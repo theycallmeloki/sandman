@@ -185,8 +185,8 @@ func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
 		{"input named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Name: "out", Repo: repo, Glob: "/*"}}, `input cannot be named "out"`},
 		{"input repo named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Repo: "out", Glob: "/*"}}, `input cannot be named "out"`},
 		{"nonexistent repo", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Name: "in", Repo: "does-not-exist", Glob: "/*"}}, "not found"},
-		// clause 11a: a cron input missing its name (SB-089's derived
-		// repository needs the name)
+		// clause 11a: a cron input missing its name (its derived repository
+		// needs the name)
 		{"cron missing name", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Cron: "@every 1m"}}, "input must specify a name"},
 	}
 	for _, tc := range cases {
@@ -260,7 +260,7 @@ func TestSB173_MixedParallelismRejected(t *testing.T) {
 // expose the same name is rejected: two branches sharing a namespace are
 // ambiguous, and the record demands the rejection (its message is
 // "name was used more than once"; Sandman's signal is the cross
-// namespace check, SB-078 clauses 5/6).
+// namespace check).
 func TestSB159_CrossDuplicateNamesRejected(t *testing.T) {
 	ra := uniq(t) + "a"
 	rb := uniq(t) + "b"
@@ -277,7 +277,7 @@ func TestSB159_CrossDuplicateNamesRejected(t *testing.T) {
 	wantErr(t, err, "distinct namespaces")
 }
 
-// D-03 — a pipeline name is a state-dir path component and the output
+// A pipeline name is a state-dir path component and the output
 // repo's name: names that could escape the pipelines directory ("..",
 // separators, leading dots) are rejected at creation, not silently
 // written outside the state dir.

@@ -1,4 +1,4 @@
-// Execution-environment customization (SB-072/152): a pipeline's
+// Execution-environment customization: a pipeline's
 // transform may carry a full customization document (PodSpec) and a JSON
 // modification list (PodPatch); both are validated as JSON at creation
 // and applied to every execution participant.
@@ -15,7 +15,7 @@ import (
 )
 
 // TestSB072_RejectsMalformedCustomization — malformed spec/patch JSON
-// fails pipeline creation before any execution (SB-072 clause 1).
+// fails pipeline creation before any execution.
 func TestSB072_RejectsMalformedCustomization(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -57,9 +57,9 @@ func TestSB072_RejectsMalformedCustomization(t *testing.T) {
 }
 
 // TestSB072_AppliesCustomization — a well-formed spec and a well-formed
-// patch both reach the execution environment (SB-072 clauses 2/3): the
+// patch both reach the execution environment: the
 // document's env vars are visible to the job. The scheduling constraint
-// alongside customization is the placement mechanism (SB-167/169).
+// alongside customization is the placement mechanism.
 func TestSB072_AppliesCustomization(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -90,7 +90,7 @@ func TestSB072_AppliesCustomization(t *testing.T) {
 
 // TestSB152_PodPatchVolume — a patch adding a volume reaches the
 // execution participant (its host path is observable from user code) and
-// does not disturb data processing (SB-152 clauses 1/2).
+// does not disturb data processing.
 func TestSB152_PodPatchVolume(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)

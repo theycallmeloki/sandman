@@ -1,7 +1,7 @@
 // Error handling and execution bounds: the error-handling command recovers
-// failing datums (SB-012), and per-datum / per-job timeouts cut execution
-// at the boundary (SB-113/115/116 — SB-113's stats-dependent assertions
-// live in the stats batch).
+// failing datums, and per-datum / per-job timeouts cut execution at the
+// boundary (the datum-timeout's stats-dependent assertions live in the
+// stats batch).
 package conformance
 
 import (
@@ -16,7 +16,7 @@ import (
 // TestSB012_ErrorHandlingCommands — a secondary command runs when the
 // primary fails for a datum: recovered datums count toward success,
 // failed datums fail the job, and updating the pipeline re-runs recovered
-// and failed datums while unchanged successful ones are skipped (SB-012).
+// and failed datums while unchanged successful ones are skipped.
 func TestSB012_ErrorHandlingCommands(t *testing.T) {
 	// ---- (ErrCmd) three files, primary succeeds only for file1, error
 	// handler succeeds only for file3 ----
@@ -129,8 +129,7 @@ func TestSB012_ErrorHandlingCommands(t *testing.T) {
 }
 
 // TestSB115_DatumTimeoutControl — a datum that finishes inside its
-// configured per-datum timeout is unaffected and the job succeeds
-// (SB-115).
+// configured per-datum timeout is unaffected and the job succeeds.
 func TestSB115_DatumTimeoutControl(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -158,7 +157,7 @@ func TestSB115_DatumTimeoutControl(t *testing.T) {
 
 // TestSB116_JobTimeout — a whole-job timeout kills the job at the
 // boundary: state KILLED (not FAILED), duration equal to the timeout
-// within tolerance, and the job is observable while running (SB-116).
+// within tolerance, and the job is observable while running.
 func TestSB116_JobTimeout(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)

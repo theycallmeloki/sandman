@@ -28,7 +28,7 @@ func fakeDocker(t *testing.T, rec string) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 }
 
-// assertPreRegisteredSettle pins the M1 invariant: when a spout/service
+// assertPreRegisteredSettle pins the invariant: when a spout/service
 // spawn returns, its running handle must already be registered — a
 // stop/delete in the window between the goroutine starting and the
 // in-goroutine registration would find nothing to cancel, and the spout

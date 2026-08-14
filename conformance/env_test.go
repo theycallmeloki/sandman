@@ -73,8 +73,7 @@ func TestSB101_CustomEnvVarsVisible(t *testing.T) {
 
 // SB-051 — jobs receive metadata through the environment: job id, output
 // commit id, per-input commit id, and the input path, alongside custom
-// variables. (Secret store values are deferred to the secrets batch,
-// SB-153.)
+// variables. (Secret store values are deferred to the secrets batch.)
 func TestSB051_JobMetadataEnvVars(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)

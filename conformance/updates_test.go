@@ -25,7 +25,7 @@ func echoTransform(content string) *client.Transform {
 	}
 }
 
-// mustUpdate applies a new version of the pipeline (SB-040).
+// mustUpdate applies a new version of the pipeline.
 func mustUpdate(t *testing.T, name string, tr *client.Transform, in *client.Input, reprocess bool) {
 	t.Helper()
 	p := client.Pipeline{Name: name, Transform: tr, Input: in, Update: true, Reprocess: reprocess}
@@ -48,12 +48,12 @@ func commitCount(t *testing.T, repo, branch string) int {
 }
 
 // containerNames lists containers tagged with this daemon's node label
-// (used to assert versioned participant replacement, SB-040).
+// (used to assert versioned participant replacement).
 func containerNames(t *testing.T) []string {
 	t.Helper()
 	// no container runtime, no containers: the versioned-participant
-	// assertion (SB-040 clause 4) is trivially satisfied by the process
-	// backend (D-23 R-4)
+	// assertion is trivially satisfied by the process
+	// backend
 	if !dockerAvailable() {
 		return nil
 	}
@@ -73,7 +73,7 @@ func containerNames(t *testing.T) []string {
 }
 
 // TestSB032_UpdatePipelineWithOnlyFailedJob — updating a pipeline whose only
-// history is a failed job with no output commit must succeed (SB-032).
+// history is a failed job with no output commit must succeed.
 func TestSB032_UpdatePipelineWithOnlyFailedJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -94,7 +94,7 @@ func TestSB032_UpdatePipelineWithOnlyFailedJob(t *testing.T) {
 }
 
 // TestSB033_AcceptReturnCode — a declared acceptable exit code turns a
-// non-zero job exit into a success that still produces its output (SB-033).
+// non-zero job exit into a success that still produces its output.
 func TestSB033_AcceptReturnCode(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -124,7 +124,7 @@ func TestSB033_AcceptReturnCode(t *testing.T) {
 
 // TestSB040_UpdateChangesTransform — an update swaps the transform for new
 // jobs, preserves old jobs' transform in history, and provisions fresh
-// participants (SB-040).
+// participants.
 func TestSB040_UpdateChangesTransform(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -148,7 +148,7 @@ func TestSB040_UpdateChangesTransform(t *testing.T) {
 	}
 
 	// job history: 3 jobs newest-first; the two newest carry the new
-	// transform, the original keeps its own (SB-040 clause 3)
+	// transform, the original keeps its own
 	js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name, Full: true})
 	if err != nil {
 		t.Fatalf("list jobs: %v", err)
@@ -184,7 +184,7 @@ func TestSB040_UpdateChangesTransform(t *testing.T) {
 }
 
 // TestSB041_UpdateFinalizesPendingWork — updating while work is pending
-// must not wedge later processing (SB-041; the stats-commit half is N/A
+// must not wedge later processing (the stats-commit half is N/A
 // until the stats branch exists).
 func TestSB041_UpdateFinalizesPendingWork(t *testing.T) {
 	repo := uniq(t)
@@ -214,7 +214,7 @@ func TestSB041_UpdateFinalizesPendingWork(t *testing.T) {
 
 // TestSB042_ManyUpdates — a pipeline updated many times in a row produces a
 // new job and output commit per update, with monotonically growing history
-// (SB-042; upstream runs this manually only).
+// (upstream runs this manually only).
 func TestSB042_ManyUpdates(t *testing.T) {
 	for _, reprocess := range []bool{true, false} {
 		t.Run(fmt.Sprintf("reprocess=%v", reprocess), func(t *testing.T) {
@@ -247,11 +247,11 @@ func TestSB042_ManyUpdates(t *testing.T) {
 
 // TestSB043_CrashThenUpdate — a pipeline whose execution environment cannot
 // be provisioned enters the crashed state with a reason; updating it to a
-// working configuration returns it to running (SB-043).
+// working configuration returns it to running.
 
 // TestSB044_UpdateStoppedPipeline — updating a stopped pipeline applies the
 // new version without restarting it; the paused backlog is processed on
-// start (SB-044).
+// start.
 func TestSB044_UpdateStoppedPipeline(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -283,7 +283,7 @@ func TestSB044_UpdateStoppedPipeline(t *testing.T) {
 	}
 
 	// input written while paused is accumulated, not processed: "bar"
-	// appends to the existing "foo", so the head holds "foobar" (FS-2)
+	// appends to the existing "foo", so the head holds "foobar"
 	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "bar"})
 	if err := c.StartPipeline(name); err != nil {
 		t.Fatalf("start: %v", err)
@@ -303,7 +303,7 @@ func TestSB044_UpdateStoppedPipeline(t *testing.T) {
 
 // TestSB045_UpdateKillsInFlight — updating a pipeline with in-flight jobs
 // terminates them as killed and completes the head commit under the new
-// transform (SB-045).
+// transform.
 func TestSB045_UpdateKillsInFlight(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -338,7 +338,7 @@ func TestSB045_UpdateKillsInFlight(t *testing.T) {
 
 // TestSB092_UpdateFixesFailingPipeline — updating a failing pipeline's
 // command produces a new, successful job for the same input without
-// creating a duplicate pipeline identity (SB-092).
+// creating a duplicate pipeline identity.
 func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -397,7 +397,7 @@ func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
 }
 
 // TestSB136_VersionAncestry — every update preserves a version addressable
-// by ancestry depth; the current version is the most recent (SB-136).
+// by ancestry depth; the current version is the most recent.
 func TestSB136_VersionAncestry(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo) // no commits: the pipeline never runs
@@ -436,7 +436,7 @@ func TestSB136_VersionAncestry(t *testing.T) {
 
 // TestSB143_VersionedHistory — updates create versioned history; job and
 // pipeline listings honor history depth with exact boundaries, and one
-// pipeline's activity leaves another's counts untouched (SB-143). The
+// pipeline's activity leaves another's counts untouched. The
 // upstream counts differ in the middle stages because their scheduler
 // re-attributes some jobs; the contract asserted here — one new job and one
 // new output commit per version transition, monotonic accumulation, and
@@ -530,9 +530,9 @@ func TestSB143_VersionedHistory(t *testing.T) {
 
 // TestSB164_SpecCommitCleanup — pipeline definitions live in the spec
 // repository, one commit per definition; a failed duplicate create leaves
-// no extra spec commit (SB-164).
+// no extra spec commit.
 func TestSB164_SpecCommitCleanup(t *testing.T) {
-	withIsolatedDaemon(t) // the reset wipes spec state; never the shared daemon's (M10)
+	withIsolatedDaemon(t) // the reset wipes spec state; never the shared daemon's
 	noPanic(t, c.Reset()) // fresh spec repository
 	if got := commitCount(t, "spec", "master"); got != 0 {
 		t.Fatalf("spec commits before any pipeline: %d, want 0", got)
@@ -560,7 +560,7 @@ func TestSB164_SpecCommitCleanup(t *testing.T) {
 	}
 }
 
-// D-13 — a changed transform does NOT invalidate datums whose inputs are
+// A changed transform does NOT invalidate datums whose inputs are
 // unchanged: updating ONLY the transform keeps the dedup ledger, so the
 // head job re-runs with the datum skipped; the new transform applies to
 // changed input. (TestSB040 changes the input with the update and

@@ -32,7 +32,7 @@ func (l *lockedRecorder) Write(p []byte) (int, error) {
 func (l *lockedRecorder) Flush()           {}
 func (l *lockedRecorder) snapshot() string { l.mu.Lock(); defer l.mu.Unlock(); return l.body.String() }
 
-// TestFollowLogsLongLine pins M9: a log line over bufio's default 64KB
+// TestFollowLogsLongLine pins the rule that a log line over bufio's default 64KB
 // token cap must stream through the follow, not silently drop. The old
 // Scanner aborted mid-line on ErrTooLong, the recorded offset landed
 // mid-line, and the line never appeared. The stream runs through the

@@ -1,6 +1,6 @@
 // Commit deletion: deleting an input commit cascades through the whole
 // downstream DAG with parent-link and branch-head repair, and deleting a
-// branch head supersedes the in-flight job processing it (SB-124, SB-125).
+// branch head supersedes the in-flight job processing it.
 package conformance
 
 import (

@@ -1,5 +1,5 @@
 // Delimited uploads replicate the header into every record, and URL
-// ingestion feeds JSON-spec pipelines (SB-137, SB-138, SB-088).
+// ingestion feeds JSON-spec pipelines.
 package conformance
 
 import (

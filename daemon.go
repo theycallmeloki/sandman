@@ -67,6 +67,15 @@ func pruneOrphans(node string) {
 // daemon is the node side of the fabric: it advertises itself, browses for
 // peers, serves jobs over one TCP port, and hosts the HTTP API on the same
 // port (connections are routed by their first bytes).
+//
+// Control-plane state is durable on disk under the state directory and
+// reloaded on restart: after a full restart every pipeline returns to its
+// persisted state (running unless stopped/failed), and every repo and
+// commit remains inspectable without recreation — pipeline definitions,
+// repo membership, and commit metadata are persisted and shared, so a
+// single-instance restart requires no recreation of any state. Only
+// in-flight work is lost; committed data and pipeline definitions
+// survive.
 type daemon struct {
 	reg     *registry
 	state   string
@@ -75,27 +84,27 @@ type daemon struct {
 	syncIdx uint64
 	cpuBusy atomic.Uint64 // host cpu busy percent * 1000, sampled each tick
 
-	// runner is the execution backend (D-23 R-1): the container backend by
-	// default; -runner process selects the local-process backend.
+	// runner is the execution backend: the container backend by default;
+	// -runner process selects the local-process backend.
 	runner Runner
 	// stateChanged broadcasts control-plane state transitions (job
 	// records, commit finishes, pipeline states) to the server-side
-	// blocking waits (D-23 R-5).
+	// blocking waits.
 	stateChanged notifier
 
 	// metrics accumulates the instrumented operations' runtime
-	// observability (SB-132).
+	// observability.
 	metrics metricsStore
 
 	// cronTickers are the live cron-input schedules, keyed by the cron
-	// repository; the cancel functions stop the ticker goroutines
-	// (SB-089, SB-133).
+	// repository (so pipeline updates never restart the clock); the
+	// cancel functions stop the ticker goroutines.
 	cronMu      sync.Mutex
 	cronTickers map[string]cronTicker
 
 	// running is the single live-job registry: running job ids to their
 	// lifecycle handles (cancel, containers) and — while the job executes
-	// — their jobExec context for the datum API (restart, SB-064). Both
+	// — their jobExec context for the datum API (restart). Both
 	// live and die under jobsMu; a job appears here at spawn and leaves
 	// when it settles.
 	jobsMu  sync.Mutex
@@ -106,8 +115,8 @@ type daemon struct {
 	text textBackend
 
 	// hosts is the registered execution-host fleet, scheduled on by
-	// placement label (SB-167/169). Ephemeral: workers re-register on a
-	// heartbeat, so no durable state is needed.
+	// placement label. Ephemeral: workers re-register on a heartbeat, so
+	// no durable state is needed.
 	hosts *hostRegistry
 }
 
@@ -198,7 +207,7 @@ func cmdDaemon(args []string) {
 	port := fs.Int("port", DefaultPort, "TCP listen port")
 	name := fs.String("name", sanitizeName(hostname()), "advertised instance name")
 	state := fs.String("state", DefaultState, "state directory")
-	runner := fs.String("runner", "container", "execution backend: container (default) or process (D-23)")
+	runner := fs.String("runner", "container", "execution backend: container (default) or process")
 	fs.Parse(args)
 
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
@@ -213,8 +222,8 @@ func cmdDaemon(args []string) {
 	if err := d.reg.loadStatic(); err != nil {
 		log.Printf("peers file: %v", err)
 	}
-	// the internal pipeline-specification repository (SB-127) exists for
-	// the life of the daemon; a restart finds it already there
+	// the internal pipeline-specification repository exists for the life
+	// of the daemon; a restart finds it already there
 	d.store.CreateRepo("spec")
 	pruneOrphans(*name)
 	d.markStaleJobsFailed() // jobs running in a previous daemon died with it

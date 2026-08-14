@@ -24,11 +24,11 @@ import (
 	"sandman/internal/store"
 )
 
-// pipelineRec is the persisted form of a pipeline. State (P7) is durable so
+// pipelineRec is the persisted form of a pipeline. State is durable so
 // a restarting daemon remembers what it decided. Stopped is a persistent
-// flag distinct from the transient state (SB-028); StoppedAt is the input
+// flag distinct from the transient state; StoppedAt is the input
 // branch head when the pipeline was stopped, the watermark for the backlog
-// replayed on start (SB-048).
+// replayed on start.
 type pipelineRec struct {
 	Pipeline  client.Pipeline `json:"pipeline"`
 	State     string          `json:"state"` // running | stopped | standby | failure | crashed
@@ -37,10 +37,9 @@ type pipelineRec struct {
 	StoppedAt string          `json:"stoppedAt,omitempty"`
 	Version   int             `json:"version"`
 	// SpecCommit is the pipeline's current specification commit (the
-	// "spec" repository, SB-164): the provenance anchor for the pipeline's
+	// "spec" repository): the provenance anchor for the pipeline's
 	// spout commits. An update writes a new spec commit, so spout commits
-	// before and after the update carry distinct provenance epochs
-	// (SB-139 clause 7, SB-140 clause 3).
+	// before and after the update carry distinct provenance epochs.
 	SpecCommit string `json:"specCommit,omitempty"`
 }
 
@@ -70,18 +69,28 @@ var reservedEnv = map[string]bool{
 }
 
 // createPipeline validates and persists a pipeline, or updates an existing
-// one when the update flag is set (SB-040). The validation order is the
-// SB-159 contract: spec present, name, transform, input, then input fields
-// (name → reserved "out" → repo → glob), then cross-references
-// validatePipelineSpec checks the structural SB-159 rules that do not
-// depend on surrounding store state: spec, name, transform, input name
-// (valid shell identifier, not "out"), repo, glob, self-reference, and
-// parallelism. Repo existence and name uniqueness are checked by the
-// caller (they resolve differently inside a transaction, SB-162).
-// validateInputSides checks an input's structure and every side in the
-// SB-159 order: name → reserved "out" → repo → glob → identifier → unique
-// names → self-reference. Cross members must have distinct names (same-repo
-// sides are addressable separately).
+// one when the update flag is set. The validation order is fixed: spec
+// present, name, transform, input, then input fields (name → reserved
+// "out" → repo → glob), then cross-references. validatePipelineSpec checks
+// the structural rules that do not depend on surrounding store state:
+// spec, name, transform, input name (valid shell identifier, not "out"),
+// repo, glob, self-reference, and parallelism. Repo existence and name
+// uniqueness are checked by the caller (they resolve differently inside a
+// transaction). validateInputSides checks an input's structure and every
+// side in the same fixed order — name → reserved "out" → repo → glob →
+// identifier → unique names → self-reference — rejecting every malformed
+// variant cleanly with a descriptive error and never panicking the
+// service. An input side may not consume the pipeline's own output (a side
+// whose repo equals the pipeline's name is rejected), a file input's alias
+// must not be the reserved output directory name "out" (explicit or
+// defaulted from the repo name), and every file input must declare a glob
+// selecting which files become datums. A cross's immediate members must
+// expose distinct namespaces — a member's namespace is its own name (a
+// union member's name is its alias) — so two branches sharing an alias,
+// or two immediate cross branches whose nested unions expose the same
+// alias set, are rejected. Git inputs share a single namespace: two git
+// inputs must not resolve to the same derived name or URL, while the same
+// URL under distinct custom names is allowed.
 func validateInputSides(in *client.Input, pipelineName string) error {
 	if in == nil {
 		return fmt.Errorf("no input set")
@@ -110,7 +119,7 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 				// a union member is accumulated and fired as one datum; a
 				// size trigger's accumulation branch is keyed by input
 				// position and only fires on a watched branch, semantics
-				// that do not extend to a union's merged view (SB-160)
+				// that do not extend to a union's merged view
 				return fmt.Errorf("size triggers are not supported inside union inputs")
 			}
 			if err := validateInputSides(&in.Union[i], pipelineName); err != nil {
@@ -123,7 +132,6 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 		// a cross's immediate members expose distinct namespaces — a
 		// member's namespace is its own name (a union member's name is
 		// its alias), so two branches sharing an alias are rejected
-		// (SB-078 clauses 5/6)
 		ns := map[string]bool{}
 		for _, m := range in.Cross {
 			n := m.Name
@@ -158,12 +166,11 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 	for _, s := range inputSides(in) {
 		if s.Git != nil {
 			// a git input needs no repo or glob: the mapped repository is
-			// derived from the URL or the custom name (SB-104..112). The
-			// URL form is validated at creation (SB-104/159-12), and the
-			// derived names participate in the duplicate-name check, so
-			// two git inputs with the same URL and no custom names collide
-			// (SB-106 clause 2) while distinct names disambiguate (SB-106
-			// clause 3).
+			// derived from the URL or the custom name. The URL form is
+			// validated at creation, and the derived names participate in
+			// the duplicate-name check, so two git inputs with the same
+			// URL and no custom names collide while distinct names
+			// disambiguate.
 			if err := validateGitURL(s.Git.URL); err != nil {
 				return err
 			}
@@ -199,7 +206,7 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 		}
 		if s.Cron != "" {
 			// a cron input needs no repo or glob; its repository is
-			// derived from the pipeline and the input's name (SB-089)
+			// derived from the pipeline and the input's name
 			if s.Name == "" {
 				return fmt.Errorf("input must specify a name")
 			}
@@ -253,6 +260,19 @@ func validCaptureSelector(sel string) bool {
 	return true
 }
 
+// validatePipelineSpec checks a pipeline declaration's shape before any
+// creation-side effects. A name is mandatory: a request with none is
+// rejected with an error naming the missing 'pipeline' field, returned as
+// a normal error response that neither panics nor wedges the service. A
+// transform is mandatory: its absence is rejected with an error naming the
+// missing 'transform' field, rather than crashing. A parallelism
+// specification must select exactly one mechanism: setting both a constant
+// worker count and a coefficient is rejected with an error referencing
+// 'parallelism', even though each field alone is legal. Resource
+// declarations may be partially or entirely unspecified — only memory,
+// memory+CPU, or none at all — and are accepted as-is: declarations are
+// accept-and-record (enforcement is the worker runtime's), so partial or
+// empty resource specs never gate creation or block the running state.
 func validatePipelineSpec(p client.Pipeline) error {
 	if p.Name == "" && p.Transform == nil {
 		return fmt.Errorf("invalid pipeline spec")
@@ -263,15 +283,15 @@ func validatePipelineSpec(p client.Pipeline) error {
 	if !store.ValidName(p.Name) {
 		// a pipeline name is a state-dir path component (pipelines/<name>,
 		// versions/, spout markers) and the output repo's name: a name with
-		// a separator or ".." would escape the pipelines directory (D-03)
+		// a separator or ".." would escape the pipelines directory
 		return fmt.Errorf("invalid pipeline name %q", p.Name)
 	}
 	if p.Transform == nil {
 		return fmt.Errorf("pipeline must specify a transform")
 	}
 	if p.Spout == nil {
-		// a spout declares no input (SB-139 clause 13: it is rejected when
-		// one is given, by validateSpout)
+		// a spout declares no input (it is rejected when one is given, by
+		// validateSpout)
 		if err := validateInputSides(p.Input, p.Name); err != nil {
 			return err
 		}
@@ -284,7 +304,7 @@ func validatePipelineSpec(p client.Pipeline) error {
 	}
 	if p.Transform != nil {
 		// malformed execution-environment customization fails pipeline
-		// creation, before any execution (SB-072 clause 1, SB-152)
+		// creation, before any execution
 		if _, err := parseCustomization(p.Transform); err != nil {
 			return err
 		}
@@ -292,9 +312,9 @@ func validatePipelineSpec(p client.Pipeline) error {
 	return nil
 }
 
-// validateService checks a service pipeline's declaration (SB-100/168):
-// a service is one long-lived process (parallelism 1), always on (no
-// standby), mutually exclusive with spouts, and serves a real input.
+// validateService checks a service pipeline's declaration: a service is
+// one long-lived process (parallelism 1), always on (no standby),
+// mutually exclusive with spouts, and serves a real input.
 func validateService(p client.Pipeline) error {
 	if p.Service == nil {
 		return nil
@@ -314,11 +334,11 @@ func validateService(p client.Pipeline) error {
 	return nil
 }
 
-// validateSecrets checks a pipeline's secret bindings (SB-051, D-05):
-// each reference names a secret, mounts under the /sandman/ execution
-// namespace, and env injections use valid shell identifiers that are not
-// reserved. Secret existence is checked at creation (the daemon-level
-// check in createPipeline).
+// validateSecrets checks a pipeline's secret bindings: each reference
+// names a secret, mounts under the /sandman/ execution namespace, and env
+// injections use valid shell identifiers that are not reserved. Secret
+// existence is checked at creation (the daemon-level check in
+// createPipeline).
 func validateSecrets(p client.Pipeline) error {
 	for i := range p.Transform.Secrets {
 		m := p.Transform.Secrets[i]
@@ -371,7 +391,7 @@ func hasSizeTrigger(in *client.Input) bool {
 
 // externalPortTaken reports whether another live pipeline already declares
 // the external port — two services cannot share the control-plane host's
-// bound port (SB-100).
+// bound port.
 func (d *daemon) externalPortTaken(port int, except string) bool {
 	pipes, err := d.listPipelinesFiltered(nil, "", false)
 	if err != nil {
@@ -391,8 +411,13 @@ func (d *daemon) externalPortTaken(port int, except string) bool {
 // (self-reference before repo existence, so a pipeline never mistakes its
 // own future output repo for a missing input).
 // materializeInputDefaults fills an input's implicit defaults into the
-// stored spec so extraction echoes them (SB-151): every side's name
-// defaults to its repo and its branch to "master".
+// stored spec so extraction echoes them: every side's name defaults to its
+// repo and its branch to "master". Extraction returns a creation request
+// deep-equal to the one used to create it — every user-settable field
+// round-trips, and the input's implicit name and branch defaults are
+// materialized into the stored spec so they echo back; non-configuration
+// fields (spec commit, update/reprocess flags) are excluded, and an
+// unsupported execution framework is rejected at creation naming it.
 func materializeInputDefaults(in *client.Input) {
 	if in == nil {
 		return
@@ -431,6 +456,14 @@ func sideKey(s client.Input) string {
 	return s.Repo
 }
 
+// createPipeline validates and persists a pipeline. Pipeline names are
+// unique: a create whose name matches an existing pipeline is rejected
+// with an 'already exists' error unless the update flag is set — identical
+// configuration does not exempt a duplicate, and the duplicate is surfaced
+// at create time, not at first job scheduling. Every declared input
+// repository must exist at creation: a file input referencing a missing
+// repo is rejected synchronously with a 'not found' error, rather than
+// deferred to job scheduling or datum processing.
 func (d *daemon) createPipeline(p client.Pipeline) error {
 	if err := validatePipelineSpec(p); err != nil {
 		return err
@@ -457,9 +490,9 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		return fmt.Errorf("external port %d is already declared by another service pipeline", p.Service.ExternalPort)
 	}
 	for _, m := range p.Transform.Secrets {
-		// D-05: a pipeline consumes a secret only through an explicit
-		// reference to an existing secret; the reference must be a valid
-		// name (it becomes a path component at provisioning time)
+		// a pipeline consumes a secret only through an explicit reference
+		// to an existing secret; the reference must be a valid name (it
+		// becomes a path component at provisioning time)
 		if !store.ValidName(m.Name) {
 			return fmt.Errorf("invalid secret name %q", m.Name)
 		}
@@ -468,12 +501,12 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 		}
 	}
 	// materialize the input's implicit defaults into the stored spec so
-	// extraction echoes them (SB-151): every side's name defaults to its
+	// extraction echoes them: every side's name defaults to its
 	// repo and its branch to master
 	materializeInputDefaults(p.Input)
 
 	// update (or create) branching. A corrupt record is an incomplete
-	// pipeline: not updatable, not silently recreated (SB-144).
+	// pipeline: not updatable, not silently recreated.
 	existing, loadErr := d.loadPipeline(p.Name)
 	if loadErr == nil {
 		if !p.Update {
@@ -493,13 +526,13 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	}
 	if p.Spout != nil {
 		// a spout's job is its own: a background run committing each
-		// data-bearing cycle (SB-139)
+		// data-bearing cycle
 		d.spawnSpoutJob(rec, false)
 		return nil
 	}
 	if p.Service != nil {
 		// a service's job is its own: one long-lived process serving the
-		// input, never a datum run (SB-100)
+		// input, never a datum run
 		d.spawnServiceJob(rec)
 		return nil
 	}
@@ -509,20 +542,25 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 }
 
 // applyCreate persists a pipeline's version-1 metadata: the spec commit
-// (SB-164) and the head record with its immutable version archive. It
-// does not schedule any job; the caller decides when the pipeline runs.
+// and the head record with its immutable version archive. It does not
+// schedule any job; the caller decides when the pipeline runs. A transform
+// with stdin lines but no executable command is accepted at creation —
+// the command's absence is a start-time failure, not a creation-time
+// validation error — and the pipeline is immediately recorded in the
+// failure state with reason 'no command specified but stdin lines
+// provided', so it can never run rather than hanging.
 func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	p.Update = false
 	// cron inputs get their derived repositories and their schedules
-	// started (SB-089); size triggers get their accumulation branches
-	// (SB-160) — the derivations mutate the stored spec
+	// started; size triggers get their accumulation branches — the
+	// derivations mutate the stored spec
 	d.deriveCronRepos(&p)
 	d.deriveGitRepos(&p)
 	d.deriveTriggerBranches(&p)
 	// the output repo exists from creation: downstream pipelines can be
-	// defined against it before it has any commits (SB-086's stats branch).
-	// An existing repo (a keepRepo delete followed by a recreate, SB-157)
-	// is reused as-is.
+	// defined against it before it has any commits — including a
+	// stats-enabled pipeline's "stats" branch. An existing repo (a
+	// keepRepo delete followed by a recreate) is reused as-is.
 	if _, err := os.Stat(d.store.RepoDir(p.Name)); err != nil {
 		if err := d.store.CreateRepo(p.Name); err != nil {
 			return nil, err
@@ -531,7 +569,7 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 	rec := pipelineRec{Pipeline: p, State: stateRunning, Version: 1}
 	if len(p.Transform.Cmd) == 0 && len(p.Transform.Stdin) > 0 {
 		// No command to feed the stdin lines to: accepted, but the pipeline
-		// fails as soon as it would start (SB-149).
+		// fails as soon as it would start.
 		rec.State = stateFailure
 		rec.Reason = reasonNoCommandStdin
 	}
@@ -540,9 +578,9 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 			d.startCronTicker(p.Name, s.Name, s.Cron, s.Overwrite)
 		}
 	}
-	// The spec commit is durable before the pipeline is considered created
-	// (SB-164): a failed create leaves no spec commit behind because the
-	// validation above ran first.
+	// The spec commit is durable before the pipeline is considered created:
+	// a failed create leaves no spec commit behind because the validation
+	// above ran first.
 	rec.SpecCommit = d.writeSpecCommit(p.Name, p, 1)
 	d.archiveVersion(&rec)
 	if err := d.savePipeline(&rec); err != nil {
@@ -553,10 +591,19 @@ func (d *daemon) applyCreate(p client.Pipeline) (*pipelineRec, error) {
 
 // scheduleHeadJob processes the input heads once under the pipeline's
 // current version — each side at its current head — when any side has a
-// finished head and the pipeline is able to run (SB-023, SB-053,
-// SB-042/092/143 for updates). Failure and stopped pipelines never run. It
-// returns the spawned job's id, or "" when nothing was scheduled — the
-// caller can wait for exactly that job to settle.
+// finished head and the pipeline is able to run. Failure and stopped
+// pipelines never run. The model is exactly one job per triggering input
+// commit, and each job writes exactly one output commit: a single-input
+// pipeline therefore produces one output commit per input commit (no
+// extra, no missing — the count is part of the copy-pipeline contract).
+// A pipeline created over existing history processes only the current
+// head, in one output commit: each input side is paired at its finished
+// head and a single job spawns over the full accumulated head content —
+// older history is not replayed, and historical commits never each
+// trigger a job at creation. An update re-runs the head under the new
+// version the same way. It returns the spawned job's id, or "" when
+// nothing was scheduled — the caller can wait for exactly that job to
+// settle.
 func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 	if rec.State == stateFailure || rec.Stopped {
 		return ""
@@ -568,9 +615,9 @@ func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 		}
 	}
 	// a nested union/cross may still consume repos whose heads exist even
-	// when no side has a direct head (SB-078 clauses 2/3/5/6: union of
-	// crosses, cross of unions): schedule the head job; the resolve loop
-	// picks up each nested branch's head
+	// when no side has a direct head (union of crosses, cross of unions):
+	// schedule the head job; the resolve loop picks up each nested branch's
+	// head
 	var nestedAny func(in *client.Input) bool
 	nestedAny = func(in *client.Input) bool {
 		for _, s := range inputSides(in) {
@@ -595,8 +642,7 @@ func (d *daemon) scheduleHeadJob(rec *pipelineRec) string {
 // A standby pipeline's activation is counted so its settle hook never
 // races an incoming job: spawnJob increments before the job can run, and
 // the job's settle decrements and returns the pipeline to standby when the
-// count reaches zero (SB-049/050: idle in standby, wake on input, rest
-// again once the work is done).
+// count reaches zero.
 var (
 	standbyMu     sync.Mutex
 	standbyActive = map[string]int{}
@@ -605,9 +651,14 @@ var (
 // spawnJob launches a job, activating a standby pipeline synchronously:
 // the activation count is incremented and the state moves to "running"
 // before the goroutine can start, so a settling predecessor can never
-// observe quiescence while a new job is on its way. heads is the job's
-// input pairing — one commit per input side, empty when a side has no
-// head (its cross contributes no datums).
+// observe quiescence while a new job is on its way. A standby pipeline
+// idles in the standby state, wakes to the running state when input
+// arrives, and returns to standby once the work settles; there is no
+// distinct partially-scheduled standby state — a partial-capacity or
+// provisioning condition surfaces as the crashed/failed state, so a
+// standby pipeline that fails to provision crashes rather than resting in
+// standby. heads is the job's input pairing — one commit per input side,
+// empty when a side has no head (its cross contributes no datums).
 func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, id string, pre *jobRec) string {
 	if rec.Pipeline.Standby {
 		standbyMu.Lock()
@@ -624,7 +675,7 @@ func (d *daemon) spawnJob(rec *pipelineRec, heads []client.Commit, propagated, i
 	// the running handle is registered before the goroutine starts, so a
 	// cancel arriving the instant the job spawns can always find it — a
 	// not-yet-scheduled goroutine would otherwise escape the cancel and
-	// run the old version indefinitely (SB-045)
+	// run the old version indefinitely
 	rj := d.registerRunning(id, rec.Pipeline.Name)
 	go guard(func() {
 		// a panic must not abandon the job with a forever-"running"
@@ -670,13 +721,15 @@ func (d *daemon) standbySettle(name string) {
 	}
 }
 
-// runPipeline manually triggers a pipeline run (SB-010). Provenance, when
+// runPipeline manually triggers a pipeline run. Provenance, when
 // non-empty, fixes the exact input revisions the job processes — one per
 // side, matched by the side's repo and branch; two commits of the same
 // branch are rejected, and a commit outside the pipeline's input lineage
-// is rejected. JobID re-executes an existing job's input pairing. With
-// neither, the current branch heads are used. The run's output never
-// propagates downstream (a manual run is not a processing wave).
+// is rejected. With no provenance the current branch heads are used, and a
+// pipeline with no input commits and no provenance errors as unrunnable.
+// JobID re-executes an existing job's input pairing, adding a job rather
+// than replacing it. The run's job carries the Manual flag and its output
+// never propagates downstream (a manual run is not a processing wave).
 func (d *daemon) runPipeline(name string, provenance []string, jobID string) (client.Job, error) {
 	rec, err := d.loadPipeline(name)
 	if err != nil {
@@ -727,7 +780,7 @@ func (d *daemon) runPipeline(name string, provenance []string, jobID string) (cl
 		}
 		if !any {
 			// nothing to run against: no provenance, and no input commits
-			// exist (SB-010 clause 6: an unrunnable pipeline errors)
+			// exist (an unrunnable pipeline errors)
 			return client.Job{}, fmt.Errorf("pipeline %q has no input commits to run", name)
 		}
 	}
@@ -741,8 +794,13 @@ func (d *daemon) runPipeline(name string, provenance []string, jobID string) (cl
 }
 
 // standbyIdle parks a just-created or just-updated standby pipeline in the
-// standby state when it has no work to do: with no finished input head on
-// any side, nothing will be scheduled until a commit arrives (SB-049).
+// standby state whenever it has no finished input head to process and is
+// not stopped, failed, or crashed: with no finished input head on any
+// side, nothing will be scheduled until a commit arrives. The pipeline
+// wakes to the running state only when input arrives and returns to
+// standby once its work settles; wake-up need not activate an entire chain
+// at once, and consecutive jobs reuse the standby pipeline's execution
+// participant without per-job reconfiguration.
 func (d *daemon) standbyIdle(rec *pipelineRec) {
 	if !rec.Pipeline.Standby || rec.Stopped || rec.State == stateFailure || rec.State == stateCrashed {
 		return
@@ -760,26 +818,41 @@ func (d *daemon) standbyIdle(rec *pipelineRec) {
 	}
 }
 
-// updatePipeline applies a new version of an existing pipeline (SB-040).
+// updatePipeline applies a new version of an existing pipeline: the new
+// transform governs all jobs created after the update while historical
+// jobs keep their original transform in metadata, and each update
+// provisions a fresh set of execution participants under the new version,
+// retiring the previous version's so none of any older version linger.
 // In-flight jobs of the previous version are terminated and recorded as
-// killed (SB-045); every update then processes the current input head under
-// the new transform — the version transition is itself a processing event
-// (SB-042, SB-092, SB-143). A stopped pipeline stays stopped (SB-044).
+// killed — no old-version work may race the new head job. Every update is
+// itself a processing event: it processes the current input head under the
+// new transform, producing a new output commit and at least one new job,
+// whether or not reprocessing is requested (with Reprocess it re-runs the
+// head and makes the new output visible at the pipeline's branch). A
+// failing pipeline is a valid update target — updating it to a working
+// command creates a new job for the same input, leaving the prior failed
+// job in history and the pipeline identity unchanged — and a pipeline
+// crashed because its execution environment could not be provisioned never
+// wedges the update path either. An update issued for a nonexistent
+// pipeline is a create, not an error. A stopped pipeline stays stopped,
+// and an unfinished stats commit left by a previous version must not
+// deadlock later jobs: statistics are one-way and cannot be dropped on
+// update.
 func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error {
-	d.cancelPipelineJobs(existing.Pipeline.Name) // SB-045: no old-version work may race the new head job
+	d.cancelPipelineJobs(existing.Pipeline.Name) // no old-version work may race the new head job
 	rec, err := d.applyUpdate(existing, p)
 	if err != nil {
 		return err
 	}
 	if p.Spout != nil {
 		// the update killed the old spout job; the new epoch starts fresh
-		// (SB-139 clause 7/10); a reprocess update resets the marker state
+		// (a reprocess update resets the marker state)
 		d.spawnSpoutJob(rec, p.Reprocess)
 		return nil
 	}
 	if p.Service != nil {
 		// the update killed the old service process; the new declaration
-		// serves the current input head (SB-100)
+		// serves the current input head
 		d.spawnServiceJob(rec)
 		return nil
 	}
@@ -789,21 +862,27 @@ func (d *daemon) updatePipeline(existing *pipelineRec, p client.Pipeline) error 
 }
 
 // applyUpdate persists a new version of an existing pipeline — the spec
-// commit (SB-164), the version archive, and the head record — without
-// scheduling any job. In-flight work cancellation is the caller's job so
-// a transaction can coordinate it.
+// commit, the version archive, and the head record — without scheduling
+// any job. In-flight work cancellation is the caller's job so a
+// transaction can coordinate it. An update must not implicitly restart a
+// paused pipeline: updating a stopped pipeline increments its version and
+// applies the new configuration but leaves the state paused, producing no
+// new output commit — input written while paused accumulates in the head
+// and is processed only after the pipeline is started again. Per-datum
+// statistics are a one-way flag: an update may enable them, but an update
+// attempting to disable them is rejected with an error rather than
+// silently ignored.
 func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelineRec, error) {
 	name := existing.Pipeline.Name
 	p.Update = false
 	if existing.Pipeline.EnableStats && !p.EnableStats {
 		// per-datum statistics are one-way: an update cannot disable them
-		// (SB-081)
 		return nil, fmt.Errorf("statistics cannot be disabled once enabled")
 	}
 	// cron inputs keep their derived repositories; the existing tickers
 	// are keyed by those repositories and are left running — an update
-	// must not restart the cron clock (SB-133). Trigger branches are
-	// reused across updates (SB-160 clause 7).
+	// must not restart the cron clock. Trigger branches are reused across
+	// updates.
 	d.deriveCronRepos(&p)
 	d.deriveGitRepos(&p)
 	d.deriveTriggerBranches(&p)
@@ -830,7 +909,7 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 		rec.State = stateFailure
 		rec.Reason = reasonNoCommandStdin
 	} else if existing.Stopped {
-		rec.State = statePaused // an update must not restart a paused pipeline (SB-044)
+		rec.State = statePaused // an update must not restart a paused pipeline
 	}
 	rec.SpecCommit = d.writeSpecCommit(name, p, v)
 	d.archiveVersion(&rec)
@@ -841,9 +920,9 @@ func (d *daemon) applyUpdate(existing *pipelineRec, p client.Pipeline) (*pipelin
 }
 
 // writeSpecCommit records one pipeline definition as a commit in the spec
-// repository (SB-127, SB-164): one commit per definition, written only
-// after validation passed. It returns the commit id — the pipeline's
-// provenance anchor for spout epochs (SB-139 clause 7).
+// repository: one commit per definition, written only after validation
+// passed. It returns the commit id — the pipeline's provenance anchor for
+// spout epochs.
 func (d *daemon) writeSpecCommit(name string, spec client.Pipeline, version int) string {
 	b, err := json.Marshal(spec)
 	if err != nil {
@@ -867,7 +946,7 @@ func (d *daemon) versionPath(name string, version int) string {
 }
 
 // archiveVersion persists an immutable copy of a pipeline version, keeping
-// the history addressable by ancestry (SB-136).
+// the history addressable by ancestry.
 func (d *daemon) archiveVersion(rec *pipelineRec) {
 	b, err := json.Marshal(rec)
 	if err != nil {
@@ -905,11 +984,15 @@ func (d *daemon) loadAllPipelineRecs() []*pipelineRec {
 	return out
 }
 
-// stopPipeline pauses the pipeline: the persistent Stopped flag is set, the
-// transient state reports statePaused (SB-028), and the input head at stop
-// time becomes the backlog watermark. A spout declares no input (SB-139:
-// it is rejected with one), so it has no watermark — stopping it just ends
-// the background job.
+// stopPipeline pauses the pipeline: the persistent Stopped flag is set,
+// the transient state reports statePaused, and the input head at stop time
+// becomes the backlog watermark. Stopping writes no output commit, so
+// downstream pipelines watching this one are never triggered by the stop —
+// a stop must never look like new input data. The stopped condition is
+// durable and distinct from the transient state, so a restarting daemon
+// remembers the pipeline is stopped. A spout declares no input (it is
+// rejected with one), so it has no watermark — stopping it just ends the
+// background job.
 func (d *daemon) stopPipeline(name string) error {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
@@ -925,18 +1008,21 @@ func (d *daemon) stopPipeline(name string) error {
 		}
 	}
 	// a paused pipeline's in-flight work stops: stopping ends active
-	// processing, so garbage collection can proceed (SB-079) and the
+	// processing, so garbage collection can proceed and the
 	// paused pipeline holds no containers
 	d.cancelPipelineJobs(name)
 	return d.savePipeline(rec)
 }
 
-// startPipeline resumes the pipeline and processes the backlog: the
-// commits finished while it was stopped are consumed together as one job
-// over the current branch head — the accumulated view — matching SB-023's
-// process-the-head-once semantics and SB-050's "commits created while
-// paused are consumed together" (a job already run for the head commit is
-// not re-run).
+// startPipeline resumes the pipeline and processes the backlog: commits
+// finished while it was stopped — which produced no jobs and no output
+// commits, yet were retained — are consumed together as one job over the
+// current branch head, the accumulated view of everything finished while
+// stopped, stopping short of the stop-time watermark (a job already run
+// for the head commit is not re-run). A standby pipeline paused while
+// stopped wakes the same way: the commits accumulated during the pause are
+// consumed together as one job producing exactly one additional output
+// commit, and the pipeline returns to standby afterward.
 func (d *daemon) startPipeline(name string) error {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
@@ -957,15 +1043,15 @@ func (d *daemon) startPipeline(name string) error {
 	}
 	if rec.Pipeline.Service != nil {
 		// a stopped service was cancelled; starting it brings the long-
-		// lived process back up serving the current input head (SB-100)
+		// lived process back up serving the current input head
 		d.spawnServiceJob(rec)
 		return nil
 	}
 	if rec.Pipeline.Spout != nil {
 		// a stopped spout was cancelled; starting it resumes the spout
-		// from its preserved marker state (SB-139 clause 10: a plain
-		// restart does not reset the marker) — there is no input head
-		// to process, so no backlog path exists
+		// from its preserved marker state (a plain restart does not reset
+		// the marker) — there is no input head to process, so no backlog
+		// path exists
 		d.spawnSpoutJob(rec, false)
 		return nil
 	}
@@ -1006,7 +1092,7 @@ func (d *daemon) savePipeline(rec *pipelineRec) error {
 		return err
 	}
 	// a pipeline state change can settle an empty flush (consumers
-	// settled): wake the blocking waits (D-23 R-5)
+	// settled): wake the blocking waits
 	d.stateChanged.signal()
 	return nil
 }
@@ -1030,6 +1116,17 @@ func (d *daemon) pipelinePath(name string) string {
 	return filepath.Join(d.state, "pipelines", name+".json")
 }
 
+// inspectPipeline inspects a pipeline's metadata. Ancestry 0 is the
+// current version, and ancestry k addresses version current-k, returning
+// that version's original spec: every update archives an immutable
+// version, so historical versions are retrievable and strictly ordered by
+// ancestry even for a pipeline that has never run. The inspection reports
+// a per-state job count — JobCounts maps every job state to the number of
+// that pipeline's jobs currently in that state, derived live from the job
+// records and keyed strictly by state, so a successful job increments only
+// the success bucket — and returns the pipeline's optional free-form
+// description byte-for-byte, with no transformation (no trimming,
+// defaulting, or truncation) applied to it.
 func (d *daemon) inspectPipeline(name string, ancestry int) (client.PipelineInfo, error) {
 	rec, err := d.loadPipeline(name)
 	if err != nil {
@@ -1048,7 +1145,7 @@ func (d *daemon) inspectPipeline(name string, ancestry int) (client.PipelineInfo
 		}
 		return info, nil
 	}
-	// ancestry k addresses version current-k (SB-136)
+	// ancestry k addresses version current-k
 	b, err := os.ReadFile(d.versionPath(name, rec.Version-ancestry))
 	if err != nil {
 		return client.PipelineInfo{}, fmt.Errorf("pipeline %q has no version at ancestry %d", name, ancestry)
@@ -1063,8 +1160,11 @@ func (d *daemon) inspectPipeline(name string, ancestry int) (client.PipelineInfo
 // listPipelinesFiltered lists pipelines. history < 0 returns every
 // historical version of every pipeline; otherwise one entry per pipeline
 // (the current version). name restricts to one pipeline. A pipeline whose
-// definition is lost makes the ordinary listing error; with allowIncomplete
-// it is listed by name only (SB-144).
+// definition content is lost becomes incomplete and only its name is
+// recoverable: the ordinary listing errors rather than returning a partial
+// result, while listing with allowIncomplete returns the name-only entry.
+// Such a pipeline is not silently recreated or repaired by an update, but
+// deletion succeeds by name without the missing definition.
 func (d *daemon) listPipelinesFiltered(history *int, name string, allowIncomplete bool) ([]client.PipelineInfo, error) {
 	entries, err := os.ReadDir(filepath.Join(d.state, "pipelines"))
 	if err != nil {
@@ -1165,15 +1265,27 @@ func (rec *pipelineRec) info() client.PipelineInfo {
 }
 
 // deletePipeline removes a pipeline. A pipeline whose output feeds a
-// downstream pipeline is refused unless force is set (SB-026/027); in-flight
-// jobs are cancelled and their records removed; the output repository is
-// removed unless keepRepo is set (SB-157). An incomplete pipeline is
-// deletable by name only (SB-144).
+// downstream pipeline is refused unless force is set — the non-forced
+// delete errors naming the downstream consumer, and a forced delete
+// overrides the mid-DAG guard; the same contract holds whether the delete
+// runs as one atomic transaction or is decomposed into a split
+// transaction. Deleting a standby pipeline fully terminates its background
+// monitoring and cancels its in-flight jobs, so no leaked goroutine or
+// in-flight job wedges the controller, and a replacement pipeline over the
+// same input still works end to end. The delete fully removes the
+// pipeline's incarnation — its job records, dedup table, and version
+// archive — so a later create under the same name is a fresh incarnation
+// that reprocesses the input head into a new output commit; job listing
+// for a deleted pipeline is an error, not an empty list. The output
+// repository is removed unless keepRepo is set, in which case it and all
+// committed data are preserved and a re-created pipeline of the same name
+// attaches to the existing repository rather than resetting it. An
+// incomplete pipeline is deletable by name only.
 func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 	rec, loadErr := d.loadPipeline(name)
 	if loadErr != nil {
 		if _, err := os.Stat(d.pipelinePath(name)); err != nil {
-			return nil // deleting an already-deleted pipeline is a no-op (SB-010)
+			return nil // deleting an already-deleted pipeline is a no-op
 		}
 		// incomplete pipeline: name-only delete
 	} else if !force {
@@ -1187,13 +1299,12 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 		}
 	}
 	// cancel in-flight work and wait for it to settle, then remove the job
-	// records (SB-026/027: no orphaned job listings). The tickers stop
-	// first: a cron tick landing between the cancel scan and the ticker
-	// stop would create a job that escapes the cancel and keeps the
-	// registry busy — garbage collection must not see a ghost running
-	// job after the delete returns (SB-079).
-	d.stopCronTickers(name)     // a deleted pipeline's schedule stops (SB-089)
-	d.clearTriggerLedgers(name) // its trigger accumulation goes too (SB-160)
+	// records (no orphaned job listings). The tickers stop first: a cron
+	// tick landing between the cancel scan and the ticker stop would create
+	// a job that escapes the cancel and keeps the registry busy — garbage
+	// collection must not see a ghost running job after the delete returns.
+	d.stopCronTickers(name)     // a deleted pipeline's schedule stops
+	d.clearTriggerLedgers(name) // its trigger accumulation goes too
 	d.cancelPipelineJobs(name)
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 		d.jobsMu.Lock()
@@ -1223,15 +1334,15 @@ func (d *daemon) deletePipeline(name string, force, keepRepo bool) error {
 			// a repo that survives its pipeline's deletion keeps the
 			// pipeline's blobs referenced forever (its commits are the
 			// only references) — a silent failure here leaks the whole
-			// tree and wedges garbage collection (SB-079 accounting)
+			// tree and wedges garbage collection
 			if err := d.store.DeleteRepo(name, true); err != nil {
 				return fmt.Errorf("delete pipeline %q: output repo: %w", name, err)
 			}
 		}
 		// The pipeline's side repos go with it unless another pipeline
 		// still references them: the git-derived mapped repos (shared
-		// by pipelines bound to the same URL — SB-111 — or consumed as
-		// a plain input) and the cron tick repos. A surviving side repo
+		// by pipelines bound to the same URL or consumed as a plain
+		// input) and the cron tick repos. A surviving side repo
 		// keeps its blobs referenced forever — the pushed tree or the
 		// tick files — leaking and wedging garbage collection.
 		if rec != nil && rec.Pipeline.Input != nil {

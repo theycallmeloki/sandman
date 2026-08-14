@@ -14,7 +14,7 @@ package store
 // A commit's files are the paths written during it; the readable view at a
 // commit merges its parents' files (child wins). A commit finished with the
 // empty flag has no view at all: nothing is readable through it, even at
-// the branch head (SB-118).
+// the branch head.
 import (
 	"archive/tar"
 	"crypto/rand"
@@ -41,7 +41,7 @@ type Store struct {
 	dir string
 	mu  sync.RWMutex
 	// onFinish, when set, is called after every commit finish — the
-	// daemon's state-change broadcast for the blocking waits (D-23 R-5).
+	// daemon's state-change broadcast for the blocking waits.
 	onFinish func()
 }
 
@@ -54,21 +54,21 @@ type fileEntry struct {
 }
 
 // fileOp is one write operation in a commit, in write order: an append
-// (FS-1), an overwrite that replaces accumulated content (FS-3), or a
-// delete tombstone (FS-4). Order within the commit is load-bearing — a
+// an overwrite that replaces accumulated content, or a
+// delete tombstone. Order within the commit is load-bearing — a
 // delete then a write leaves only the write; a write then a delete leaves
-// nothing (FS-4 edges).
+// nothing.
 type fileOp struct {
 	Path      string `json:"path"`
 	SHA       string `json:"sha"` // hex sha256 of the written bytes ("" for a delete)
 	Size      uint64 `json:"size"`
-	Overwrite bool   `json:"overwrite,omitempty"` // replace accumulated content (FS-3)
-	Delete    bool   `json:"delete,omitempty"`    // tombstone (FS-4)
+	Overwrite bool   `json:"overwrite,omitempty"` // replace accumulated content
+	Delete    bool   `json:"delete,omitempty"`    // tombstone
 }
 
 // ViewPart is one contribution to a path's accumulated content in the
 // resolved view: an append contributes its bytes, an overwrite resets the
-// accumulation and starts a new one (FS-2/FS-3).
+// accumulation and starts a new one ().
 type ViewPart struct {
 	SHA       string
 	Size      uint64
@@ -88,7 +88,7 @@ type ViewEntry struct {
 func (e ViewEntry) Parts() []ViewPart { return e.parts }
 
 // size is the accumulated byte count: an overwrite resets the sum, an
-// append adds to it (zero-byte parts are no-ops either way, FS-8).
+// append adds to it (zero-byte parts are no-ops either way.
 func (e ViewEntry) Size() uint64 {
 	var n uint64
 	for _, p := range e.parts {
@@ -119,7 +119,7 @@ func (e ViewEntry) Bytes(s *Store) ([]byte, error) {
 }
 
 // hash is the hex sha256 of the accumulated content — the path's content
-// identity at this revision (datum dedup keys, SB-054 hash equality).
+// identity at this revision (datum dedup keys, hash equality).
 func (e ViewEntry) Hash(s *Store) (string, error) {
 	b, err := e.Bytes(s)
 	if err != nil {
@@ -138,14 +138,14 @@ type CommitRec struct {
 	ParentID    string `json:"parentId,omitempty"`
 	Started     bool   `json:"started"`
 	// CreatedAt is the commit's creation time (UTC RFC3339Nano), the
-	// ordering key for schedules like cron ticks (SB-089/133).
+	// ordering key for schedules like cron ticks.
 	CreatedAt string   `json:"createdAt,omitempty"`
 	Finished  bool     `json:"finished"`
 	Empty     bool     `json:"empty"`
 	Ops       []fileOp `json:"ops,omitempty"`
 	// Provenance is the revision's derivation: the source commits it
 	// consumes, transitively. A spout commit records its pipeline's
-	// specification commit (the epoch it belongs to, SB-140); a job's
+	// specification commit (the epoch it belongs to); a job's
 	// output commit records its input commits and their own provenance.
 	// Inspect exposes it so epochs and subvenance are observable.
 	Provenance []string `json:"provenance,omitempty"`
@@ -163,7 +163,7 @@ func New(stateDir string) *Store {
 }
 
 // SetOnFinish installs the callback invoked after every commit finish
-// (the daemon's state-change broadcast for the blocking waits, D-23 R-5).
+// (the daemon's state-change broadcast for the blocking waits).
 func (s *Store) SetOnFinish(fn func()) { s.onFinish = fn }
 
 // Dir is the store's root: the parent of every repo directory, including
@@ -197,7 +197,10 @@ func (e *markerError) Unwrap() error { return e.marker }
 func Now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
 // ValidName rejects names that could escape the store directory or collide
-// with store internals.
+// with store internals. It accepts any name that is a safe state-dir path
+// component — no path separators, not "..", no leading dot — so pipeline
+// names may contain hyphens and underscores: names like "my-pipeline_01"
+// are legal.
 func ValidName(name string) bool {
 	return name != "" && name != "." && name != ".." &&
 		!strings.HasPrefix(name, ".") &&
@@ -400,13 +403,22 @@ func (s *Store) CreateRepo(name string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
+// DeleteRepo removes a repository. Deletion must not depend on the serving
+// membership that existed at creation: a repo with a finished commit remains
+// deletable after the set of serving instances has changed, because the
+// registry retains no stale placement that breaks the delete, and non-forced
+// deletion succeeds and removes the repo from listing. The internal
+// pipeline-specification repository is protected unconditionally: any
+// deletion attempt through the public repository API is rejected with an
+// error, it is never listed as a user repo, it is recreated empty on daemon
+// start and reset, and its commits remain durable references.
 func (s *Store) DeleteRepo(name string, force bool) error {
 	if !ValidName(name) {
 		return fmt.Errorf("invalid repo name %q", name)
 	}
 	if name == "spec" {
 		// the internal pipeline-specification repository is protected
-		// unconditionally (SB-127)
+		// unconditionally
 		return fmt.Errorf("the spec repo cannot be deleted")
 	}
 	s.mu.Lock()
@@ -416,7 +428,7 @@ func (s *Store) DeleteRepo(name string, force bool) error {
 	}
 	if !force {
 		// a pipeline's output repository is protected from accidental
-		// deletion; force is the explicit override (SB-146)
+		// deletion; force is the explicit override
 		if _, err := os.Stat(filepath.Join(filepath.Dir(s.dir), "pipelines", name+".json")); err == nil {
 			return fmt.Errorf("repo %q is the output of pipeline %q; force required", name, name)
 		}
@@ -440,7 +452,14 @@ func (s *Store) Branches(name string) []string {
 	return out
 }
 
-// inspectRepo reports the repo with its primary branch's head size.
+// inspectRepo reports the repo with its primary branch's head size: the
+// reported size is the total byte count of the files in the primary branch's
+// head revision — the head commit's resolved view is summed, so files on
+// other branches never count and files written through implicit commits do.
+// Pipeline output repositories report the same accounting, so an output repo
+// reports the size of its head (never 0 after processing); deleting a head
+// commit shrinks both the input and the output repository by exactly the
+// contributed bytes.
 func (s *Store) InspectRepo(name string) (client.Repo, error) {
 	if !ValidName(name) {
 		return client.Repo{}, fmt.Errorf("invalid repo name %q", name)
@@ -474,7 +493,7 @@ func (s *Store) ListRepos() ([]client.Repo, error) {
 	for _, e := range entries {
 		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != "spec" {
 			// "spec" is the internal pipeline-definition repository and is
-			// not a user repository (SB-127)
+			// not a user repository
 			if r, err := s.InspectRepo(e.Name()); err == nil {
 				out = append(out, r)
 			}
@@ -655,10 +674,10 @@ func (s *Store) StartCommit(repo, branch, description string) (client.Commit, er
 	return rec.Commit(), nil
 }
 
-// putFile writes one file into an open commit as an append (FS-1): a
+// putFile writes one file into an open commit as an append: a
 // path already holding content — in this commit or its ancestry — grows
 // by the new bytes at this revision. Replacing content is an explicit
-// overwrite (overwriteFile, FS-3) or a delete-then-write (FS-4).
+// overwrite(overwriteFile) or a delete-then-write.
 func (s *Store) PutFile(commitID, p string, data []byte) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
@@ -681,7 +700,7 @@ func (s *Store) PutFile(commitID, p string, data []byte) error {
 }
 
 // overwriteFile writes one file into an open commit replacing any
-// accumulated content at the path (FS-3): the path's prior content — in
+// accumulated content at the path: the path's prior content — in
 // this commit or its ancestry — is removed and the new bytes become the
 // entire content at this revision.
 func (s *Store) OverwriteFile(commitID, p string, data []byte) error {
@@ -705,7 +724,7 @@ func (s *Store) OverwriteFile(commitID, p string, data []byte) error {
 	return s.SaveCommit(rec)
 }
 
-// deleteFile tombstones a path in an open commit (FS-4): the path is
+// deleteFile tombstones a path in an open commit: the path is
 // removed from the branch's view at this revision, whether its content
 // came from this commit or the ancestry. Write order within the commit
 // decides conflicts — a later write recreates the path with only its own
@@ -728,9 +747,13 @@ func (s *Store) DeleteFile(commitID, p string) error {
 }
 
 // tombstoneRemoved records in a commit the paths that vanished from its
-// parent's view: the output side of a deletion (SB-007 — a pipeline's
-// output revision reflects the deletion, so the deleted file is genuinely
-// absent, not stale).
+// parent's view: the output side of a deletion. The output revision reflects
+// input modifications — a replaced file carries the new content, an added
+// file appears, and a deleted file is genuinely absent (tombstoned), never
+// stale. Paths present in the parent's view but absent from this output are
+// recorded as deletions, so reading the deleted path errors rather than
+// returning old or empty content; one output commit is produced per input
+// commit, including deletion-only commits.
 func (s *Store) TombstoneRemoved(commitID, outDir string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -765,7 +788,7 @@ func (s *Store) TombstoneRemoved(commitID, outDir string) error {
 // walkFiles visits every file under dir with its content, following
 // symlinks: a symlink to a file yields the target's content at the link's
 // path, and a symlink to a directory yields the target's files under the
-// link's path prefix (SB-054 — a pipeline may emit symlinked output). A
+// link's path prefix (a pipeline may emit symlinked output). A
 // depth cap breaks link cycles. linkTarget maps a symlink's target to a
 // host path when the target is container-internal (e.g. /sandman/in/...);
 // an empty result falls back to the native resolution.
@@ -773,6 +796,11 @@ func WalkFiles(dir string, linkTarget func(string) string, visit func(rel string
 	return walkFilesDepth(dir, "", 0, linkTarget, visit)
 }
 
+// walkFilesDepth visits files under p with their content, following
+// symlinks. Output collection must reject any non-regular file (pipe,
+// socket, device) before uploading: reading a FIFO would block forever and
+// its content is not storable, so the walk fails with a reason naming the
+// special file rather than hanging or uploading garbage.
 func walkFilesDepth(p, rel string, depth int, linkTarget func(string) string, visit func(rel string, data []byte) error) error {
 	if depth > 64 {
 		return fmt.Errorf("symlink depth exceeded at %q", p)
@@ -813,7 +841,7 @@ func walkFilesDepth(p, rel string, depth int, linkTarget func(string) string, vi
 		if !info.Mode().IsRegular() {
 			// pipes, sockets, devices: reading a FIFO would block forever
 			// and the content is not storable — the job must fail rather
-			// than hang or upload garbage (SB-017)
+			// than hang or upload garbage
 			return fmt.Errorf("output contains special file %q", crel)
 		}
 		data, err := os.ReadFile(resolved)
@@ -829,9 +857,9 @@ func walkFilesDepth(p, rel string, depth int, linkTarget func(string) string, vi
 
 // addFilesFromDir stores every file under dir into an open commit in one
 // batch — the job output uploader (a single job can produce tens of
-// thousands of files, SB-047). Each path is written as an overwrite: job
+// thousands of files). Each path is written as an overwrite: job
 // output assembly replaces a path's prior content with the job's fresh
-// output (FS-6 — a reprocessed datum's output replaces its prior output;
+// output (a a reprocessed datum's output replaces its prior output;
 // unchanged datums' paths are absent from the job's output and carry
 // forward through the ancestry). The directory holds the fully assembled
 // output, so it must not accumulate over the parent's.
@@ -862,11 +890,11 @@ func (s *Store) AddFilesFromDir(commitID, dir string) error {
 }
 
 // copyFile copies a file or directory subtree from srcCommit into an open
-// dstCommit at dstPath. The destination must not exist anywhere in the
-// destination commit's view (parents included) unless overwrite is set —
-// overwrite protection (SB-156); with overwrite the copy replaces the
-// destination's accumulated content (FS-3). A directory copy lands each
-// contained file at dstPath/<relative path>.
+// dstCommit at dstPath, landing each contained file at dstPath/<relative
+// path>. An existing destination path is protected: without overwrite, a
+// copy onto a path already in the destination's view (parents included) is
+// rejected, while new paths are always writable; with overwrite the copy
+// replaces the destination's accumulated content.
 func (s *Store) CopyFile(dstCommitID, dstPath, srcCommitID, srcPath string, overwrite bool) error {
 	if !validPath(dstPath) {
 		return fmt.Errorf("invalid file path %q", dstPath)
@@ -929,7 +957,7 @@ func (s *Store) CopyFile(dstCommitID, dstPath, srcCommitID, srcPath string, over
 
 // finishCommit closes the commit, advances the branch ref, and reports the
 // final record. An explicitly empty commit (empty=true) is a real commit
-// whose view is nothing — parent files are not readable through it (SB-118).
+// whose view is nothing — parent files are not readable through it.
 // reparent retargets an open commit's parent to the current branch head.
 // Output commits are opened at job start, before the head is final; the
 // last writer must re-parent so the branch stays linear and no finished
@@ -955,7 +983,16 @@ func (s *Store) Reparent(commitID, parentID string) error {
 }
 
 // finishCommit closes a commit as a real revision or as an explicit empty
-// barrier (SB-118), advancing the branch head.
+// barrier, advancing the branch head. Finishing with the empty flag produces
+// a real revision that introduces no file content of its own: paths that
+// existed in its parent are not readable through it — the empty commit's
+// resolved view is nothing, so reads at the empty head fail with not-found
+// rather than falling through to the parent. A commit also carries an
+// optional user description attachable at start and at finish: a description
+// supplied at either lifecycle point is persisted, and when both are
+// supplied the finish-time description deterministically replaces (never
+// concatenates with) the start-time one; inspection returns the effective
+// description.
 func (s *Store) FinishCommit(commitID, description string, empty bool) (client.Commit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -973,7 +1010,7 @@ func (s *Store) FinishCommit(commitID, description string, empty bool) (client.C
 		rec.Description = description
 	}
 	// a path that is both a file and a directory prefix of another path is
-	// a type conflict; finishing fails (FS-1/FS-5 edges — "x" then "x/y")
+	// a type conflict; finishing fails ("x" then "x/y" type conflict)
 	if conflict := s.PathConflict(rec); conflict != "" {
 		return client.Commit{}, fmt.Errorf("type conflict at path %q", conflict)
 	}
@@ -1055,8 +1092,8 @@ func (rec *CommitRec) Commit() client.Commit {
 
 // pathConflict reports a path that is both a file and a directory prefix
 // of another path in the commit's resolved view — a type conflict that
-// must fail finishing (FS-1 edge: writing "x" then "x/y" in one commit;
-// FS-2: a child writing "x/y" over an inherited file "x").
+// must fail finishing ("x" then "x/y" in one commit;
+// a child writing "x/y" over an inherited file "x").
 func (s *Store) PathConflict(rec *CommitRec) string {
 	view := s.ResolveView(rec)
 	paths := make([]string, 0, len(view))
@@ -1072,13 +1109,13 @@ func (s *Store) PathConflict(rec *CommitRec) string {
 	return ""
 }
 
-// resolveView resolves a commit's accumulated view (FS-1..FS-4): walking
+// resolveView resolves a commit's accumulated view: walking
 // the ancestry oldest first, each commit's write operations replay in
 // order — an append contributes its bytes to the path's accumulated
 // content, an overwrite resets it, a delete removes the path (removing
 // inherited content too). An explicitly empty commit is a barrier: its
 // view is nothing and nothing below it merges in — a child of an empty
-// commit shows only its own ops (SB-118).
+// commit shows only its own ops.
 func (s *Store) ResolveView(rec *CommitRec) map[string]ViewEntry {
 	var chain []*CommitRec
 	for cur := rec; cur != nil && !cur.Empty; {
@@ -1122,6 +1159,10 @@ func (s *Store) ResolveViewByID(commitID string) (map[string]ViewEntry, error) {
 
 // ---- file access ----
 
+// ListFiles returns the complete set of files in a commit's resolved view:
+// a single commit may hold thousands of files, and every path written before
+// finishing appears exactly once in the listing, with no loss or
+// duplication. Each listed file remains readable with its own content.
 func (s *Store) ListFiles(commitID string) ([]client.FileInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1186,7 +1227,7 @@ func (s *Store) MaterializeView(view map[string]ViewEntry, dir string) error {
 }
 
 // DatumRef is one input file of a revision — its path and content hash —
-// the per-file handle for log filters (SB-060). A job's datum set is the
+// the per-file handle for log filters. A job's datum set is the
 // input revision's full view.
 type DatumRef struct {
 	Path string `json:"path"`
@@ -1194,7 +1235,7 @@ type DatumRef struct {
 }
 
 // ViewDatums lists the input files of a commit with their content hashes —
-// the datum set of a job processing that commit (SB-060 log filters). The
+// the datum set of a job processing that commit (log filters). The
 // whole view is the datum set: a job runs over the full input revision.
 func (s *Store) ViewDatums(commitID string) ([]DatumRef, error) {
 	s.mu.RLock()
@@ -1217,7 +1258,7 @@ func (s *Store) ViewDatums(commitID string) ([]DatumRef, error) {
 
 // chainFromHead lists the commit ids of a branch from the head down to
 // (excluding) stopAt, oldest first — the backlog a stopped pipeline must
-// process on restart (SB-048).
+// process on restart.
 func (s *Store) ChainFromHead(repo, branch, stopAt string) []string {
 	var chain []string
 	id := s.HeadCommit(repo, branch)
@@ -1235,7 +1276,7 @@ func (s *Store) ChainFromHead(repo, branch, stopAt string) []string {
 	return chain
 }
 
-// ---- tags (SB-150) ----
+// ---- tags ----
 //
 // Tags are durable global names bound to file content: <state>/tags/<name>
 // holds the sha of the tagged blob, which lives in the content-addressed
@@ -1251,6 +1292,12 @@ func (s *Store) TagPath(name string) string {
 	return filepath.Join(filepath.Dir(s.dir), "tags", name)
 }
 
+// PutTag binds a durable global name to file content: the content's
+// reference is stored under the tag name, and getting the tag returns the
+// exact bytes. Listing enumerates every stored tag, each with a non-empty
+// object reference. Tagged objects survive garbage collection — a tag holds
+// a reference to its blob, so collection never reclaims reachable tagged
+// data.
 func (s *Store) PutTag(name string, data []byte) error {
 	if !ValidName(name) {
 		return fmt.Errorf("invalid tag name %q", name)
@@ -1278,8 +1325,8 @@ func (s *Store) GetTag(name string) ([]byte, error) {
 }
 
 // deleteTag removes the tag ref; the blob it pointed at becomes
-// unreferenced and is reclaimed by the next GC (SB-150's survival clause
-// covers referenced tags).
+// unreferenced and is reclaimed by the next GC (a tag holds a reference to
+// its blob, so collection never reclaims reachable tagged data).
 func (s *Store) DeleteTag(name string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("invalid tag name %q", name)

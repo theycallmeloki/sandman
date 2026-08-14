@@ -1,4 +1,4 @@
-// Size-based commit triggers (SB-160): bytes committed to a watched
+// Size-based commit triggers: bytes committed to a watched
 // branch accumulate durably; every completed threshold unit runs the
 // pipeline on the accumulated data, and the accumulation branch is stable
 // across pipeline updates.

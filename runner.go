@@ -1,4 +1,4 @@
-// The execution-backend seam (TESTING_ARCHITECTURE.md, D-23 R-1/R-2):
+// The execution-backend seam:
 // job execution goes through the Runner interface. The control plane
 // describes the run (image, argv, env, mounts, resources, identity,
 // stdin) and the runner executes it; the container backend and a future
@@ -40,7 +40,7 @@ type Runner interface {
 type JobSpec struct {
 	// Image is the execution image; empty means the backend's default.
 	Image string
-	// NodeName is the host identity the run is labelled with (SB-167).
+	// NodeName is the host identity the run is labelled with.
 	NodeName string
 	// Name is the run's stable identity (the container name).
 	Name string
@@ -64,7 +64,7 @@ type JobSpec struct {
 	// Workdir is the working directory inside the execution; empty means
 	// the backend default.
 	Workdir string
-	// User is the identity to run user code as (SB-128); empty = root.
+	// User is the identity to run user code as; empty = root.
 	User             string
 	ResourceLimits   *client.ResourceLimits
 	ResourceRequests *client.ResourceRequests
@@ -80,8 +80,7 @@ type RunResult struct {
 	// ProvisioningErr reports an environment failure — the command never
 	// started because the runtime could not produce the execution (bad
 	// image, runtime unavailable). The control plane surfaces it as the
-	// pipeline's crashed state (SB-043, SB-091), never as user-code
-	// failure.
+	// pipeline's crashed state, never as user-code failure.
 	ProvisioningErr error
 }
 
@@ -118,9 +117,22 @@ func isProvisioningError(tail string) bool {
 }
 
 // containerRunner executes runs in throwaway containers (the production
-// backend): `docker run --rm` per run, resources applied to the
-// environment (SB-067..070), user identity and working directory inside
-// the environment (SB-128), provisioning failures classified from the
+// backend): `docker run --rm` per run, with the pipeline's declared
+// resources applied exactly to the environment that executes its jobs.
+// The memory request is applied as --memory-reservation and the CPU
+// request as an allocation (CPU 0.5 requested as 500m); the memory
+// limit becomes --memory and the CPU limit --cpus (CPU 0.5 as a 500m
+// limit). The disk/ephemeral-storage request is accepted, recorded, and
+// round-tripped by InspectPipeline, but not enforced — the container
+// backend has no portable per-container writable-layer quota. When no
+// resource limits are declared, no limits are injected at all: absence
+// of declared limits never causes an implicit or default limit to be
+// applied, even though the pipeline has a parallelism spec. The
+// configured user identity and working directory are applied inside the
+// environment — the user's code runs as that user (observable via
+// whoami) with that working directory (observable via pwd), while
+// inputs remain readable at the standard input mount regardless of the
+// working directory. Provisioning failures are classified from the
 // runtime's error output.
 type containerRunner struct{}
 
@@ -137,7 +149,7 @@ func (containerRunner) Run(spec JobSpec) RunResult {
 		"-v", spec.OutDir + ":/sandman/out",
 	}
 	// resource requests and limits are applied to the execution
-	// environment (SB-067/068/069/070). Sandbox deviation: docker
+	// environment. Sandbox deviation: docker
 	// expresses a CPU request only as an allocation, so a CPU request
 	// without a limit sets the container's CPU allocation; an
 	// ephemeral-storage (disk) request is recorded but not enforceable
@@ -221,7 +233,7 @@ func (containerRunner) Kill(name string) error {
 // with the execution-internal paths translated via the spec's PathMap. No
 // container runtime, no images, millisecond-scale. Documented policy
 // differences from the container backend (R-4): resource requests/limits
-// are not enforced (accept-and-record, D-15/SB-070), the configured user
+// are not enforced (accept-and-record), the configured user
 // identity is not applied (the process runs as the daemon's user), and
 // provisioning never fails — there is no image to obtain, so the crashed
 // state is unreachable here.

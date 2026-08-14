@@ -1,6 +1,6 @@
 package conformance
 
-// SB-140's spout behaviors that the pipe suite (SB-139) does not cover:
+// The spout-epoch behaviors that the pipe suite does not cover:
 // provenance epochs anchored on the specification commit, marker state
 // across plain and reprocess updates, and spec-commit subvenance with a
 // downstream consumer. The spout is driven through the pipe mechanism —
@@ -52,10 +52,9 @@ func markerHeadContent(t *testing.T, pipe string, n int) string {
 // TestSB140_SpoutEpochsAndMarker covers the spout contracts that the pipe
 // suite does not: each spout commit carries its pipeline's specification
 // commit as provenance, an update starts a new epoch shared by every
-// commit after it (SB-139 clause 7, SB-140 clause 3); the marker state
-// persists across a plain update and resets on a reprocess update
-// (SB-139 clause 10, SB-140 clause 4); and a spec commit's subvenants are
-// its spout's output plus the downstream output (SB-139 clause 6).
+// commit after it; the marker state persists across a plain update and
+// resets on a reprocess update; and a spec commit's subvenants are its
+// spout's output plus the downstream output.
 
 // containsStrList reports whether a string slice holds the needle.
 func containsStrList(hay []string, needle string) bool {

@@ -1,6 +1,6 @@
 // Union inputs: same-named files from the branches merge by
 // concatenation, removals across branches are detected, and alias
-// layouts are validated (SB-077, SB-078).
+// layouts are validated.
 package conformance
 
 import (
@@ -88,7 +88,7 @@ func TestSB077_UnionReprocessesRemovedIdenticalDatums(t *testing.T) {
 }
 
 // TestSB078_UnionComposition covers the union semantics whose size
-// arithmetic is exact and clean-room derivable (SB-078 clauses 1, 2, 4),
+// arithmetic is exact and clean-room derivable,
 // plus the alias-validation rejections of clauses 5 and 6. The reference's
 // deep compositions (cross-of-unions sizes, aliased union-of-crosses
 // sizes) depend on its internal accumulation; sandman's coherent model is
@@ -239,7 +239,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	for _, f := range files {
 		paths = append(paths, fmt.Sprintf("%s(%d)", f.Path, f.Size))
 	}
-	// LAYOUT DEVIATION (recorded in behaviors/SB-078.md): the reference
+	// LAYOUT DEVIATION: the reference
 	// exposes one directory per alias with 8-byte merged files; sandman
 	// merges the cross-of-unions' branches into top-level files. The
 	// content identity is preserved; the pinned sandman shape is 2
@@ -273,7 +273,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	if j.Processed != 4 {
 		t.Fatalf("clause 3: cross of unions processed %d datums, want 4 (cartesian pairing)", j.Processed)
 	}
-	// LAYOUT DEVIATION (recorded in behaviors/SB-078.md): the reference
+	// LAYOUT DEVIATION: the reference
 	// namespaces per repository directory with 4-byte files; sandman
 	// accumulates the paired merged files into top-level files (8 bytes
 	// each — two 2-copy unions per side across the pairings)
@@ -306,7 +306,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 		}},
 	}
 	j = flushPipeline(t, c5)
-	// SIZE DEVIATION (recorded in behaviors/SB-078.md): the reference's
+	// SIZE DEVIATION: the reference's
 	// per-alias files are 4 bytes (each alias's file appears once per
 	// datum combination of its cross, twice in the reference's
 	// accumulation); sandman accumulates 2 bytes per alias file (once per

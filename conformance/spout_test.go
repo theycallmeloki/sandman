@@ -1,4 +1,4 @@
-// Spout pipelines (SB-139): a pipeline with no input whose transform runs
+// Spout pipelines: a pipeline with no input whose transform runs
 // in the background, with the daemon committing each data-bearing cycle to
 // the output branch, a marker directory to a separate marker branch, and
 // spout/input and marker-name validation.

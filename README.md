@@ -170,7 +170,7 @@ revisions, and jobs that run them.
 - `POST /api/v1/repos/{repo}/commits` — start a revision on a branch
 - `PUT /api/v1/commits/{id}/files/{path}` — write a file into an open revision
 - `DELETE /api/v1/commits/{id}/files/{path}` — tombstone a path: the file
-  is removed from the branch's view at this revision (SB-007), and a
+  is removed from the branch's view at this revision, and a
   pipeline's output reflects the deletion (the deleted file is absent, not
   stale)
 - `POST /api/v1/commits/{id}/files/{path}` — copy a file or directory
@@ -198,7 +198,7 @@ revisions, and jobs that run them.
   carries `update: true` to apply a new version (creating when absent);
   `reprocess: true` is a persisted spec field: every job re-executes all
   of its datums instead of skipping datums unchanged from a previous
-  successful run (SB-166, D-13). Every update processes the input head.
+  successful run. Every update processes the input head.
   `DELETE` honors `?force=1` (removes a mid-DAG pipeline despite
   downstream consumers) and `?keepRepo=1` (preserves the output repo for
   reuse). `GET` takes `?history=<n>` (`0` current version, `n` current
@@ -208,14 +208,14 @@ revisions, and jobs that run them.
 - `POST /api/v1/pipelines/{name}/stop` `/start` — pause/resume: a stopped
   pipeline ignores new commits and replays them on start (backlog — the
   commits finished while it was stopped are consumed together as one job
-  over the branch head, SB-050); an update does not restart it
+  over the branch head); an update does not restart it
 - `standby: true` in the pipeline spec — the pipeline idles in the standby
   state with no work, activates (state `running`) when input arrives, and
   returns to standby once the work settles. Stopping it pauses it; commits
-  written while paused never wake it. D-11/12: no fixed activation cap and
-  no warm-participant contract (tuning choices, not requirements); D-09:
-  a standby pipeline that cannot be provisioned degrades to crashed
-  (SB-043), never to a degraded standby state
+  written while paused never wake it. No fixed activation cap and
+  no warm-participant contract (tuning choices, not requirements);
+  a standby pipeline that cannot be provisioned degrades to crashed,
+  never to a degraded standby state
 - **Datums** — a job processes its input as per-datum units of work: every
   path matched by the input glob is a datum (a directory match is a datum
   of its whole subtree), executed by a bounded worker pool sized by
@@ -224,74 +224,71 @@ revisions, and jobs that run them.
   dir; the full input view is mounted read-only at
   `/sandman/view/<input>`); its output merges into the job's single output
   commit, files at the same path from different datums concatenating in
-  datum order (SB-063; D-14: the order is not contractual). Datums whose
+  datum order (the order is not contractual). Datums whose
   content is unchanged from a previous successful run are skipped
-  (SB-006/084/085) and their output carried forward, unless `reprocess`
+  and their output carried forward, unless `reprocess`
   is set. `transform.datumTries` retries a failing datum that many times,
-  one log entry per attempt (SB-134); the transform's `acceptReturnCode`
+  one log entry per attempt; the transform's `acceptReturnCode`
   applies per datum. A failing datum fails the job — reason names the
-  datum (SB-011) — and the job's `processed`/`recovered`/`failed`/
-  `skipped` fields count the outcomes (SB-012)
+  datum — and the job's `processed`/`recovered`/`failed`/
+  `skipped` fields count the outcomes
 - **Per-datum statistics** — `enableStats: true` in the pipeline spec
-  (one-way: an update cannot disable it, SB-081) records each datum's
+  (one-way: an update cannot disable it) records each datum's
   outcome, input/output files, process time, and timing. `GET
   /api/v1/jobs/{id}/datums` lists them — live during execution (queued
-  datums included as pending, SB-080/114), state-ordered (failed,
-  recovered, success, skipped — SB-082/084), paginated with
-  `?limit=&page=` and an out-of-range error (SB-083); `GET
-  …/datums/{datumID}` inspects one (an error when stats are off,
-  SB-081). The pipeline's output repo gains a `stats` branch — one
+  datums included as pending), state-ordered (failed,
+  recovered, success, skipped), paginated with
+  `?limit=&page=` and an out-of-range error; `GET
+  …/datums/{datumID}` inspects one (an error when stats are off).
+  The pipeline's output repo gains a `stats` branch — one
   commit per job holding one record file per datum — that downstream
-  pipelines can consume (SB-086, SB-113's two-commit count)
+  pipelines can consume
 - **Scheduling knobs** — `chunkSpec` (a target datum count or chunk size)
-  groups a side's glob matches into datums without changing the output
-  (SB-102); `maxQueueSize` bounds each worker's pending datums (SB-097);
+  groups a side's glob matches into datums without changing the output;
+  `maxQueueSize` bounds each worker's pending datums;
   `autoscaling` sizes the worker pool to the datum count, capped at the
-  configured parallelism (SB-165, D-01's scale-to-zero via standby). A
+  configured parallelism (scale-to-zero via standby). A
   running job's `workers` status reports each worker's current datum,
-  its start time, and its queue (SB-065), and `POST
+  its start time, and its queue, and `POST
   /api/v1/jobs/{id}/datums/{datumID}/restart` aborts a datum and starts
-  it over with fresh progress (SB-064)
+  it over with fresh progress
 - **DAG propagation** — chains produce exactly one commit and one job per
   stage per wave, repeatedly: a mid-DAG commit propagates forward only,
   never re-triggering stages that do not consume it, and a racing pair of
   input commits on the two sides of a cross never double-spawns the
-  pairing job (SB-021, SB-056). A job whose inputs contribute no datums
+  pairing job. A job whose inputs contribute no datums
   settles successful with nothing to produce — an empty wave never
   propagates. A failed stage fails every downstream stage: the failure
   propagates through the DAG as recorded, un-executed jobs, and flushing
   the failing commit reports every stage's terminal state instead of
-  erroring (SB-022)
+  erroring
 - **Union composition** — a union input may nest crosses and other
   unions, exposed under its namespace with same-path files merged by
   concatenation in branch order; a union inside a cross resolves its
   branches' heads independently (two branches of one repo stay distinct)
   and the cross's other legs resolve to their branch heads at job-creation
-  time (SB-077/078/141)
+  time
 - **Config extraction** — inspecting a pipeline echoes every user-settable
   field (transform, parallelism, chunk spec, queue size, autoscaling,
   standby, output branch, reprocess, stats, spout, description) with the
   input's name/branch defaults materialized, deep-equal to the creation
   request; request flags (update) are not echoed, and an unsupported
   execution framework (e.g. TFJob) is rejected at creation naming it
-  (SB-151)
 - **Resource enforcement** — resource requests and limits declared on a
   pipeline (memory, CPU, disk) are applied to the environment that
   executes its jobs: memory limits become docker `--memory`, requests
   `--memory-reservation`, CPU `--cpus` (a CPU request maps to the
   allocation; a disk request is recorded but not enforceable on docker's
-  default driver). No declared resources → none injected (SB-067–070)
+  default driver). No declared resources → none injected
 - **Spouts** — a pipeline with no input whose transform runs in the
   background, committing each data-bearing cycle to its own output branch
   from the pipe mounts (accumulating or replacing per the overwrite
-  option) and its marker directory to a separate markers branch
-  (SB-139). Every spout commit records its pipeline's specification
+  option) and its marker directory to a separate markers branch.
+  Every spout commit records its pipeline's specification
   commit as provenance, so updates start observable provenance epochs and
   a spec commit's subvenants are its spout output plus the downstream
   output; the marker directory is per-pipeline, so a plain update
-  continues the marker while a reprocess update resets it (SB-140 — the
-  client-tool write path was evaluated and rejected; see the behavior
-  note)
+  continues the marker while a reprocess update resets it
 - **Placement** — a pipeline may require a placement label; its jobs run
   on an execution host that registered that label with the control plane.
   A host joins with configuration set at host setup time (`sandman worker
@@ -300,20 +297,20 @@ revisions, and jobs that run them.
   take surfaces as the pipeline's crashed state instead of hanging; when
   a host bearing the label registers, the pending job re-places on its
   own and completes — one output commit, same result as a local run
-  (SB-167/169; the execution host's identity is visible to the transform
+  (the execution host's identity is visible to the transform
   as `HOSTNAME`)
 - **Provisioning failures** — a pipeline whose execution environment cannot
   be provisioned (a nonexistent image — obviously invalid or
   plausible-but-absent) converges on the crashed state with a recorded
-  reason instead of hanging (SB-091)
+  reason instead of hanging
 - **Delimited uploads** — `PutFileSplit` uploads data split into records
   at a delimiter, each stored at `path/<i>`; with a header, the first
   chunk is replicated into every record's file. Appending under the same
   header continues the numbering, so earlier records keep their identity
   and the dedup skips them; a changed header re-identifies every record
-  and replaces them, so all are reprocessed (SB-137/138). `PutFileURL`
+  and replaces them, so all are reprocessed. `PutFileURL`
   ingests a file from an HTTP URL into a commit, and pipelines defined
-  from JSON specs drive multi-stage DAGs (SB-088)
+  from JSON specs drive multi-stage DAGs
 - **Spout pipelines** — a pipeline with no input whose transform runs in
   the background; the daemon watches its output directory and commits
   each data-bearing cycle to the output branch (files accumulate across
@@ -322,7 +319,7 @@ revisions, and jobs that run them.
   stop, update, or delete kills it. Deleting the spout's head commit does
   not stop it, downstream pipelines consume its output normally, a spout
   with a declared input is rejected, and a marker name with glob
-  metacharacters is rejected (SB-139)
+  metacharacters is rejected
 - **Size triggers** — an input with a `Trigger` accumulates the bytes
   newly committed to its watched branch (durably — a ledger file, so an
   interruption never loses or double-counts), and every completed
@@ -331,7 +328,7 @@ revisions, and jobs that run them.
   position, and reused across updates so state is never orphaned — where
   the pipeline runs on it. One oversized commit fires once per threshold
   unit, accumulation resets after firing, and triggers compose across a
-  DAG (SB-160)
+  DAG
 - **Cron inputs** — an input with a schedule (`@every <duration>`) ticks
   on its own clock: each tick commits a file named by the tick time (UTC
   RFC3339 — a legal path) to the input's auto-created repository (named
@@ -339,53 +336,51 @@ revisions, and jobs that run them.
   downstream. Overwrite mode tombstones the previous tick so the branch
   holds exactly one tick file; crosses of cron and regular inputs run when
   both are available. `TriggerCron` creates the tick immediately on every
-  cron input of the pipeline, and scheduled ticks keep flowing around it
-  (SB-089). Rapid spec updates never restart the ticker — the cadence
-  survives with no bursts or stalls (SB-133)
+  cron input of the pipeline, and scheduled ticks keep flowing around it.
+  Rapid spec updates never restart the ticker — the cadence
+  survives with no bursts or stalls
 - **Union inputs** — a union exposes its branches under one namespace and
   merges same-named files by concatenation in branch order, one datum per
   distinct path; the merge is tracked per occurrence, so removing a file
   from every branch is detected as a removal, never hidden by hash
-  matching (SB-077). Branches may be plain repos, crosses (each
+  matching. Branches may be plain repos, crosses (each
   constituent repo its own directory, every file once per cross
   combination), or nested unions; a cross's immediate branches must expose
   distinct namespaces, and a cross of unions with the same alias is
-  rejected at creation (SB-078)
+  rejected at creation
 - **Join and group inputs** — a join pairs files across repositories by a
   captured glob group (`JoinOn` selects it, e.g. `$1` or `$1$3`): a datum
   exists for every key present in all members, containing one file per
   member; an outer member's unmatched keys each form a datum carrying only
-  that member's file, with the absent members' directories unexposed
-  (SB-074/075). A group collects every file sharing a `GroupBy` capture
+  that member's file, with the absent members' directories unexposed.
+  A group collects every file sharing a `GroupBy` capture
   value across all members into one datum (union, never a cross product),
   and a group whose members carry join-ons joins first then groups the
-  whole pairs (SB-076)
+  whole pairs
 - **Secrets** — named typed metadata blobs with create/inspect/list/delete
   (the type is reported as "Opaque", the creation timestamp is
   system-assigned). The trusted-LAN model (no tokens; see below) means any
   peer on the LAN can manage secrets and bind them into pipelines
-  (SB-153, SB-051)
 - **Runtime metrics** — `/api/v1/metrics` serves Prometheus-format
   invocation counters and latency sum/count aggregates for file reads
   (split by outcome — two series), file writes, and job listings (one
-  series each) (SB-132)
+  series each)
 - **Garbage collection** — `CollectGarbage` reclaims durable blobs no
   longer referenced by any commit tree, tag, or spec record; it refuses
-  while a job is running, and it never touches reachable data (SB-079,
-  D-20: automatic collection defaults off). Stopping a pipeline now ends
+  while a job is running, and it never touches reachable data (automatic
+  collection defaults off). Stopping a pipeline now ends
   its in-flight work, so collection can proceed. A system-wide reset
   clears statistics state along with everything else, so names are
-  reusable (SB-130)
+  reusable
 - **Commit deletion** — `DeleteCommit` (by id or `repo@branch`) removes a
   commit and everything derived from it across the whole downstream DAG:
   every commit whose provenance includes it, and the jobs that consumed
   them. Surviving commits whose parent was removed become the first commit
   of their branch, and branch heads that pointed at a removed commit move
   to the nearest surviving ancestor or disappear — the DAG stays
-  functional (SB-124). Deleting a branch head supersedes the in-flight
+  functional. Deleting a branch head supersedes the in-flight
   job processing it: the job is cancelled and removed, the branch reverts
   to the previous commit, and later commits are processed normally
-  (SB-125)
 - **Output branches + deferred processing** — a pipeline's `outputBranch`
   names where its output lands (default `master`); output commits parent
   against that branch's head. Pipelines trigger on watched branch heads:
@@ -393,59 +388,57 @@ revisions, and jobs that run them.
   immediately), retargeting the watched branch onto an existing commit
   (`CreateBranch`) processes it exactly once, and a downstream stage that
   watches a different branch of an upstream repo does not run until that
-  branch is promoted onto the output commit (SB-142)
+  branch is promoted onto the output commit
 - **Manual pipeline runs** — `RunPipeline` triggers a job on demand: with
   no provenance it re-processes the current branch heads; with explicit
   provenance it processes exactly those input revisions (validated: a
   commit outside the pipeline's input lineage or two commits of one
   branch are rejected; a pipeline with nothing to process cannot be run);
   with a job id it re-executes that job's input pairing. A run's output
-  never propagates downstream — a manual run is not a processing wave
-  (SB-010). Deleting an already-deleted pipeline is a no-op
+  never propagates downstream — a manual run is not a processing wave.
+  Deleting an already-deleted pipeline is a no-op
 - **Provenance pairing** — a cross whose sides derive from the same source
   branch pairs them at the same source revision: a trigger that would pair
   a fresh commit with the other side's still-stale head is deferred until
   the other side catches up, so diamond DAGs (A→B, A→C, D=cross(B,C))
   produce exactly one commit per source revision per repository, never one
-  per dependency path (SB-018/019). A downstream pipeline can consume an
-  upstream pipeline's output as one arm of a cross (SB-055)
+  per dependency path. A downstream pipeline can consume an
+  upstream pipeline's output as one arm of a cross
 - **Lazy inputs** — the lazy flag is part of the input spec and is
-  recorded on every job's input snapshot, through output-repo hops
-  (SB-014); lazy jobs complete even when some input files go unread
-  (SB-015). The glob `/` selects the whole commit as one datum. Output
+  recorded on every job's input snapshot, through output-repo hops;
+  lazy jobs complete even when some input files go unread. The glob `/`
+  selects the whole commit as one datum. Output
   upload rejects special files (pipes, sockets, devices) — a transform
   that emits one fails the job promptly instead of hanging the scan
-  (SB-017)
 - **File revision history** — `ListFileHistory` returns the revisions of a
   path across a commit's ancestry, newest first, with full-depth listings
-  supported on multi-commit cross outputs (SB-145)
+  supported on multi-commit cross outputs
 - **Job queueing** — a pipeline's jobs run strictly one at a time, in
   spawn order: successive input commits queue on the pipeline's gate and
-  come up in commit order, so with parallelism 1 exactly one job runs
-  (SB-123). Cancelling the running job lets the next queued job start,
+  come up in commit order, so with parallelism 1 exactly one job runs.
+  Cancelling the running job lets the next queued job start,
   and cancelling one job never cancels the others; a cancel that arrives
   while a job is queued settles it killed without doing any work. The
   system stays correct under a burst of rapid revisions across many
   pipelines: every revision is consumed with a job, the head converges,
-  and the job index stays queryable (SB-121)
+  and the job index stays queryable
 - **Symlinked output** — a transform may emit its output as symbolic
   links: the output revision stores the linked content (a link to a file
   yields the target's content at the link's path; a link to a directory
   its files), and a linked file's stored content is identical to the
-  input's — referenced, not copied (SB-054). Links to the in-container
+  input's — referenced, not copied. Links to the in-container
   input paths (`/sandman/in/...`, `/sandman/view/...`) and to temp files
   the transform wrote (the job's directory is mounted at the container's
   `/tmp`) are resolved when the output is scanned
 - **Cross inputs** — `input.cross` is a list of file-scoped inputs whose
-  datums combine as the cartesian product (SB-063/161): a job's datum set
+  datums combine as the cartesian product: a job's datum set
   is one glob match from every side. Each side is addressable by its own
   name (`$<name>` and `$<name>_COMMIT`); `input.branch` selects a side's
   branch (default master). Every input commit on any side creates a job
-  pairing that commit with the other sides' current heads (SB-120) — a
+  pairing that commit with the other sides' current heads — a
   side with no head yet contributes no datums — and flushing a set of
   commits (`client.FlushSet`) returns only the pairing job. Datum
   enumeration is available standalone via `POST /api/v1/datums`
-  (SB-161)
 - `GET /api/v1/jobs[/{id}]` — jobs; `?pipeline=`, `?outputCommit=`,
   `?state=` (repeatable), `?history=` (version depth), `?full=1` (each
   job's own version's transform and input spec — history survives updates).
@@ -464,7 +457,7 @@ revisions, and jobs that run them.
   require a pipeline or job; `?since=` is a relative window excluding
   older lines; `?follow=1` streams new lines live as they are produced
   (newline-delimited `{"line":…}` until the client disconnects). An
-  unconstrained query searches every job's logs (D-21)
+  unconstrained query searches every job's logs
 - `POST /api/v1/transactions` — open a transaction; `POST
   /api/v1/pipelines?transaction=<id>` stages a create or update into it;
   `POST …/transactions/{id}/finish` applies every staged operation
@@ -473,9 +466,9 @@ revisions, and jobs that run them.
   not exist yet); after finish the chain runs end to end, and updating
   two pipelines in one transaction yields exactly one new job and one new
   commit per pipeline. Finishing fails with "outside of transaction" if a
-  staged pipeline was modified outside the transaction meanwhile (SB-163)
+  staged pipeline was modified outside the transaction meanwhile
 - `POST /api/v1/reset` — remove every repository, pipeline, and job;
-  idempotent, and it refuses to run on corrupted metadata (D-08)
+  idempotent, and it refuses to run on corrupted metadata
 
 **State is plain files** under the state dir — cat it:
 

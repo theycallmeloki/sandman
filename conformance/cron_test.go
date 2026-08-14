@@ -1,7 +1,6 @@
 // Cron inputs: scheduled ticks commit time-stamped files that trigger the
 // pipeline, overwrite mode replaces instead of accumulating, crosses with
-// regular inputs work, and manual triggers create ticks immediately
-// (SB-089, SB-133).
+// regular inputs work, and manual triggers create ticks immediately.
 package conformance
 
 import (
@@ -35,8 +34,8 @@ func TestSB089_CronInputs(t *testing.T) {
 		// wait for two ticks, then flush each through both stages
 		first := waitCronTicks(t, cronRepo, 2, 60*time.Second)
 		// the tick file is named by the tick time in UTC RFC3339 with
-		// fractional seconds — a legal path with no glob metacharacters
-		// (SB-089 edge case); append-mode ticks accumulate, so after two
+		// fractional seconds — a legal path with no glob metacharacters;
+		// append-mode ticks accumulate, so after two
 		// ticks the commit holds two tick files
 		tickFiles, err := c.ListFiles(first.ID)
 		if err != nil {
@@ -88,8 +87,8 @@ func TestSB089_CronInputs(t *testing.T) {
 		cleanupPipeline(t, pipe)
 		first := waitCronTicks(t, pipe+"-cron", 3, 90*time.Second)
 		// the overwrite tick deletes the prior tick's file: every cron
-		// commit holds exactly one file, the latest tick (SB-089 edge
-		// case, the reference's CronOverwrite shape)
+		// commit holds exactly one file, the latest tick (the reference's
+		// CronOverwrite shape)
 		ticks, err := c.ListFiles(first.ID)
 		if err != nil {
 			t.Fatalf("list overwrite tick files: %v", err)
@@ -143,7 +142,7 @@ func TestSB089_CronInputs(t *testing.T) {
 	})
 
 	t.Run("overwrite with scheduled and manual ticks", func(t *testing.T) {
-		// SB-089 clause 5 (RunCronOverwrite): with overwrite mode and a
+		// (RunCronOverwrite): with overwrite mode and a
 		// per-minute schedule, a scheduled tick followed by three manual
 		// triggers yields four commits, each containing exactly one file —
 		// scheduled ticks keep working alongside manual triggers and the
@@ -209,7 +208,7 @@ func TestSB089_CronInputs(t *testing.T) {
 			if err := c.TriggerCron(pipe); err != nil {
 				t.Fatalf("trigger %d: %v", i, err)
 			}
-			time.Sleep(2 * time.Second) // distinct tick seconds (SB-089 clause 5)
+			time.Sleep(2 * time.Second) // distinct tick seconds
 		}
 		first := waitCronTicks(t, pipe+"-cron", 3, 60*time.Second)
 		jobs := flushOK(t, first.ID)

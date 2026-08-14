@@ -1,6 +1,6 @@
 package main
 
-// M10 — batched cancels must settle under one shared deadline, not the
+// Batched cancels must settle under one shared deadline, not the
 // sum of per-job 30s waits: cancelPipelineJobs (update/delete),
 // cancelAllRunningJobs (shutdown), and deleteCommit each cancelled
 // in-flight jobs sequentially, blocking the API handler past the client
@@ -23,7 +23,7 @@ import (
 // job record per provenance hop (jobByOutput -> mustListJobs) inside
 // repeated full scans: quadratic in commits x jobs, and a mid-suite
 // delete with a couple hundred commits wedged the API handler past the
-// client timeout (M10). The chain here is linear: commit c000 feeds a
+// client timeout. The chain here is linear: commit c000 feeds a
 // job whose output c001 feeds the next, up to c200.
 func TestDeleteCommitClosureLinear(t *testing.T) {
 	dir := t.TempDir()
@@ -74,7 +74,7 @@ func TestDeleteCommitClosureLinear(t *testing.T) {
 		t.Fatalf("deleteCommit: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Fatalf("deleteCommit took %v for a %d-commit chain; the closure re-scans per hop (M10)", elapsed, n)
+		t.Fatalf("deleteCommit took %v for a %d-commit chain; the closure re-scans per hop", elapsed, n)
 	}
 	// the whole chain was removed: every job record and commit is gone,
 	// and the branch head ref went away with them
@@ -109,7 +109,7 @@ func stuckJob(pipeline, id string) *runningJob {
 // TestCancelPipelineJobsSharedBudget — cancelling a batch of stuck
 // in-flight jobs must return within the shared budget. The old code
 // waited 30s per job sequentially: with 3 stuck jobs the handler was
-// wedged for 90s, blowing the client timeout (M10).
+// wedged for 90s, blowing the client timeout.
 func TestCancelPipelineJobsSharedBudget(t *testing.T) {
 	old := cancelSettleBudget
 	cancelSettleBudget = 200 * time.Millisecond
@@ -123,7 +123,7 @@ func TestCancelPipelineJobsSharedBudget(t *testing.T) {
 	start := time.Now()
 	d.cancelPipelineJobs("p")
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("cancelPipelineJobs took %v with 3 stuck jobs; the per-job waits serialize (M10)", elapsed)
+		t.Fatalf("cancelPipelineJobs took %v with 3 stuck jobs; the per-job waits serialize", elapsed)
 	}
 	for i := 0; i < 3; i++ {
 		if !d.running[fmt.Sprintf("j%d", i)].cancelled.Load() {
@@ -147,6 +147,6 @@ func TestCancelAllRunningJobsSharedBudget(t *testing.T) {
 	start := time.Now()
 	d.cancelAllRunningJobs()
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("cancelAllRunningJobs took %v with 3 stuck jobs (M10)", elapsed)
+		t.Fatalf("cancelAllRunningJobs took %v with 3 stuck jobs", elapsed)
 	}
 }

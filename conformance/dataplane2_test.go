@@ -70,7 +70,7 @@ func TestSB052_HeadJobSeesAccumulatedContent(t *testing.T) {
 	mustPipeline(t, client.Pipeline{Name: pipe, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}})
 
 	// commit 1 writes "foo\n"; commit 2 appends "bar\n" to the same path,
-	// so the input head accumulates to "foo\nbar\n" (FS-1/FS-2)
+	// so the input head accumulates to "foo\nbar\n"
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})
 	jobs1 := flushOK(t, cm1.ID)
 	got, err := c.GetFile(jobs1[0].OutputCommit, "file")
@@ -91,7 +91,7 @@ func TestSB052_HeadJobSeesAccumulatedContent(t *testing.T) {
 	}
 	// the job processes the full head content, not a delta: the output
 	// file holds the accumulated content, not the accumulated output
-	// (the job's fresh output replaces the datum's prior output, FS-6)
+	// (the job's fresh output replaces the datum's prior output
 	jobs2 := flushOK(t, cm2.ID)
 	got, err = c.GetFile(jobs2[0].OutputCommit, "file")
 	if err != nil {
@@ -315,7 +315,7 @@ func TestSB156_CopyOutToInWithOverwriteProtection(t *testing.T) {
 	if err := c.CopyFile(dst.ID, "foo", srcCommit, "foo", false); err == nil {
 		t.Fatal("copy onto existing path succeeded, want error")
 	}
-	// a plain put onto an existing path appends to its content (FS-1/FS-2
+	// a plain put onto an existing path appends to its content
 	// — "file2" was copied as "foo", so it becomes "foox")
 	if err := c.PutFile(dst.ID, "file2", []byte("x")); err != nil {
 		t.Fatalf("put onto existing path: %v", err)
@@ -375,9 +375,9 @@ func httpPost(u, body string) (*http.Response, error) {
 	return http.Post(u, "application/json", strings.NewReader(body))
 }
 
-// TestTagDelete — tag delete (D-24's OUT item, now implemented at the
-// user's call): removing a tag drops the ref; the tag is gone from the
-// listing, reads error, and a missing tag errors.
+// TestTagDelete — tag delete (an outstanding reference item, now
+// implemented at the user's call): removing a tag drops the ref; the tag
+// is gone from the listing, reads error, and a missing tag errors.
 func TestTagDelete(t *testing.T) {
 	if err := c.PutTag("delme", []byte("payload")); err != nil {
 		t.Fatalf("put tag: %v", err)

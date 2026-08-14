@@ -1,4 +1,4 @@
-// Egress (SB-013, D-17): a configured external output destination is a
+// Egress: a configured external output destination is a
 // supported pipeline output; a failed egress write fails the job with an
 // egress-related reason even when the output commit succeeded.
 package conformance
@@ -50,7 +50,7 @@ func TestSB013_EgressFailure(t *testing.T) {
 		t.Fatalf("egress job reason = %q, want it to mention egress", j.Reason)
 	}
 	// the output commit still exists — output success alone did not make
-	// the job successful (SB-013 edge case)
+	// the job successful
 	if j.OutputCommit == "" {
 		t.Fatalf("egress job has no output commit; the execution phase succeeded")
 	}
@@ -61,7 +61,7 @@ func TestSB013_EgressFailure(t *testing.T) {
 }
 
 // TestEgressFileDestination — file:// is the supported egress destination
-// (D-17: "a configured external output destination is a supported pipeline
+// ("a configured external output destination is a supported pipeline
 // output"): the job's output files land in the destination directory and
 // the job succeeds.
 func TestEgressFileDestination(t *testing.T) {

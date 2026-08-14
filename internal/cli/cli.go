@@ -17,11 +17,9 @@ import (
 	"sandman/internal/store"
 )
 
-// The data-plane CLI on spf13/cobra (D-19: the CLI is a second consumer
+// The data-plane CLI on spf13/cobra (the CLI is a second consumer
 // of the same client package the conformance suite drives — semantic and
 // command-level compatibility with the reference, no wire compatibility).
-// The reference surface is tracked verb by verb in
-// sandman-behaviour-notes/implementation-review/CLI_SURFACE.md.
 //
 // addr selects the control plane for every verb; the sandman binary sets
 // it from its global -addr flag (parsed by the std flag package before
@@ -47,8 +45,8 @@ func die(msg string, code int) {
 }
 
 // listingGlob turns a file-list [:path] argument into the server's
-// prefix glob: the listing API accepts only prefix patterns ("prefix*",
-// SB-047 clause 4), so a path without its own wildcard is made a prefix
+// prefix glob: the listing API accepts only prefix patterns ("prefix*"),
+// so a path without its own wildcard is made a prefix
 // of the listing — `file list r@master:subdir` lists everything under
 // subdir, exactly as the [:path] help advertises. A path that already
 // carries a * is passed through unchanged.
@@ -590,7 +588,7 @@ func newFileCmd() *cobra.Command {
 			fmt.Printf("wrote %s@%s:%s (%d bytes, commit %s)\n", repo, branch, path, len(data), cm.ID)
 		},
 	}
-	put.Flags().BoolVarP(&fileOverwrite, "overwrite", "o", false, "overwrite accumulated content at the path (FS-3)")
+	put.Flags().BoolVarP(&fileOverwrite, "overwrite", "o", false, "overwrite accumulated content at the path")
 	cmd.AddCommand(put)
 
 	cmd.AddCommand(
@@ -701,7 +699,7 @@ func newFileCmd() *cobra.Command {
 			fmt.Printf("copied %s to %s@%s:%s (commit %s)\n", srcPath, dstRepo, dstBranch, dstPath, dst.ID)
 		},
 	}
-	copyCmd.Flags().BoolVarP(&fileOverwrite, "overwrite", "o", false, "overwrite accumulated content at the destination path (FS-3)")
+	copyCmd.Flags().BoolVarP(&fileOverwrite, "overwrite", "o", false, "overwrite accumulated content at the destination path")
 	cmd.AddCommand(copyCmd)
 
 	cmd.AddCommand(

@@ -1,6 +1,5 @@
 // Provenance semantics: lazy input mode, diamond DAGs, cross inputs over
-// pipeline outputs, and file revision history (SB-014, SB-015, SB-017,
-// SB-018, SB-019, SB-055, SB-145).
+// pipeline outputs, and file revision history.
 package conformance
 
 import (
@@ -14,7 +13,7 @@ import (
 
 // TestSB014_LazyPropagatesThroughChain — the lazy flag is part of the
 // input spec and is recorded on every job's input snapshot, through the
-// output-repo hop of a chain (SB-014).
+// output-repo hop of a chain.
 func TestSB014_LazyPropagatesThroughChain(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -50,7 +49,7 @@ func TestSB014_LazyPropagatesThroughChain(t *testing.T) {
 
 // TestSB015_LazyUnreadFilesDoNotBlock — with the whole commit as one lazy
 // datum, a transform that reads only one file still completes; the unread
-// file blocks nothing (SB-015).
+// file blocks nothing.
 func TestSB015_LazyUnreadFilesDoNotBlock(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -81,7 +80,7 @@ func TestSB015_LazyUnreadFilesDoNotBlock(t *testing.T) {
 // TestSB017_SpecialOutputFileFailsNotHangs — a transform that produces a
 // special (pipe-like) file in its output makes the job fail promptly; the
 // upload path rejects non-regular files instead of blocking forever or
-// storing garbage (SB-017). Clean-room note: the reference's special files
+// storing garbage. Clean-room note: the reference's special files
 // come from its lazy-file mechanism; sandman materializes lazy inputs as
 // regular files, so the equivalent corruption vector is a transform-created
 // FIFO — the contract under test is the upload's special-file rejection.
@@ -123,13 +122,13 @@ func TestSB017_SpecialOutputFileFails(t *testing.T) {
 
 // TestSB018_NonReducedProvenance — a DAG with two provenance routes into
 // one pipeline (A→B→C and A→C) yields one C commit per source commit, not
-// one per path; the diff sees the coherent revision pair (SB-018).
+// one per path; the diff sees the coherent revision pair.
 func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 	// RUN_BAD_TESTS gate: the pairing race has a residual settle-time
 	// window (record/growth interleavings; parked after the flush,
 	// atomic-write, and resolve/revert fixes). Upstream gates its
 	// equivalent — TestChainedPipelinesNoDelay is RUN_BAD_TESTS-gated
-	// (SB-056's note) — and the sandman follows suit: the exact-count
+	// — and the sandman follows suit: the exact-count
 	// contract stays strict when exercised. Run the family with
 	// RUN_BAD_TESTS=1 (like the reference) to assert it.
 	if os.Getenv("RUN_BAD_TESTS") == "" {
@@ -210,13 +209,13 @@ func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 
 // TestSB019_DiamondProvenance — a diamond (A→B, A→C, D crosses B and C)
 // yields exactly one commit per repository per source commit, and D's diff
-// is empty for every commit (matched pairs) (SB-019).
+// is empty for every commit (matched pairs).
 func TestSB019_DiamondProvenanceOneCommitPerStage(t *testing.T) {
 	// RUN_BAD_TESTS gate: the pairing race has a residual settle-time
 	// window (record/growth interleavings; parked after the flush,
 	// atomic-write, and resolve/revert fixes). Upstream gates its
 	// equivalent — TestChainedPipelinesNoDelay is RUN_BAD_TESTS-gated
-	// (SB-056's note) — and the sandman follows suit: the exact-count
+	// — and the sandman follows suit: the exact-count
 	// contract stays strict when exercised. Run the family with
 	// RUN_BAD_TESTS=1 (like the reference) to assert it.
 	if os.Getenv("RUN_BAD_TESTS") == "" {
@@ -297,7 +296,7 @@ func TestSB019_DiamondProvenanceOneCommitPerStage(t *testing.T) {
 
 // TestSB055_DownstreamConsumesUpstreamOutputInCross — a cross input may
 // combine a pipeline's output repository with a plain repository; the
-// downstream output combines both sides' content (SB-055).
+// downstream output combines both sides' content.
 func TestSB055_UpstreamOutputInsideCross(t *testing.T) {
 	repoA, repoD := uniq(t)+"a", uniq(t)+"d"
 	mustRepo(t, repoA)
@@ -354,7 +353,7 @@ func TestSB055_UpstreamOutputInsideCross(t *testing.T) {
 
 // TestSB145_FileRevisionHistory — file revision history is listable with
 // full depth on outputs produced from multi-commit cross inputs, and the
-// history reflects the successive revisions (SB-145).
+// history reflects the successive revisions.
 func TestSB145_FileRevisionHistory(t *testing.T) {
 	repoA, repoB := uniq(t)+"a", uniq(t)+"b"
 	mustRepo(t, repoA)
@@ -419,7 +418,7 @@ func TestSB145_FileRevisionHistory(t *testing.T) {
 		t.Fatalf("read combined: %v", err)
 	}
 	// the latest pairing's output is the full cartesian product of the two
-	// sides' accumulated files, appended per datum pair (SB-063's merge)
+	// sides' accumulated files, appended per datum pair
 	if string(b) != "a0b0a0b1a0b2a1b0a1b1a1b2a2b0a2b1a2b2" {
 		t.Fatalf("combined = %q, want the 3x3 cartesian product", string(b))
 	}

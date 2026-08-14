@@ -2,7 +2,7 @@ package main
 
 import "testing"
 
-// TestStopCronTickersExactOwner pins M2: cron repos are named
+// TestStopCronTickersExactOwner pins the rule that cron repos are named
 // <pipeline>-<input>, so a prefix match would let a "foo" cleanup stop
 // "foo-bar"'s schedule. The cleanup must stop exactly the pipelines that
 // own the tickers — never a name-colliding neighbor.

@@ -1,8 +1,7 @@
 package main
 
-// The datum API (per-datum statistics, SB-080/081/082/083/084): listing,
-// inspection, and restart of a job's datum set. The engine itself lives
-// in datum_engine.go.
+// The datum API (per-datum statistics): listing, inspection, and restart
+// of a job's datum set. The engine itself lives in datum_engine.go.
 
 import (
 	"encoding/json"
@@ -13,12 +12,15 @@ import (
 	"sandman/client"
 )
 
-// ---- the datum API (per-datum statistics, SB-080/081/082/083/084) ----
+// ---- the datum API ----
 
 // writeStatsCommit publishes a job's per-datum records as a commit on the
 // output repo's "stats" branch: one file per datum, named by its index,
-// containing the record. The branch is an ordinary branch — downstream
-// pipelines can consume it (SB-086, SB-113).
+// containing the record. A stats-enabled pipeline maintains the stats
+// branch as an additional ordinary output branch — one commit per job,
+// distinct and queryable separately from the normal output tree — and its
+// change propagates through the DAG so downstream pipelines can consume
+// it like any branch and run on it.
 func (d *daemon) writeStatsCommit(pl pipelineRec, dedup map[string]datumState, datums []datum) string {
 	m := d.repoLock(pl.Pipeline.Name)
 	m.Lock()
@@ -45,9 +47,13 @@ func (d *daemon) writeStatsCommit(pl pipelineRec, dedup map[string]datumState, d
 }
 
 // restartDatum aborts a datum's current processing and starts it over
-// (SB-064): the running container is killed, the datum's record is reset,
-// and the worker re-queues it, so the next status observation shows it
-// running with a fresh, later start time.
+// from scratch: the running container is killed, the datum's record is
+// reset, and the worker re-queues it, so the next status observation
+// shows it running with a strictly later start time. The restart must
+// land even when it races the datum's pick-up — the worker-registry entry
+// can lag the datum's "running" state and the container may still be
+// starting — so both the lookup and the kill are retried, and the job
+// still completes successfully with exactly one output commit.
 func (d *daemon) restartDatum(jobID, datumID string) error {
 	d.jobsMu.Lock()
 	rj, ok := d.running[jobID]
@@ -65,7 +71,6 @@ func (d *daemon) restartDatum(jobID, datumID string) error {
 	// state by a few hundred ms (the record is written on pick-up, the
 	// worker's jx entry just after): retry the lookup briefly so a
 	// restart issued the instant a datum appears never 400s on the gap
-	// (SB-064; observed on slow runners)
 	var cname string
 	for i := 0; i < 25; i++ { // ~2.5s
 		jx.workersMu.Lock()
@@ -87,7 +92,7 @@ func (d *daemon) restartDatum(jobID, datumID string) error {
 	jx.requestRestart(datumID)
 	// the container may still be starting (the record is written on
 	// pick-up, before docker run creates it): retry the kill until it
-	// lands (SB-064)
+	// lands
 	for i := 0; i < 50; i++ { // ~10s
 		if d.runner.Kill(cname) == nil {
 			return nil
@@ -98,14 +103,15 @@ func (d *daemon) restartDatum(jobID, datumID string) error {
 }
 
 // statsEnabled reports whether the pipeline currently records per-datum
-// statistics (the one-way flag, SB-081).
+// statistics (the one-way flag).
 func (d *daemon) statsEnabled(pipeline string) bool {
 	rec, err := d.loadPipeline(pipeline)
 	return err == nil && rec.Pipeline.EnableStats
 }
 
-// datumStateRank orders the listing: failed first, skipped last
-// (SB-082: the failed datum leads; SB-084: processed before skipped).
+// datumStateRank orders the listing: failed first, skipped last — a
+// failed datum leads regardless of its input position, and processed
+// datums come before skipped ones.
 func datumStateRank(outcome string) int {
 	switch outcome {
 	case "failed":
@@ -141,10 +147,19 @@ func datumInfo(id string, st datumState) client.DatumInfo {
 }
 
 // listDatums serves a job's datum listing: the job's datum set with each
-// datum's record, state-ordered (failed < recovered < success < skipped,
-// then id) and paginated. A page index at or beyond the page count errors
-// (SB-083); limit 0 requests everything (SB-161). Without statistics the
-// datums are listable by identity only (SB-081).
+// datum's record — the listing is complete and queryable both during and
+// after execution, so the in-progress datum appears before the job
+// completes — state-ordered (failed < recovered < success < skipped, then
+// id) and paginated by page size and zero-based page index, always
+// reporting TotalPages and the served Page. A page index at or beyond the
+// total page count errors rather than returning an empty page, and state
+// ordering is stable across pages so no datum straddles or duplicates;
+// limit 0 requests everything. The listing includes both the datums
+// processed in this job and the datums carried from a previous job that
+// were skipped because their input was unchanged, ordered processed before
+// skipped with a distinguishable state — never omitted, so per-datum
+// history carries across jobs. Without statistics the datums are listable
+// by identity only.
 func (d *daemon) listDatums(jobID string, limit, page int) (client.DatumPage, error) {
 	rec, err := d.loadJobRec(jobID)
 	if err != nil {
@@ -193,14 +208,13 @@ func (d *daemon) listDatums(jobID string, limit, page int) (client.DatumPage, er
 	for _, id := range datums[start:end] {
 		if !detailed {
 			// without statistics the datums are listable by identity only
-			// (SB-081)
 			out.Datums = append(out.Datums, client.DatumInfo{ID: id})
 			continue
 		}
 		st, ok := dedup[id]
 		if !ok {
 			// queued: part of the job's datum set, not yet picked up by a
-			// worker (SB-080's listing is complete during execution)
+			// worker
 			out.Datums = append(out.Datums, client.DatumInfo{ID: id, State: stateRunning})
 			continue
 		}
@@ -214,7 +228,7 @@ func (d *daemon) listDatums(jobID string, limit, page int) (client.DatumPage, er
 }
 
 // inspectDatum returns one datum's record; without per-datum statistics no
-// per-datum detail exists and the inspection errors (SB-081).
+// per-datum detail exists and the inspection errors.
 func (d *daemon) inspectDatum(jobID, datumID string) (client.DatumInfo, error) {
 	rec, err := d.loadJobRec(jobID)
 	if err != nil {

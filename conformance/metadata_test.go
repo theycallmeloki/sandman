@@ -61,7 +61,7 @@ func TestSB029_PipelineJobCounts(t *testing.T) {
 	// the reference's InspectJob(BlockState): WaitJob blocks on the
 	// server's state broadcast until the job settles — a running job's
 	// wait returns its terminal state and genuinely blocks for the
-	// remaining run time (D-23 R-5's long-poll wait)
+	// remaining run time (the long-poll wait)
 	repo2 := uniq(t)
 	mustRepo(t, repo2)
 	slow := uniq(t)
@@ -154,7 +154,7 @@ func TestSB047_TwentyThousandOutputFiles(t *testing.T) {
 		t.Fatalf("output has %d files, want 20000", len(files))
 	}
 	count := func(glob string) int {
-		// the server applies the prefix-glob filter (SB-047 clause 4)
+		// the server applies the prefix-glob filter
 		got, err := c.ListFilesGlob(out, glob)
 		if err != nil {
 			t.Fatalf("list %q: %v", glob, err)

@@ -44,7 +44,7 @@ func TestIsProvisioningError(t *testing.T) {
 }
 
 // TestProcessRunnerCapturesBothFDs runs a real job through the
-// no-container backend (D-23) with the capture wired exactly as
+// no-container backend with the capture wired exactly as
 // production does — cmd.Stdout and cmd.Stderr are the same
 // io.MultiWriter over the logCapture — and verifies every line of
 // interleaved stdout/stderr lands exactly once. Under -race this locks

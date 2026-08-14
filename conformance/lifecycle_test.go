@@ -328,7 +328,7 @@ func TestSB031_MidFlightJobRecordedFailedOnRestart(t *testing.T) {
 		t.Fatalf("job reason after restart = %q, want %q", j.Reason, "daemon restarted mid-job")
 	}
 
-	// committed data is intact (the durability boundary, D-07)
+	// committed data is intact (the durability boundary)
 	if got, err := c.InspectCommit(cm.ID); err != nil || !got.Finished {
 		t.Fatalf("commit lost/unfinished on restart: %v (finished=%v)", err, got.Finished)
 	}

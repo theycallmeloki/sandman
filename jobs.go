@@ -24,13 +24,13 @@ import (
 // ---- jobs ----
 
 // datumRef is one input file of a job — its path and content hash — the
-// per-datum handle for log filters (SB-060). A job's datum set is the
+// per-datum handle for log filters. A job's datum set is the
 // input revision's full view. The type is the store's DatumRef.
 type datumRef = store.DatumRef
 
 // jobRec is the persisted form of a job. Version, Transform, and Input are
 // snapshots of the pipeline version that created the job: historical jobs
-// keep their original transform across pipeline updates (SB-040, SB-143).
+// keep their original transform across pipeline updates.
 type jobRec struct {
 	ID           string            `json:"id"`
 	Pipeline     string            `json:"pipeline"`
@@ -48,7 +48,7 @@ type jobRec struct {
 	DatumStates  map[string]string `json:"datumStates,omitempty"`
 	StatsCommit  string            `json:"statsCommit,omitempty"`
 	// Manual marks a job spawned by an explicit pipeline run: its output
-	// never propagates downstream (SB-010).
+	// never propagates downstream.
 	Manual    bool `json:"manual,omitempty"`
 	Processed int  `json:"processed,omitempty"`
 	Recovered int  `json:"recovered,omitempty"`
@@ -88,7 +88,7 @@ func (d *daemon) saveJob(rec *jobRec) error {
 	// flushes, listings) must see the record complete or not at all — a
 	// plain WriteFile lets a racing read decode a half-written record and
 	// silently drop the job, which makes the duplicate-pairing guard miss
-	// (SB-056/SB-019: two triggers for the same input set)
+	// (two triggers for the same input set)
 	dir := d.jobDir(rec.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -101,7 +101,7 @@ func (d *daemon) saveJob(rec *jobRec) error {
 		return err
 	}
 	// every job-record change can advance a flush (a new job, a datum
-	// state, a terminal transition): wake the blocking waits (D-23 R-5)
+	// state, a terminal transition): wake the blocking waits
 	d.stateChanged.signal()
 	return nil
 }
@@ -112,7 +112,7 @@ func (d *daemon) listJobs() ([]client.Job, error) {
 
 // requirePipeline fails when the named pipeline does not exist or its
 // definition record is corrupted (the listing of jobs or logs of a missing
-// pipeline is an error, not an empty result; SB-026/027).
+// pipeline is an error, not an empty result).
 func (d *daemon) requirePipeline(pipeline string) error {
 	if _, err := d.loadPipeline(pipeline); err != nil {
 		if _, statErr := os.Stat(d.pipelinePath(pipeline)); statErr == nil {
@@ -124,11 +124,19 @@ func (d *daemon) requirePipeline(pipeline string) error {
 }
 
 // listJobsFiltered lists jobs, applying the pipeline, output-commit, and
-// inclusive state-set filters (SB-093, SB-095), plus a history depth
-// (0 = current version only, N = N most recent versions, -1 = every
-// version, SB-143). Full listings carry each job's own version's transform
-// and input snapshots (SB-094, SB-040). Listing jobs for a pipeline that
-// does not exist is an error, not an empty list (SB-026/027).
+// inclusive state-set filters, plus a history depth (0 = current version
+// only, N = N most recent versions, -1 = every version). The output-commit
+// filter accepts an exact commit id or a commit reference on the
+// pipeline's output branch — the branch-head reference resolves to the
+// same producing job as the concrete commit filter — and works without a
+// pipeline filter, so jobs across all pipelines are searched. The
+// state-set filter is inclusive: only jobs whose state is in the set are
+// returned, and a job matches only filters containing its actual state.
+// Full listings carry each job's own version's transform and input
+// snapshots; lightweight listings omit those spec-heavy fields while core
+// identity stays populated, and both modes return the same set of jobs.
+// Listing jobs for a pipeline that does not exist is an error, not an
+// empty list.
 func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string, full bool, history *int, inputCommits []string) ([]client.Job, error) {
 	if pipeline != "" {
 		if err := d.requirePipeline(pipeline); err != nil {
@@ -215,6 +223,13 @@ func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string
 	sort.Slice(out, func(i, j int) bool { return out[i].Started > out[j].Started })
 	return out, nil
 }
+
+// inspectJob is keyed by a job id or the output commit it produced: an
+// empty request — neither a job nor an output commit — is rejected with an
+// error stating that one of the two must be specified, and a commit that
+// exists but was never processed by any pipeline is reported as not found
+// rather than as an empty job. The live per-worker status is attached when
+// present.
 func (d *daemon) inspectJob(id string) (client.Job, error) {
 	var info client.Job
 	if b, err := os.ReadFile(filepath.Join(d.jobDir(id), "job.json")); err == nil {
@@ -223,7 +238,7 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 			info = rec.job()
 		}
 	}
-	// a job may also be keyed by the output commit it produced (SB-135)
+	// a job may also be keyed by the output commit it produced
 	if info.ID == "" {
 		for _, j := range d.mustListJobs() {
 			if j.OutputCommit == id {
@@ -235,7 +250,7 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 	if info.ID == "" {
 		return client.Job{}, notFound("job %q not found: specify a Job or an OutputCommit", id)
 	}
-	// the live per-worker status (SB-065/097)
+	// the live per-worker status
 	if b, err := os.ReadFile(filepath.Join(d.jobDir(info.ID), "workers.json")); err == nil {
 		var ws []workerStatus
 		if json.Unmarshal(b, &ws) == nil {
@@ -249,11 +264,14 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 	return info, nil
 }
 
-// markStaleJobsFailed repairs the state after a daemon restart: jobs that
-// were running when the daemon died can never finish here (their containers
-// were orphaned and will be pruned), so they are recorded as failed. A
-// standby pipeline whose in-flight work was lost that way has no pending
-// work left and returns to standby.
+// markStaleJobsFailed repairs the state after a daemon restart: only
+// committed state survives a control-plane restart, so a job that was
+// running when the daemon died can never finish here (its container was
+// orphaned and will be pruned) — it is recorded failed with the reason
+// 'daemon restarted mid-job' rather than left dangling. Committed data
+// and repos stay intact, and a standby pipeline whose in-flight work was
+// lost that way has no pending work left and returns to standby, to be
+// re-triggered by fresh input.
 func (d *daemon) markStaleJobsFailed() {
 	for _, j := range d.mustListJobs() {
 		if j.State == stateRunning {
@@ -290,7 +308,10 @@ func (d *daemon) jobByOutput(commitID string) (client.Job, bool) {
 func newJobID(node string) string { return newID(node, "") }
 
 // newJobRec builds a job's initial record: the running state, the input
-// pairing it consumed, and the pipeline-version snapshots (SB-040/143).
+// pairing it consumed, and the pipeline-version snapshots. The input
+// snapshot is copied verbatim — including the lazy-input flag — so a
+// downstream job records the same lazy semantics its pipeline declared,
+// surviving the output-repo hop of a pipeline chain.
 func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
 	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: stateRunning,
 		Started: now(),
@@ -313,7 +334,7 @@ func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
 // refuse to publish a partial revision. finishCommit and the consumer
 // trigger are one step so no caller can produce a finished commit that
 // never triggers. Provenance (optional) is stamped before the trigger
-// (spout's epoch anchor, SB-139 clause 7).
+// (spout's epoch anchor).
 func (d *daemon) commitRevision(repo, branch string, write func(commitID string) bool, provenance []string) bool {
 	cm, err := d.store.StartCommit(repo, branch, "")
 	if err != nil {
@@ -339,10 +360,26 @@ func (d *daemon) commitRevision(repo, branch string, write func(commitID string)
 // triggerForCommit launches one job per running pipeline subscribed to the
 // commit's repo. Jobs run in their own goroutines; the trigger never
 // blocks. It is called by the commit-finish callers (the HTTP handler,
-// job output, cron, spout, git push).
+// job output, cron, spout, git push). Every finished commit on a watched
+// branch — including commits with no file changes — triggers exactly one
+// job per consuming pipeline. Exactly one job is created per input pairing
+// per wave: near-simultaneous commits on two sides can each pair with the
+// other's fresh head, so the duplicate check and the job record's creation
+// are atomic under triggerMu — a racing trigger sees the record and skips
+// instead of double-spawning — and a pairing that would join a fresh
+// commit with the other side's still-stale head is deferred
+// (crossPairingConsistent) until the catch-up trigger forms the coherent
+// pairing. Every new commit on any cross side pairs with the other sides'
+// current heads at trigger time, so a lone side whose partner has no head
+// yet still gets a job; a cross may combine an upstream pipeline's output
+// repository with a plain repository, running against the current upstream
+// output (never a stale or partial one). The bookkeeping stays correct
+// under a large burst of rapid input revisions across many pipelines:
+// every revision is accepted and consumed with a job, and the final head
+// converges to completion.
 func (d *daemon) triggerForCommit(cm client.Commit) {
 	// size triggers watching the commit's branch accumulate their bytes and
-	// may fire (SB-160); the trigger commits they create re-enter here
+	// may fire; the trigger commits they create re-enter here
 	d.accumulateTriggers(cm)
 	pipes, _ := d.listPipelinesFiltered(nil, "", false)
 	for _, p := range pipes {
@@ -351,7 +388,7 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		}
 		// A pipeline whose transaction head job has not been scheduled yet
 		// must not be triggered twice: the transaction coordinator is the
-		// sole scheduler for it (SB-162: exactly one job per update).
+		// sole scheduler for it.
 		if txNoteTrigger(p.Name) {
 			continue
 		}
@@ -360,22 +397,21 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 			continue
 		}
 		if rec.Stopped {
-			continue // stopped pipelines ignore new commits (SB-048)
+			continue // stopped pipelines ignore new commits
 		}
 		if rec.Pipeline.Service != nil {
 			// a service is never triggered per commit: its single
-			// long-lived job refreshes its served input itself (SB-100)
+			// long-lived job refreshes its served input itself
 			continue
 		}
 		if !pipelineConsumes(rec.Pipeline.Input, cm.Repo, cm.Branch) {
 			continue
 		}
 		// the pairing at trigger time: the new commit on its side, each
-		// other side at its current head (SB-120)
+		// other side at its current head
 		heads := d.pairHeads(rec.Pipeline.Input)
 		// a commit produced by a failed job propagates the failure: the
 		// consuming pipeline's job is recorded failed without executing
-		// (SB-022)
 		propagated := ""
 		if j, ok := d.jobByOutput(cm.ID); ok && j.State == stateFailure {
 			propagated = "upstream job " + j.ID + " failed: " + j.Reason
@@ -383,7 +419,7 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		// exactly one job per input pairing: two sides' commits landing
 		// near-simultaneously can each pair with the other's fresh head,
 		// and the second trigger must not spawn a duplicate job for the
-		// same input set (SB-056: one job per wave, never extra). The
+		// same input set (one job per wave, never extra). The
 		// duplicate check and the job record's creation are atomic, so a
 		// racing trigger sees the record instead of double-spawning.
 		triggerMu.Lock()
@@ -396,8 +432,8 @@ func (d *daemon) triggerForCommit(cm client.Commit) {
 		// that pairs a fresh commit with the other side's still-stale head
 		// (the other side has not caught up yet) is deferred instead of
 		// spawning a mismatched job — the catch-up trigger will form the
-		// coherent pairing (SB-018/019 diamonds: one commit per source
-		// revision, never one per dependency path).
+		// coherent pairing (one commit per source revision, never one per
+		// dependency path).
 		if !d.crossPairingConsistent(heads) {
 			triggerMu.Unlock()
 			continue
@@ -442,7 +478,7 @@ func (d *daemon) pairHeads(in *client.Input) []client.Commit {
 // pipelineConsumes reports whether any input side subscribes to the
 // (repo, branch) pair — the trigger condition for a commit. Union and
 // cross branches are walked recursively, so a union of crosses still
-// triggers on its members' repos (SB-078).
+// triggers on its members' repos.
 func pipelineConsumes(in *client.Input, repo, branch string) bool {
 	for _, s := range inputSides(in) {
 		if s.Repo != "" {
@@ -475,7 +511,7 @@ func inputConsumesRepo(in *client.Input, repo string) bool {
 
 // triggerMu serializes the duplicate check and the job record's creation
 // in triggerForCommit: a racing trigger for the same input pairing must
-// observe the record the first trigger just saved (SB-056).
+// observe the record the first trigger just saved.
 var triggerMu sync.Mutex
 
 // hasRunningJobWithInputs reports whether the pipeline already has a
@@ -547,7 +583,11 @@ func (d *daemon) hasJobWithExactInputs(pipeline string, inputIDs []string, exclu
 // each source branch at exactly one revision. Two sides deriving from the
 // same source must pair at the same source revision — pairing a fresh
 // commit with the other side's stale head would process a mismatched
-// revision pair (SB-018/019). Disjoint sources are always consistent.
+// revision pair and is deferred until the catch-up trigger forms the
+// coherent pairing. The rule yields exactly one downstream commit per
+// source revision, never one per dependency path, at every stage of a DAG
+// with multiple provenance routes or a diamond, so the downstream diff
+// always sees matched revisions. Disjoint sources are always consistent.
 func (d *daemon) crossPairingConsistent(heads []client.Commit) bool {
 	sources := map[string]string{} // repo+branch → source commit
 	for _, h := range heads {
@@ -588,11 +628,11 @@ func (d *daemon) provenanceOf(commitID string, seen map[string]bool) []string {
 }
 
 // runningJob is the handle on an in-flight job's execution; pipeline is the
-// owning pipeline (for update/delete cancellation, SB-045/026), done signals
+// owning pipeline (for update/delete cancellation), done signals
 // the job goroutine has settled, cancelled distinguishes a deliberate kill
-// from a plain failure (SB-122). containers tracks the live datum
+// from a plain failure. containers tracks the live datum
 // container names so a cancel can kill every one of them. jx is the live
-// execution context while the job runs (datum API restart, SB-064),
+// execution context while the job runs (datum API restart),
 // attached under d.jobsMu by setJobExec.
 type runningJob struct {
 	pipeline   string
@@ -670,7 +710,7 @@ func (d *daemon) setJobExec(id string, jx *jobExec) {
 // cancelPipelineJobs cancels every in-flight job of the pipeline and
 // waits for them to settle under one shared deadline (used by update and
 // delete). Per-job sequential waits wedged the API handler when several
-// jobs were in flight (M10).
+// jobs were in flight.
 func (d *daemon) cancelPipelineJobs(pipeline string) {
 	d.jobsMu.Lock()
 	var ids []string
@@ -690,7 +730,7 @@ func (d *daemon) cancelPipelineJobs(pipeline string) {
 }
 
 // markPipelineFailed records a pipeline-level failure with a reason; the
-// pipeline stops scheduling until repaired (D-10).
+// pipeline stops scheduling until repaired.
 func (d *daemon) markPipelineFailed(name, reason string) {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
@@ -701,8 +741,11 @@ func (d *daemon) markPipelineFailed(name, reason string) {
 	}
 }
 
-// markPipelineCrashed records that a pipeline's execution environment could
-// not be provisioned (SB-043, SB-091).
+// markPipelineCrashed records that a pipeline's execution environment
+// could not be provisioned: the pipeline transitions to the crashed state
+// with a non-empty recorded reason rather than hanging in a running
+// state, and the system keeps retrying provisioning until the crash
+// converges. The reason is queryable through pipeline inspection.
 func (d *daemon) markPipelineCrashed(name, reason string) {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
@@ -715,7 +758,7 @@ func (d *daemon) markPipelineCrashed(name, reason string) {
 
 // markPipelineRunning clears the placement-outage crash once a host bearing
 // the pipeline's label has registered: the crashed state was only the
-// unplaced outage, and placement has become possible again (SB-169).
+// unplaced outage, and placement has become possible again.
 func (d *daemon) markPipelineRunning(name string) {
 	pipelineRecMu.Lock()
 	defer pipelineRecMu.Unlock()
@@ -756,7 +799,7 @@ var (
 )
 
 // jobGate serializes a pipeline's jobs in spawn order: strictly one job at
-// a time, the slot handed to the oldest waiter (SB-123). With parallelism
+// a time, the slot handed to the oldest waiter. With parallelism
 // 1 the jobs of successive commits therefore come up in commit order and
 // only one runs at a time; cancelling the running job lets the next queued
 // job start, and cancelling one job never touches the others. Serializing
@@ -911,7 +954,7 @@ func (d *daemon) finishOutput(pl pipelineRec, outCommit client.Commit, outDir st
 		}
 		// deletions propagate to the output revision: paths that were in
 		// the parent's view and are gone from this output are tombstoned
-		// (SB-007 — a deleted input file is absent, not stale)
+		// (a deleted input file is absent, not stale)
 		d.store.TombstoneRemoved(outCommit.ID, outDir)
 	}
 	return d.store.FinishCommit(outCommit.ID, "", empty)
@@ -919,8 +962,8 @@ func (d *daemon) finishOutput(pl pipelineRec, outCommit client.Commit, outDir st
 
 // recordProvenance stamps a finished output commit with its derivation:
 // its input commits and their own provenance, transitively. The recorded
-// provenance makes spout epochs and spec-commit subvenance observable
-// (SB-139 clause 7, SB-140 clauses 1/3): a downstream commit's recorded
+// provenance makes spout epochs and spec-commit subvenance observable: a
+// downstream commit's recorded
 // provenance includes its upstream spout commit AND that spout's
 // specification commit, so the spec commit's subvenants are exactly the
 // spout output and the downstream output.
@@ -984,7 +1027,10 @@ func (d *daemon) countRunningJobs() int {
 // cancelJob kills a running job and waits for it to settle as KILLED. A
 // terminal job cancels to a no-op. The kill retries: a job can be cancelled
 // the instant it appears, before its container exists (docker run still
-// starting), and a single kill would be silently lost.
+// starting), and a single kill would be silently lost. The stop is scoped
+// to that job: the job for a later input commit is still created and runs
+// to completion, and a queued job settles as killed when it reaches the
+// front of the pipeline gate, never blocking the next job.
 func (d *daemon) cancelJob(id string) error {
 	rj, err := d.cancelJobNoWait(id)
 	if err != nil {
@@ -1003,15 +1049,18 @@ func (d *daemon) cancelJob(id string) error {
 
 // cancelJobNoWait marks the job cancelled and starts its kill loop, then
 // returns the running handle (nil when the job is already terminal or
-// queued). Callers that cancel several jobs together use this and wait
-// once with a shared deadline (deleteCommit, cancelPipelineJobs): the
-// per-job sequential 30s waits in cancelJob wedged the API handler past
-// the client timeout whenever a handful of jobs were in flight (M10).
+// queued). A running job's in-flight work is terminated — every container
+// it registered is killed — and the job settles as killed within a bounded
+// window; cancelling a terminal or queued job is a no-op. Callers that
+// cancel several jobs together use this and wait once with a shared
+// deadline (deleteCommit, cancelPipelineJobs): the per-job sequential 30s
+// waits in cancelJob wedged the API handler past the client timeout
+// whenever a handful of jobs were in flight.
 func (d *daemon) cancelJobNoWait(id string) (*runningJob, error) {
 	// the live running handle is the authority — a cancel must not abort
 	// on a transiently unreadable job record (a concurrent save can race
 	// the read; the job then escapes the cancel and runs the old version
-	// indefinitely, SB-045)
+	// indefinitely)
 	d.jobsMu.Lock()
 	rj, ok := d.running[id]
 	d.jobsMu.Unlock()
@@ -1026,7 +1075,7 @@ func (d *daemon) cancelJobNoWait(id string) (*runningJob, error) {
 	if !rj.started.Load() {
 		// the job is queued behind the pipeline's gate: it has no work to
 		// kill, and it will settle as killed when it reaches the slot's
-		// front (SB-123). Returning now lets a later job start as soon as
+		// front. Returning now lets a later job start as soon as
 		// the running one settles — a queued cancel never blocks on it.
 		return nil, nil
 	}
@@ -1081,8 +1130,13 @@ func waitJobsSettled(rjs []*runningJob, budget time.Duration) {
 // Overridable for tests.
 var cancelSettleBudget = 30 * time.Second
 
-// deleteJob removes a job's record. A running job is first cancelled, which
-// finalizes its output revision (SB-057).
+// deleteJob removes a job's record. Deleting a job — even one whose
+// execution is still running — must not leave its output commit stuck
+// open: the job is first cancelled so its in-flight work settles and the
+// output revision is finalized with whatever output was produced so far,
+// then the job's record and logs are removed. A deleted job is no longer
+// inspectable, and its output commit transitions to the finished state
+// within a short window after the deletion.
 func (d *daemon) deleteJob(id string) error {
 	if _, err := d.inspectJob(id); err != nil {
 		return err
@@ -1123,9 +1177,16 @@ func (d *daemon) checkMetadata() error {
 	return nil
 }
 
-// reset removes every repository, pipeline, and job, and is idempotent
-// (SB-037). Corrupted metadata aborts the reset instead of being wiped
-// around (product decision D-08).
+// reset removes every repository, pipeline, and job along with all
+// statistics state, and is idempotent: afterwards listings of repos,
+// pipelines, and jobs are all empty and names are reusable. It cancels
+// in-flight work and wipes the entire state directory — including stats
+// and datum records — leaving no leftover statistics metadata to collide
+// with a recreated stats-enabled pipeline. The reset path must never
+// assume any particular metadata record exists: it completes no matter
+// which subset of records is missing. Corrupted metadata aborts the reset
+// instead of being wiped around: removing the corrupt record restores the
+// reset path.
 func (d *daemon) reset() error {
 	if err := d.checkMetadata(); err != nil {
 		return fmt.Errorf("reset aborted: corrupted metadata (%w)", err)
@@ -1155,7 +1216,7 @@ func (d *daemon) reset() error {
 	if err := os.MkdirAll(filepath.Join(d.state, "repos"), 0o755); err != nil {
 		return err
 	}
-	// the spec repository is internal and recreated empty (SB-127)
+	// the spec repository is internal and recreated empty
 	return d.store.CreateRepo("spec")
 }
 
@@ -1178,9 +1239,13 @@ func (d *daemon) loadPipeline(name string) (*pipelineRec, error) {
 // observable. The job id is supplied by the caller so schedulers can track
 // the job they spawned.
 // jobEnv builds the job-scoped execution environment: each input side's
-// commit, the output directory, and job identity (SB-051, SB-101,
-// SB-128). The input directory variables are per datum (each datum's own
-// staging mount) and are appended by the datum executor.
+// commit, the output directory, and job identity — OUT, JOB_ID,
+// OUTPUT_COMMIT, and <NAME>_COMMIT for each input's revision. Custom
+// variables declared in the transform's execution configuration join this
+// environment unmodified (reserved names are never shadowed), and each
+// value round-trips exactly, never truncated or defaulted. The input
+// directory variables are per datum (each datum's own staging mount) and
+// are appended by the datum executor.
 func (d *daemon) jobEnv(pl pipelineRec, id, outCommit string, sides []client.Input, heads []client.Commit) []string {
 	env := []string{
 		"OUT=/sandman/out",
@@ -1200,8 +1265,10 @@ func (d *daemon) jobEnv(pl pipelineRec, id, outCommit string, sides []client.Inp
 	return env
 }
 
-// failedDatumReason summarizes a job's failed datums for the job reason —
-// the failure is attributed to the datum that failed (SB-011).
+// failedDatumReason summarizes a job's failed datums for the job reason:
+// when a datum's execution exits nonzero, the job terminates in failure
+// and its recorded reason identifies the datum that failed, attributing
+// the failure to its input unit for diagnosis.
 func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 	var parts []string
 	for _, dt := range datums {
@@ -1246,15 +1313,15 @@ func (d *daemon) resolveCommitRef(ref string) (*store.CommitRec, error) {
 
 // allCommitRecs enumerates every commit record in every repository,
 // including the internal spec repository (its commits reference spec
-// blobs that garbage collection must keep — SB-079).
+// blobs that garbage collection must keep).
 func (d *daemon) allCommitRecs() []*store.CommitRec {
 	var out []*store.CommitRec
 	repos, _ := d.store.ListRepos()
 	for _, r := range repos {
 		out = append(out, d.repoCommitRecs(r.Name)...)
 	}
-	// the spec repository is internal and not listed as a user repo
-	// (SB-127), but its commits are still durable references
+	// the spec repository is internal and not listed as a user repo,
+	// but its commits are still durable references
 	out = append(out, d.repoCommitRecs("spec")...)
 	return out
 }
@@ -1280,15 +1347,18 @@ func (d *daemon) repoCommitRecs(repo string) []*store.CommitRec {
 	return out
 }
 
-// deleteCommit removes a commit and everything derived from it (SB-124):
-// the commit's own record, every commit in any repository whose
-// provenance includes it (transitively through the DAG), and the jobs
-// that consumed any of them. Surviving commits whose parent was removed
-// get their parent link cleared — the survivor becomes the first commit
-// of its branch — and branch heads that pointed at a removed commit move
-// to the nearest surviving ancestor or disappear. Deleting a branch head
-// supersedes an in-flight job processing it (SB-125). Deletion never
-// triggers pipelines: the surviving revisions were already processed.
+// deleteCommit removes a commit (by id or repo@branch reference) and
+// everything derived from it: the commit's own record, every commit in
+// any repository whose provenance includes it (transitively through the
+// DAG), and the jobs that consumed any of them. Surviving commits whose
+// parent was removed get their parent link cleared — the survivor becomes
+// the first commit of its branch — and branch heads that pointed at a
+// removed commit move to the nearest surviving ancestor or disappear.
+// Deleting a branch-head commit supersedes the in-flight job processing
+// it: the job is cancelled and removed, the branch reverts to the prior
+// commit (reads at the branch serve the prior commit's data), and later
+// commits are still processed normally. Deletion never triggers
+// pipelines: the surviving revisions were already processed.
 func (d *daemon) deleteCommit(ref string) error {
 	rec, err := d.resolveCommitRef(ref)
 	if err != nil {
@@ -1299,7 +1369,7 @@ func (d *daemon) deleteCommit(ref string) error {
 	// of jobs consuming it) and closed by BFS: the historical repeated
 	// full scans with a per-hop job-record scan were quadratic — a
 	// mid-suite deleteCommit (every job record re-read per hop) wedged
-	// the API handler past the client timeout (M10).
+	// the API handler past the client timeout.
 	byInput := map[string][]string{}
 	for _, j := range d.mustListJobs() {
 		for _, ic := range j.InputCommits {
@@ -1318,11 +1388,11 @@ func (d *daemon) deleteCommit(ref string) error {
 		}
 	}
 	// cancel in-flight jobs that consumed a deleted commit, then remove
-	// every affected job record (SB-124: job history reflects the removal;
-	// SB-125: the in-flight job is superseded, not left running). The
+	// every affected job record (job history reflects the removal; the
+	// in-flight job is superseded, not left running). The
 	// cancels run concurrently under one shared deadline — sequential
 	// per-job 30s waits wedged the handler past the client timeout when
-	// several jobs were in flight (M10); the records are removed only
+	// several jobs were in flight; the records are removed only
 	// after the settle wait so a settling run cannot resurrect one.
 	var rjs []*runningJob
 	for _, j := range d.mustListJobs() {
@@ -1364,8 +1434,8 @@ func (d *daemon) deleteCommit(ref string) error {
 	}
 	var fixes []headFix
 	// every repo directory — including the internal "spec" definition
-	// repository, which listRepos hides (SB-127): a deleted spec commit
-	// must not leave a stale branch head (SB-164 abort cleanup)
+	// repository, which listRepos hides: a deleted spec commit
+	// must not leave a stale branch head
 	repoDirs, err := os.ReadDir(d.store.Dir())
 	if err == nil {
 		for _, rd := range repoDirs {
@@ -1473,7 +1543,7 @@ func (d *daemon) settlePanicJob(id string) {
 	if rec.OutputCommit == "" {
 		return
 	}
-	// close the output commit empty so the DAG stays continuous (SB-022);
+	// close the output commit empty so the DAG stays continuous;
 	// bounded so a panic under the repo lock cannot wedge this settle too
 	go func() {
 		m := d.repoLock(rec.Pipeline)

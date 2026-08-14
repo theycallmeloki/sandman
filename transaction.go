@@ -1,6 +1,6 @@
 package main
 
-// Meta plane, transactions (SB-162/163): pipeline creations and updates
+// Meta plane, transactions: pipeline creations and updates
 // stage into an open transaction and apply atomically on finish — either
 // every staged operation takes effect or none does. Ops are plain JSON
 // files under <state>/transactions/<id>/; there is no hidden state.
@@ -11,9 +11,9 @@ package main
 // for the applied versions are scheduled topologically — a pipeline waits
 // for its in-transaction upstreams to settle, and event-driven triggers
 // are suppressed until then — so each updated pipeline produces exactly
-// one new job and one new output commit (SB-162).
+// one new job and one new output commit.
 //
-// Conflict detection (SB-163): an update staged while the transaction is
+// Conflict detection: an update staged while the transaction is
 // open records the pipeline's version; if the pipeline is modified outside
 // the transaction before finish, the version differs and finish fails with
 // "outside of transaction", applying nothing.
@@ -50,14 +50,14 @@ func newTxID(node string) string { return newID(node, "tx") }
 
 // txOp is one staged operation. Baseline is the pipeline's version when
 // the op was staged: finish refuses if the live pipeline has since been
-// modified outside the transaction (SB-163).
+// modified outside the transaction.
 type txOp struct {
 	Kind     string          `json:"kind"` // create | update
 	Spec     client.Pipeline `json:"spec"`
 	Baseline int             `json:"baseline,omitempty"`
 	// SpecCommit is the spec-repository commit the op wrote when it
 	// applied; the rollback deletes it so an aborted transaction leaves
-	// no orphaned spec commits (SB-164).
+	// no orphaned spec commits.
 	SpecCommit string `json:"specCommit,omitempty"`
 }
 
@@ -136,6 +136,22 @@ func (d *daemon) deleteTransaction(id string) error {
 
 // ---- finish: validate, then apply ----
 
+// finishTransaction applies the transaction's staged pipeline creations
+// and updates atomically — all or nothing: either every staged
+// operation takes effect or none does. A pipeline staged in the
+// transaction may consume another pipeline staged in the same
+// transaction (its output repo does not exist yet), so repo existence
+// resolves against the transaction's own pipelines; each updated
+// pipeline produces exactly one new output commit and one new job, with
+// head jobs scheduled topologically so a pipeline waits for its
+// in-transaction upstreams to settle. An update staged while the
+// transaction is open records the pipeline's baseline version; if the
+// same pipeline is modified by a separate request outside the
+// transaction before finish, the version differs and finish refuses to
+// commit with an error stating the pipeline was modified "outside of
+// transaction" — the concurrent modification invalidates the
+// transaction, which applies nothing rather than silently overwriting
+// or merging.
 func (d *daemon) finishTransaction(id string) error {
 	if err := d.txExists(id); err != nil {
 		return err
@@ -177,7 +193,7 @@ func (d *daemon) finishTransaction(id string) error {
 				}
 				if rec.Version != op.Baseline {
 					// modified outside the transaction between staging and
-					// finish: refuse to commit (SB-163)
+					// finish: refuse to commit
 					return fmt.Errorf("pipeline %q was modified outside of transaction", op.Spec.Name)
 				}
 				v = rec.Version
@@ -190,7 +206,7 @@ func (d *daemon) finishTransaction(id string) error {
 
 	// Repo existence resolves against the transaction's own pipelines: a
 	// pipeline staged here may consume another staged here, whose output
-	// repo does not exist yet (SB-162).
+	// repo does not exist yet.
 	for _, op := range ops {
 		for _, s := range inputSides(op.Spec.Input) {
 			if _, pending := txState[s.Repo]; pending {
@@ -280,9 +296,17 @@ func (d *daemon) txAbortHolds(final map[string]client.Pipeline) {
 }
 
 // rollbackTx undoes already-applied operations on a mid-apply failure:
-// created pipelines are removed, updated pipelines are restored from their
-// immutable version archives. Spec commits remain (they are durable
-// history, not observable pipeline state).
+// created pipelines are removed, updated pipelines are restored from
+// their immutable version archives (the restored pipelines' historical
+// spec commits remain — they are durable history, not observable
+// pipeline state). The spec commits the applied operations wrote are
+// rolled back with them: each op recorded the spec-repository commit it
+// wrote when it applied, and rollback deletes it, so an aborted or
+// failed transaction leaves no orphaned spec commits — a failed
+// duplicate create (no update flag) leaves no temporary spec commit
+// behind, and a successful creation leaves exactly one. Spec commits
+// are durable before a pipeline is considered created and are cleaned
+// up on every failure path.
 func (d *daemon) rollbackTx(applied []txOp) {
 	for i := len(applied) - 1; i >= 0; i-- {
 		op := applied[i]
@@ -295,7 +319,7 @@ func (d *daemon) rollbackTx(applied []txOp) {
 				os.WriteFile(d.pipelinePath(op.Spec.Name), b, 0o644)
 			}
 		}
-		// an aborted transaction leaves no spec commits behind (SB-164):
+		// an aborted transaction leaves no spec commits behind:
 		// the applied op's definition commit is deleted with its pipeline
 		// — no orphaned entries on the failure path
 		if op.SpecCommit != "" {
@@ -371,7 +395,7 @@ func topoOrder(final map[string]client.Pipeline, deps map[string][]string) ([]st
 // (a goroutine-registration race would otherwise let the downstream
 // schedule against a stale head) — then claims the head job, re-scheduling
 // if a commit arrived while it was being scheduled, so exactly one job
-// processes the coherent post-transaction head (SB-162).
+// processes the coherent post-transaction head.
 func (d *daemon) txCoordinate(final map[string]client.Pipeline, deps map[string][]string, order []string) {
 	scheduled := map[string]string{} // pipeline -> id of its coordinator-scheduled head job
 	for _, name := range order {

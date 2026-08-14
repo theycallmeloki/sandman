@@ -1,6 +1,6 @@
 package main
 
-// The execution-host worker (SB-167/169). One binary, busybox-style: the
+// The execution-host worker. One binary, busybox-style: the
 // same sandman that runs the control plane also runs `sandman worker`, a
 // host-side execution participant. A worker joins the cluster using
 // configuration set at host setup time — the control plane's address and
@@ -37,7 +37,7 @@ import (
 
 // execRequest is the wire contract between the control plane and a worker
 // for one datum attempt: the datum's per-side input files, the transform's
-// command(s), and the execution parameters (SB-167). Resources follow the
+// command(s), and the execution parameters. Resources follow the
 // same mapping as a local run: memory limit → --memory, memory request →
 // --memory-reservation, CPU (limit, or request when no limit) → --cpus.
 type execRequest struct {
@@ -145,7 +145,7 @@ func cmdWorker(args []string) {
 	// the exec listener binds loopback by default: the endpoint is
 	// unauthenticated, so it must not be reachable off-host unless the
 	// operator explicitly advertises a reachable address (remote
-	// placement, SB-167) — then it listens on every interface so the
+	// placement) — then it listens on every interface so the
 	// advertised host is actually reachable, and registers the
 	// advertised address instead of the literal listener address (the
 	// control plane dials h.Addr for both exec and the service's
@@ -173,7 +173,7 @@ func cmdWorker(args []string) {
 		}
 		writeJSON(w, runExec(*name, req))
 	})
-	// remote service support (SB-168): the control plane asks the worker
+	// remote service support: the control plane asks the worker
 	// to keep a service container alive serving a materialized input
 	// directory; the control-plane host proxies its external port to
 	// host:internal, so clients never need this worker's address.
@@ -334,7 +334,7 @@ func registerHost(control, name, addr string, labels []string) error {
 // shipped files, run the primary command (and, when it fails, the
 // error-handling command in the same output directory), scan the output,
 // and return the produced files. Mirrors the control plane's local
-// attempt semantics (SB-012 recovery, SB-113 datum timeout, SB-017 output
+// attempt semantics (recovery, datum timeout, output
 // scan) so a placed job's result is identical to a locally run one.
 func runExec(nodeName string, req execRequest) execResult {
 	dir, err := os.MkdirTemp("", "sandman-worker-*")
@@ -410,7 +410,7 @@ func runExec(nodeName string, req execRequest) execResult {
 	primaryCode, tail := run(cname, req.Cmd, req.Stdin)
 	// without an error-handling command a nonzero primary exit fails the
 	// datum (matching the local path): errCode carries the primary code
-	// unless an ErrCmd runs and recovers the datum (SB-012). Defaulting
+	// unless an ErrCmd runs and recovers the datum. Defaulting
 	// to 0 here silently turned every container failure into a
 	// success/recovered datum.
 	errCode := primaryCode
@@ -423,7 +423,7 @@ func runExec(nodeName string, req execRequest) execResult {
 		// symlink resolution for the output scan: /sandman/in/<side> maps
 		// to this worker's materialized side dirs, /tmp to its temp dir;
 		// the full-side view (/sandman/view) is not shipped to remote
-		// hosts, so links into it resolve nowhere (SB-054).
+		// hosts, so links into it resolve nowhere.
 		link := func(target string) string {
 			for _, prefix := range []string{"/sandman/in/", "/sandman/view/"} {
 				if strings.HasPrefix(target, prefix) {
@@ -465,7 +465,7 @@ func runExec(nodeName string, req execRequest) execResult {
 // execOnHost pushes one datum attempt to a worker and decodes the result.
 // The call is cancelled when the job is cancelled and bounded by a
 // deadline: a hung or partitioned worker must fail the attempt (crashing
-// the pipeline, SB-091/169) instead of wedging the job's gate forever
+// the pipeline) instead of wedging the job's gate forever
 // while cancelJob finds no local container to kill.
 func (d *daemon) execOnHost(ctx context.Context, h *execHost, req execRequest) (code, errCode int, tail string, timedOut bool, outputs []shipFile, err error) {
 	b, err := json.Marshal(req)
@@ -505,7 +505,7 @@ func (d *daemon) execOnHost(ctx context.Context, h *execHost, req execRequest) (
 	return res.PrimaryCode, res.ErrCode, res.Tail, res.TimedOut, res.Outputs, nil
 }
 
-// ---- remote services (SB-168) ----
+// ---- remote services ----
 
 // serviceStartRequest asks a worker to keep one service container alive
 // serving the shipped input files.
@@ -590,7 +590,7 @@ func runRemoteService(req serviceStartRequest) error {
 
 // refreshRemoteService replaces the running service's served input with
 // the shipped files: the container's mount reflects them immediately, so
-// the service serves the new revision without a restart (SB-100 clause 5).
+// the service serves the new revision without a restart.
 func refreshRemoteService(req serviceRefreshRequest) error {
 	workerServicesMu.Lock()
 	svc, ok := workerServices[req.Name]
@@ -601,7 +601,7 @@ func refreshRemoteService(req serviceRefreshRequest) error {
 	// clear the served directory's CONTENTS, never the directory itself:
 	// svc.dir is the container's bind-mount root, and replacing the
 	// directory inode would orphan the mount (the container keeps serving
-	// the deleted tree — SB-100 clause 5 refresh must reach it)
+	// the deleted tree — the refresh must reach it)
 	entries, err := os.ReadDir(svc.dir)
 	if err != nil {
 		return err

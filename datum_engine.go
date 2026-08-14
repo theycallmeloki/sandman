@@ -7,20 +7,22 @@
 //   - A datum is one glob match: a file, or a directory and its whole
 //     subtree. Its identity is the matched path; its content hash is a
 //     digest of its files' content hashes.
-//   - Dedup (SB-006/084/085, D-13): a datum whose content hash is
+//   - Dedup: a datum whose content hash is
 //     unchanged from a previous SUCCESSFUL run is skipped, unless the
-//     pipeline's Reprocess flag forces every job to re-execute everything
-//     (SB-166). A skipped datum's output is carried forward.
+//     pipeline's Reprocess flag forces every job to re-execute everything.
+//     A skipped datum's output is carried forward.
 //   - Per-datum records live in a per-pipeline dedup table — the durable
 //     memory of what was processed, against which hash, with what outcome
 //     (success | recovered | failed | skipped).
-//   - Parallelism bounds the worker pool (SB-004/103). Workers execute
+//   - Parallelism bounds the worker pool (the pool runs at the configured
+//     parallelism and every datum's output is merged into the job's single
+//     output commit, however datums are distributed). Workers execute
 //     datums independently; each writes into its own staging directory.
 //   - The job's output commit merges every datum's contribution: a
 //     processed datum's fresh files, a skipped datum's carried files.
 //     Files at the same relative path from different datums concatenate
-//     in datum order (SB-063: "each datum's output in sequence"; the
-//     order itself is not contractual, D-14, but the merge is
+//     in datum order ("each datum's output in sequence"; the
+//     order itself is not contractual, but the merge is
 //     deterministic). A failed datum contributes nothing — all-or-nothing
 //     per datum, matching the job-level convention.
 package main
@@ -61,16 +63,21 @@ type datumSide struct {
 	Files []string // file paths in this side's view
 	// Merge, when set, overrides Files' content for the listed paths: the
 	// side's file at each path is the concatenation of the copies (a
-	// union's branches merging by path, SB-077/078).
+	// union's branches merging by path).
 	Merge map[string][]fileRef
 }
 
-// unionDatums builds a union input's datum set (SB-077/078): each branch
-// contributes its files at their namespaced paths (a plain repo at its
-// file paths, a cross at memberName/file, a nested union under its name),
-// and files at the same path merge by concatenation in branch order — one
-// datum per distinct path. The merged content hash is computed from the
-// copies, so dedup tracks the union's merged state.
+// unionDatums builds a union input's datum set: each branch contributes
+// its files at their namespaced paths (a plain repo at its file paths, a
+// cross at memberName/file, a nested union under its name), and files at
+// the same path merge by concatenation in branch order — one datum per
+// distinct path. The merged content hash is computed from the copies, so
+// dedup tracks the union's merged state. Because each occurrence of a
+// file is tracked individually and merged (present or missing per branch),
+// a file removed from every branch is detected as a removal in the next
+// job rather than hidden by identical content hashes, so the job
+// re-processes and reflects the removal instead of reproducing the
+// parent's output tree.
 func (d *daemon) unionDatums(views map[string]map[string]store.ViewEntry, union *client.Input) []datum {
 	merged := map[string][]fileRef{}
 	var order []string
@@ -179,7 +186,7 @@ func (d *daemon) unionBranchPaths(views map[string]map[string]store.ViewEntry, b
 
 // unionBranchKey names the view key of one union branch: the branch's
 // name (or repo) plus its branch, so two branches of one repo stay
-// distinct in the views (SB-141).
+// distinct in the views.
 func unionBranchKey(b client.Input) string {
 	n := b.Name
 	if n == "" {
@@ -202,7 +209,7 @@ type datumState struct {
 	Reason      string    `json:"reason,omitempty"`
 	// TransformHash identifies the transform that produced this record's
 	// output: a skipped datum's carried files are re-run-equivalent (and
-	// may concatenate with fresh output, FS-5) only under the same
+	// may concatenate with fresh output only under the same
 	// transform — under a changed transform the carried content is stale
 	// and a fresh datum's output for the same path supersedes it.
 	TransformHash string `json:"transformHash,omitempty"`
@@ -223,7 +230,7 @@ type fileRef struct {
 
 // appendLogLine writes one timestamped line to a job's log (the same
 // format the log capture produces), used for engine-authored entries like
-// per-attempt failure markers (SB-134).
+// per-attempt failure markers.
 func (d *daemon) appendLogLine(id, line string) {
 	path := d.logPath(id)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -257,12 +264,12 @@ func globMatches(pattern, path string) bool {
 // enumerateDatums resolves one side's datum set from its view: every path
 // the glob matches is a datum — a directory match is a datum of its whole
 // subtree, and files swallowed by a directory datum are not separate
-// datums. Datums are ordered by id (D-14: execution order is not
-// contractual, but the output merge must be deterministic).
+// datums. Datums are ordered by id (execution order is not contractual,
+// but the output merge must be deterministic).
 func enumerateDatums(view map[string]store.ViewEntry, glob string) []datumSide {
 	// candidate paths: every file path and every ancestor directory; the
 	// root "" is always a candidate, so glob "/" selects the whole commit
-	// as one datum (SB-015)
+	// as one datum
 	candSet := map[string]bool{"": true}
 	for p := range view {
 		dir := p
@@ -310,10 +317,16 @@ func enumerateDatums(view map[string]store.ViewEntry, glob string) []datumSide {
 }
 
 // crossDatums builds a job's datum set from its sides' datum lists: the
-// cartesian product over the sides, one contribution per side (SB-063,
-// SB-161). A side with no datums makes the product empty. A single side
-// keeps the plain matched paths as datum ids; a cross datum's id joins the
-// side keys so identity stays stable across jobs.
+// exact cartesian product over the sides' glob matches — with n files per
+// side there are n×m datums, never a union or the maximum — one
+// contribution per side, each side's glob evaluated against the whole
+// repository view at the job's input revision so a change confined to one
+// directory is still reflected in the next job's datums. A side with no
+// finished head contributes no datums, so the product is empty while only
+// one branch has data; once every branch has revisions the sides combine
+// into one output commit in input-declaration order. A single side keeps
+// the plain matched paths as datum ids; a cross datum's id joins the side
+// keys so identity stays stable across jobs.
 func crossDatums(sideLists [][]datumSide) []datum {
 	if len(sideLists) == 1 {
 		out := make([]datum, 0, len(sideLists[0]))
@@ -353,7 +366,7 @@ func datumHash(s *store.Store, views map[string]map[string]store.ViewEntry, dt d
 		if sd.Merge != nil {
 			// a union side combined into a cross/join datum: the merged
 			// copies carry the content (the branches' views live under
-			// branch keys, not the union's name, SB-141)
+			// branch keys, not the union's name)
 			paths := make([]string, 0, len(sd.Merge))
 			for p := range sd.Merge {
 				paths = append(paths, p)
@@ -444,35 +457,35 @@ type jobExec struct {
 	env    []string                              // job-scoped environment; the input dir vars are per datum
 	rj     *runningJob
 
-	// customization: the pipeline's pod-spec/pod-patch application
-	// (SB-072/152) — extra environment variables and volume mounts
-	// carried into every datum run.
+	// customization: the pipeline's pod-spec/pod-patch application —
+	// extra environment variables and volume mounts carried into every
+	// datum run.
 	extraEnv    []string
 	extraMounts []string
 
 	// viewDirs are the sides' materialized full views, mounted read-only
 	// into every container at /sandman/view/<name> alongside the datum's
-	// own files: a datum may read data outside its own datum set (SB-166).
+	// own files: a datum may read data outside its own datum set.
 	viewMu   sync.Mutex
 	viewDirs map[string]string
 
-	// host is the execution host the job was placed on (SB-167): non-nil
-	// only for a pipeline with a placement label, in which case every
-	// datum attempt is shipped to that host's exec endpoint instead of
-	// running on the control plane.
+	// host is the execution host the job was placed on: non-nil only for
+	// a pipeline with a placement label, in which case every datum
+	// attempt is shipped to that host's exec endpoint instead of running
+	// on the control plane.
 	host *execHost
 
 	// tmpDir is the job's temp directory, mounted at the container's /tmp:
 	// temp files a transform creates are host-readable, so symlinks to
-	// them resolve in the output scan (SB-054).
+	// them resolve in the output scan.
 	tmpDir  string
 	tmpOnce sync.Once
 
-	// live worker status, persisted per event (SB-065/097)
+	// live worker status, persisted per event
 	workersMu sync.Mutex
 	workers   []workerStatus
 
-	// restart requests (SB-064): a datum id requested to abort and re-run
+	// restart requests: a datum id requested to abort and re-run
 	restartMu sync.Mutex
 	restart   map[string]bool
 
@@ -486,7 +499,7 @@ type jobExec struct {
 }
 
 // requestRestart asks that a datum's current processing be aborted and
-// restarted (SB-064).
+// restarted.
 func (jx *jobExec) requestRestart(datumID string) {
 	jx.restartMu.Lock()
 	defer jx.restartMu.Unlock()
@@ -513,10 +526,12 @@ func (jx *jobExec) canceled() bool {
 
 // setDatum records one datum's state and persists the pipeline's dedup
 // table: the datum API reads it live, so an in-flight job's records — the
-// datum currently being processed included — are queryable (SB-114). The
-// marshal and the tmp+rename run under dedupMu: every worker of the job
-// writes the same shared tmp path, and an unlocked write could interleave
-// two marshals into a torn file (the file is small; contention is nil).
+// datum currently being processed included — are queryable before the job
+// completes, and queued datums are part of the job's datum set with no
+// phantom or partial entries. The marshal and the tmp+rename run under
+// dedupMu: every worker of the job writes the same shared tmp path, and an
+// unlocked write could interleave two marshals into a torn file (the file
+// is small; contention is nil).
 func (jx *jobExec) setDatum(id string, st datumState) {
 	jx.dedupMu.Lock()
 	defer jx.dedupMu.Unlock()
@@ -546,11 +561,21 @@ func (jx *jobExec) unregisterContainer(name string) {
 }
 
 // runDatums executes every datum with a bounded worker pool and reports
-// whether any datum ended failed. The pool size is the pipeline's
-// parallelism constant (the autoscaling cap), capped at the datum count
-// (SB-165: never more workers than datums). Each worker has a bounded
-// queue of at most maxQueueSize (default 1) pending datums (SB-097); the
-// coordinator feeds the queues round-robin, blocking on full ones.
+// whether any datum ended failed. The pool is sized to the pipeline's
+// parallelism constant — the number of concurrent workers equals the
+// declared parallelism — and with autoscaling enabled it ramps to the
+// number of input datums, always capped at the constant: never more
+// workers than datums, whatever the input size. Every datum's output is
+// merged into the job's single output commit, so however datums are
+// distributed across the parallel workers (slow, long-running datums
+// included) the output revision contains every input file with identical
+// content — no file lost, duplicated, or corrupted. Each worker has a
+// bounded queue of at most maxQueueSize (a value of zero means a queue of
+// one) pending datums; the coordinator feeds the queues round-robin,
+// blocking on full ones, so no worker ever holds more than its bound even
+// while datums are slow. The live per-worker status — active datum, start
+// time, and queue — is exposed in job status while the job runs, one
+// entry per worker.
 func (d *daemon) runDatums(jx *jobExec, todo []datum) bool {
 	workers := 1
 	if jx.pl.Pipeline.Parallelism != nil && jx.pl.Pipeline.Parallelism.Constant > 0 {
@@ -577,7 +602,7 @@ func (d *daemon) runDatums(jx *jobExec, todo []datum) bool {
 		go func(w int) {
 			defer wg.Done()
 			for i := range chans[w] {
-				// a restart (SB-064) re-runs the datum in place: no
+				// a restart re-runs the datum in place: no
 				// channel round-trip, so a re-queue can never hit a closed
 				// worker channel
 				for d.execDatum(jx, todo[i], w, i) {
@@ -602,7 +627,7 @@ func (d *daemon) runDatums(jx *jobExec, todo []datum) bool {
 }
 
 // workerStatus is one worker's live state, persisted at <jobDir>/workers.json
-// so job inspection sees it mid-flight (SB-065/097).
+// so job inspection sees it mid-flight.
 type workerStatus struct {
 	Worker  int    `json:"worker"`
 	Datum   string `json:"datum,omitempty"`
@@ -658,10 +683,14 @@ func (jx *jobExec) setQueue(worker, queue int) {
 }
 
 // execDatum processes one datum: up to DatumTries attempts of the primary
-// command, each logged to the job log (SB-134), then the record is
-// finalized. A cancelled job stops starting attempts; a restart request
-// (SB-064) aborts the datum mid-flight and returns true so the worker
-// re-queues it.
+// command, each logged to the job log — one failure marker per attempt —
+// then the record is finalized. A failing datum is retried exactly the
+// configured number of times (hard failures like a command not found
+// included): the total attempt count equals the configured count, neither
+// fewer nor more, and the job reports failure after the tries are
+// exhausted. A cancelled job stops starting attempts; a restart request
+// aborts the datum mid-flight and returns true so the worker re-queues
+// it.
 func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bool) {
 	tr := jx.pl.Pipeline.Transform
 	tries := tr.DatumTries
@@ -699,7 +728,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 		}
 		if jx.restartRequested(dt.ID) {
 			// the datum's processing was aborted: re-run it from scratch
-			// with fresh progress (SB-064) — checked even after the last
+			// with fresh progress — checked even after the last
 			// attempt, since the abort lands mid-attempt
 			jx.setDatum(dt.ID, datumState{Hash: dt.Hash, InputFiles: inputFiles})
 			return true
@@ -733,7 +762,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 	jx.setDatum(dt.ID, rec)
 	// a provisioning failure (the image cannot be obtained at all) is an
 	// environment problem, not a user-code failure: the pipeline enters
-	// the crashed state (SB-043, SB-091).
+	// the crashed state.
 	if isProvisioningError(lastReason) {
 		d.markPipelineCrashed(jx.pl.Pipeline.Name, "datum "+dt.ID+": "+strings.TrimSpace(lastReason))
 	}
@@ -741,18 +770,36 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 }
 
 // runDatumAttempt materializes one datum's per-side input files and runs
-// one attempt of the transform: the primary command, and — when it fails —
-// the error-handling command (SB-012), which may recover the datum. A
-// datum that exceeds its per-datum timeout is killed at the boundary
-// (SB-113). Returns the outcome, a diagnostic reason for failures, and the
-// produced files (nil for a failed attempt — its partial output is
-// discarded).
+// one attempt of the transform. Each input side is materialized into a
+// staging directory named by the input (in/<name>) — the datum's matched
+// files written there with unchanged names and content, empty files as
+// real zero-length inputs, and full resolved content regardless of size —
+// and the job exposes that name as an environment variable whose value is
+// the input directory, so a command addresses an input by its alias and
+// reaches every matched file byte-for-byte without hard-coding a mount
+// path. A job processing the head commit materializes the complete
+// accumulated content of the revision, not a delta, and its fresh output
+// replaces the datum's prior output so the output commit reproduces the
+// accumulated content exactly; unread files (lazy inputs) are simply
+// discarded at finalization and never block completion. The primary
+// command runs, and — when it fails — the error-handling command runs in
+// the same output directory and may recover the datum: a recovered datum
+// never fails the job, and a second failure fails the datum and the job. A
+// nonzero primary exit is success when the transform declares exactly that
+// code acceptable (AcceptReturnCode); an accepted exit is a successful
+// run, not a skipped one. A datum that exceeds its per-datum timeout is
+// forcibly terminated at the boundary — recorded failed with a process
+// time equal to the configured timeout, the job ending in failure — while
+// a datum that finishes inside the window completes normally, its timer
+// stopped, and the job succeeds. Returns the outcome, a diagnostic reason
+// for failures, and the produced files (nil for a failed attempt — its
+// partial output is discarded).
 func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, started time.Time, worker int) (outcome, reason string, files []fileRef) {
-	// A placed job (SB-167) executes each attempt on its execution host:
-	// the datum's files and the transform are shipped there, the host
-	// runs the container and returns the produced files, and the control
-	// plane stores them into the output commit exactly as a local run's
-	// would be.
+	// A placed job executes each attempt on its execution host: the
+	// datum's files and the transform are shipped there, the host runs
+	// the container and returns the produced files, and the control plane
+	// stores them into the output commit exactly as a local run's would
+	// be.
 	if jx.host != nil {
 		return d.runRemoteAttempt(jx, dt, index, attempt, started, worker)
 	}
@@ -795,14 +842,14 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		env = append(env, sd.Name+"=/sandman/in/"+sd.Name)
 		mounts = append(mounts, "-v", inDir+":/sandman/in/"+sd.Name+":ro")
 		// the full side view is available to containers: a datum can read
-		// data outside its own datum set (SB-166)
+		// data outside its own datum set
 		if vd := d.ensureView(jx, sd.Name); vd != "" {
 			mounts = append(mounts, "-v", vd+":/sandman/view/"+sd.Name+":ro")
 		}
 	}
 
 	// the container is registered so a cancel can kill it mid-flight; the
-	// worker status exposes the datum in progress (SB-064/065/097)
+	// worker status exposes the datum in progress
 	cname := fmt.Sprintf("sandman-%s-%d-%d", jx.id, index, attempt)
 	jx.registerContainer(cname)
 	defer jx.unregisterContainer(cname)
@@ -811,7 +858,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 
 	// symlinks the transform creates point at the container-internal input
 	// paths (/sandman/in/<name>/...) or at temp files it wrote (the job's
-	// /tmp mount); the host-side scan resolves both to host paths (SB-054)
+	// /tmp mount); the host-side scan resolves both to host paths
 	sideDirs := map[string]string{}
 	for _, sd := range dt.Sides {
 		sideDirs[sd.Name] = filepath.Join(dir, "in", sd.Name)
@@ -865,8 +912,8 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 			})
 		}
 	}
-	// A stale timer must not outlive the attempt: a datum restart
-	// (SB-064) re-runs from attempt=1 with the SAME container name, so a
+	// A stale timer must not outlive the attempt: a datum restart re-runs
+	// from attempt=1 with the SAME container name, so a
 	// pending timer from an aborted attempt would fire during the
 	// restarted attempt and kill its container mid-flight; stopping at
 	// completion also keeps one timer per attempt from accumulating.
@@ -909,7 +956,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	}
 
 	// primary failed: the error-handling command runs in the same output
-	// directory and may recover the datum (SB-012)
+	// directory and may recover the datum
 	if len(tr.ErrCmd) > 0 || len(tr.ErrStdin) > 0 {
 		ecname := cname + "-err"
 		jx.registerContainer(ecname)
@@ -940,9 +987,9 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 }
 
 // sideFileData reads one side file's content: a union side's file is the
-// concatenation of its branch copies (SB-077/078), any other file is its
-// single content blob. Shared by the local materialization and the
-// remote-execution shipping (SB-167).
+// concatenation of its branch copies, any other file is its single
+// content blob. Shared by the local materialization and the remote-
+// execution shipping.
 func (d *daemon) sideFileData(jx *jobExec, sd datumSide, f string) ([]byte, error) {
 	if refs, ok := sd.Merge[f]; ok {
 		var buf []byte
@@ -970,13 +1017,13 @@ func (d *daemon) sideFileData(jx *jobExec, sd datumSide, f string) ([]byte, erro
 	return jx.views[sd.Name][f].Bytes(d.store)
 }
 
-// runRemoteAttempt executes one datum attempt on the job's execution host
-// (SB-167): the datum's per-side files and the transform are shipped to
-// the host, which materializes them, runs the container (primary, then
-// the error-handling command on failure, SB-012), and returns the
-// produced files. The control plane stores the returned files as blobs —
-// the output commit is assembled exactly as for a locally executed datum,
-// so the job's result is indistinguishable by content.
+// runRemoteAttempt executes one datum attempt on the job's execution host:
+// the datum's per-side files and the transform are shipped to the host,
+// which materializes them, runs the container (primary, then the error-
+// handling command on failure), and returns the produced files. The
+// control plane stores the returned files as blobs — the output commit is
+// assembled exactly as for a locally executed datum, so the job's result
+// is indistinguishable by content.
 func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, started time.Time, worker int) (outcome, reason string, files []fileRef) {
 	tr := jx.pl.Pipeline.Transform
 	req := execRequest{
@@ -1003,7 +1050,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		req.MemoryReservation = tr.ResourceRequests.Memory
 		if tr.ResourceRequests.CPU > 0 && req.CPU == 0 {
 			// docker expresses a CPU request only as an allocation; a
-			// request without a limit sets it (SB-068, sandman deviation)
+			// request without a limit sets it (sandman deviation)
 			req.CPU = tr.ResourceRequests.CPU
 		}
 	}
@@ -1023,7 +1070,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 	// the attempt's HTTP call is cancelled when the job is cancelled: a
 	// remote attempt has no local container for cancelJob's kill loop, so
 	// the cancel must interrupt the in-flight request or it can never
-	// settle (SB-123)
+	// settle
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -1038,7 +1085,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 	if err != nil {
 		// the host is unreachable or the attempt could not be produced:
 		// an environment problem, not a user-code failure — the pipeline
-		// surfaces the crash (SB-091, and SB-169's visible-failure state)
+		// surfaces the crash
 		d.markPipelineCrashed(jx.pl.Pipeline.Name, "execution host "+jx.host.Name+": "+err.Error())
 		return "failed", "execution host: " + err.Error(), nil
 	}
@@ -1088,7 +1135,7 @@ func (d *daemon) ensureView(jx *jobExec, side string) string {
 	return dir
 }
 
-// ---- join and group inputs (SB-074/075/076) ----
+// ---- join and group inputs ----
 
 // globRegex converts a glob pattern with capture groups into an anchored
 // regexp: ? matches one character, * any run, (...) is a capture group,
@@ -1141,11 +1188,16 @@ func captureKey(glob, selector, path string) (string, bool) {
 	return b.String(), true
 }
 
-// joinDatums builds a join input's datum set (SB-074/075): each member's
-// files are bucketed by their join key; a key present in every member
-// yields the cross product of the members' file lists for that key; an
-// outer member's unmatched keys each form a datum carrying only that
-// member's file (the absent members' directories are not exposed).
+// joinDatums builds a join input's datum set: each member's files are
+// bucketed by the full captured join key (the value of JoinOn's capture
+// group, space/padding significant); a key present in every member yields
+// the cross product of the members' file lists for that key, and a key
+// missing from any member produces no datum (inner-join semantics) — each
+// resulting datum contains exactly one file per input. An outer member's
+// unmatched keys each form their own datum carrying only that member's
+// file; unmatched files of inner (non-outer) members are dropped entirely,
+// so the absent members' directories are never exposed in the datum's
+// environment.
 func joinDatums(views map[string]map[string]store.ViewEntry, members []client.Input) []datum {
 	buckets := make([]map[string][]datumSide, len(members))
 	keySet := map[string]bool{}
@@ -1219,12 +1271,15 @@ func joinProduct(key string, buckets []map[string][]datumSide) []datum {
 	return out
 }
 
-// groupDatums builds a group input's datum set (SB-076): files across all
-// members are collected by their group-by capture value — a key present in
-// any member forms a group containing every file with that key from every
+// groupDatums builds a group input's datum set: files across all members
+// are collected by their group-by capture value — a key present in any
+// member forms a group containing every file with that key from every
 // member (union, never a cross product). A member with a join-on joins
 // first: its files pair with the other join members by their join keys,
-// and the whole pairs are then grouped.
+// and the whole pairs are then grouped. Group keys are the full captured
+// strings (leading spaces significant), and the map-based backing means
+// datum and intra-datum order is nondeterministic — consumers must sort
+// before comparing.
 func groupDatums(views map[string]map[string]store.ViewEntry, members []client.Input) []datum {
 	// group of join: pair first, then bucket the whole pairs
 	joined := false
@@ -1359,9 +1414,14 @@ func sortedSideKeys(m map[string][]datumSide) []string {
 
 // storeOutput lists a staging directory's files with their content hashes
 // and writes each file's content into the object store, so the returned
-// references are readable by hash. Symlinks are followed: a link to a file
-// stores the target's content, a link to a directory its files; linkTarget
-// maps container-internal symlink targets to host paths (SB-054).
+// references are readable by hash. Symlinks are followed when scanning: a
+// link to a file stores the target's content, a link to a directory stores
+// its files under the link's path prefix, and a link to an in-container
+// input path (/sandman/in/..., /sandman/view/...) or a transform-written
+// temp file resolves to the host path via linkTarget. Because each file's
+// content is written once and referenced by hash, an output file produced
+// by linking to an input references the same underlying content units as
+// the input — no duplicate copy.
 func (d *daemon) storeOutput(dir string, linkTarget func(string) string) ([]fileRef, error) {
 	var out []fileRef
 	walkErr := store.WalkFiles(dir, linkTarget, func(rel string, data []byte) error {
@@ -1378,7 +1438,11 @@ func (d *daemon) storeOutput(dir string, linkTarget func(string) string) ([]file
 // contribution: datums that ran contribute their fresh files, skipped
 // datums their carried files, failed datums nothing. A file path produced
 // by several datums that ran concatenates their contents in datum order
-// (FS-5/SB-063). A fresh datum's output supersedes the carried content a
+// Whatever the output volume — a very large number of files
+// produced across parallel workers — the merge completes and yields
+// exactly one output commit, every worker's outputs merged into the single
+// commit even when randomly generated names collide across datums. A fresh
+// datum's output supersedes the carried content a
 // skipped datum contributes for the same path: the fresh run is the only
 // live write, and carried content from an earlier job is stale under it —
 // the transform's truncate+write is honored at the branch level. Without
@@ -1402,7 +1466,7 @@ func (d *daemon) mergeOutputs(jx *jobExec, datums []datum, skipped map[string]bo
 	for _, dt := range datums {
 		if skipped[dt.ID] {
 			// a skipped datum carries the parent's per-datum files; they
-			// concatenate with fresh output (FS-5) only where they are
+			// concatenate with fresh output only where they are
 			// re-run-equivalent — produced under the same transform. Under
 			// a changed transform the carried content is stale and a fresh
 			// datum's output for the same path supersedes it (without the
@@ -1451,7 +1515,7 @@ func transformHash(tr *client.Transform) string {
 
 // mergeFile writes one datum file's blob into the job's output directory,
 // appending when the path already holds content from an earlier datum in
-// the same merge (FS-5 datum-order concatenation).
+// the same merge(datum-order concatenation).
 func (d *daemon) mergeFile(jx *jobExec, f fileRef) error {
 	data, err := d.store.ReadBlob(f.Hash)
 	if err != nil {
@@ -1460,7 +1524,7 @@ func (d *daemon) mergeFile(jx *jobExec, f fileRef) error {
 	dst := filepath.Join(jx.outDir, filepath.FromSlash(f.Path))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		// a file where a directory is needed (or vice versa) is a
-		// type conflict across the job's datum outputs (FS-5 edge)
+		// type conflict across the job's datum outputs
 		return fmt.Errorf("output type conflict at path %q: %w", f.Path, err)
 	}
 	if cur, err := os.ReadFile(dst); err == nil {
@@ -1498,10 +1562,13 @@ func sideSize(s datumSide, view map[string]store.ViewEntry) uint64 {
 	return n
 }
 
-// chunkSideDatums groups a side's datums into chunks (SB-102): a target
-// datum count (number) or a target chunk size in bytes. Files are never
-// split; the grouped datum's identity joins its members', so dedup keys
-// stay stable across jobs with the same chunking.
+// chunkSideDatums groups a side's datums into chunks: a target datum
+// count (number) or a target chunk size in bytes. Chunking is only an
+// internal scheduling knob — files are never split, merged, dropped, or
+// reordered out of existence, and whatever chunking is configured the job
+// produces exactly one output commit containing every input file, each
+// with identical content. The grouped datum's identity joins its members',
+// so dedup keys stay stable across jobs with the same chunking.
 func chunkSideDatums(sd []datumSide, spec *client.ChunkSpec, view map[string]store.ViewEntry) []datumSide {
 	if spec == nil || (spec.Number <= 0 && spec.SizeBytes <= 0) {
 		return sd

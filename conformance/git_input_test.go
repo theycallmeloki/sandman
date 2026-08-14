@@ -1,11 +1,11 @@
 package conformance
 
-// Git inputs (SB-104..112): URL-form validation at creation, duplicate
+// Git inputs: URL-form validation at creation, duplicate
 // name/URL rejection, auto-created empty repositories, one commit per
 // push event on the tracked branch (tree + .git/HEAD revision marker),
 // custom-name and shared-repo fan-out, branch filtering, and the
-// clone-failure path. The push receiver is the sandman's interface choice
-// (D-16): a POST /api/v1/git/push carries the pushed refs and the
+// clone-failure path. The push receiver is the sandman's interface choice:
+// a POST /api/v1/git/push carries the pushed refs and the
 // revision's working tree.
 
 import (
@@ -20,8 +20,7 @@ import (
 )
 
 // gitTransform reads the mapped repository's revision identifier (the
-// commit's .git/HEAD) into the output — the SB-107..112 load-bearing
-// assertion.
+// commit's .git/HEAD) into the output — the load-bearing assertion.
 func gitTransform(side string) *client.Transform {
 	return &client.Transform{
 		Image: "alpine:3.21",
@@ -69,7 +68,7 @@ func headContentOf(t *testing.T, commitID, p string) string {
 
 func TestSB104_GitURLValidation(t *testing.T) {
 	// each unsupported URL form is rejected at creation, and no pipeline
-	// is created (SB-104/159-12)
+	// is created
 	cases := []struct {
 		url, want string
 	}{
@@ -104,7 +103,7 @@ func TestSB105_GitCloneFailure(t *testing.T) {
 	}
 	// a push for an uncloneable (private) repository: the event is
 	// accepted, produces no commit, and the pipeline fails with a reason
-	// naming the cause and the URL (SB-105)
+	// naming the cause and the URL
 	if err := c.PushGitEvent(url, "master", revHex("a"), nil, true); err != nil {
 		t.Fatalf("push delivery errored: %v", err)
 	}
@@ -190,7 +189,7 @@ func TestSB107_GitPushCommitsAndTriggers(t *testing.T) {
 		t.Fatalf("push: %v", err)
 	}
 	// exactly one branch (master) with one commit whose tree carries the
-	// revision identifier in .git/HEAD (SB-107)
+	// revision identifier in .git/HEAD
 	head, err := c.HeadCommit(repo, "master")
 	if err != nil {
 		t.Fatalf("mapped branch head: %v", err)
@@ -265,7 +264,7 @@ func TestSB109_GitCustomName(t *testing.T) {
 	custom := uniq(t) + "c" // a custom name unique to this test (repo names are a shared namespace)
 	gitPipeline(t, name, custom, &client.GitInput{URL: url})
 	// the repository exists under the custom name, empty; the URL-derived
-	// name is not created (SB-109)
+	// name is not created
 	if n := commitCount(t, custom, "master"); n != 0 {
 		t.Fatalf("custom repo has %d commits, want 0", n)
 	}
@@ -288,11 +287,11 @@ func TestSB109_GitCustomName(t *testing.T) {
 
 func TestSB110_FanOutDistinctNames(t *testing.T) {
 	// two pipelines, same URL, distinct custom names: each gets its own
-	// repository, and one push triggers both (SB-110)
+	// repository, and one push triggers both
 	n1, n2 := uniq(t)+"a", uniq(t)+"b"
 	url := gitURL(t)
 	// two distinct custom names for one URL: each pipeline gets its own
-	// repository (SB-110)
+	// repository
 	cn1, cn2 := uniq(t)+"x", uniq(t)+"y"
 	gitPipeline(t, n1, cn1, &client.GitInput{URL: url})
 	gitPipeline(t, n2, cn2, &client.GitInput{URL: url})
@@ -318,7 +317,7 @@ func TestSB110_FanOutDistinctNames(t *testing.T) {
 func TestSB111_FanOutSharedRepo(t *testing.T) {
 	// two pipelines, same URL, no custom names: they share the single
 	// URL-derived repository, and one push creates one commit that
-	// triggers both (SB-111)
+	// triggers both
 	n1, n2 := uniq(t)+"a", uniq(t)+"b"
 	url := gitURL(t)
 	gitPipeline(t, n1, "", &client.GitInput{URL: url})
@@ -353,7 +352,7 @@ func TestSB112_GitBranchFilter(t *testing.T) {
 	gitPipeline(t, name, "", &client.GitInput{URL: url, Branch: "foo"})
 	repo := gitSideName(url)
 	// a push to an untracked branch is a complete no-op: no branch, no
-	// commit, no job (SB-112)
+	// commit, no job
 	if err := c.PushGitEvent(url, "master", revHex("m"), map[string]string{"f": "1"}, false); err != nil {
 		t.Fatalf("push master: %v", err)
 	}

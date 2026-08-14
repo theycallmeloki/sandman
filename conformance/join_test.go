@@ -1,5 +1,5 @@
 // Join and group inputs: files paired by captured glob groups, outer
-// joins, and grouping across inputs (SB-074, SB-075, SB-076).
+// joins, and grouping across inputs.
 package conformance
 
 import (
@@ -11,7 +11,7 @@ import (
 )
 
 // spaceBinary renders i as a 4-char space-padded binary (the reference's
-// naming for SB-076: " 10" for 2, etc.).
+// naming: " 10" for 2, etc.).
 func spaceBinary(i int) string {
 	return fmt.Sprintf("%4s", fmt.Sprintf("%b", i))
 }
@@ -197,7 +197,7 @@ func TestSB076_GroupInputs(t *testing.T) {
 		mustRepo(t, r1)
 		for i := 0; i < 16; i++ {
 			// space-padded, as the reference's data: only the fully
-			// unpadded names have reverses that pair (SB-076 subtest c)
+			// unpadded names have reverses that pair
 			putSingle(t, r0, fmt.Sprintf("file-0.%s", spaceBinary(i)))
 			putSingle(t, r1, fmt.Sprintf("file-1.%s", spaceBinary(i)))
 		}

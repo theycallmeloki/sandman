@@ -240,10 +240,10 @@ func TestSB122_CancelRunningJob(t *testing.T) {
 }
 
 // TestSB058_StopJob — stopping a running job kills it without blocking the
-// job for a later commit (SB-058). The job gate serializes execution per
-// pipeline (SB-123), so the second commit's job starts only after the
-// first is killed; the contract asserted — the stopped job is killed, the
-// later job succeeds, listing is newest-first — holds in that model.
+// job for a later commit. The job gate serializes execution per pipeline,
+// so the second commit's job starts only after the first is killed; the
+// contract asserted — the stopped job is killed, the later job succeeds,
+// listing is newest-first — holds in that model.
 func TestSB058_StopJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)

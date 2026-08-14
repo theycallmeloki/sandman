@@ -161,7 +161,7 @@ func TestSB046_ThousandsOfFilesInOneCommit(t *testing.T) {
 	mustRepo(t, repo)
 
 	// the reference's scale is 5000 files in one commit; the test
-	// exercises the same shape at that scale (SB-046)
+	// exercises the same shape at that scale
 	const n = 5000
 	cm, err := c.StartCommit(repo, "master", "")
 	if err != nil {

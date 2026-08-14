@@ -199,7 +199,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		if ji.State != "failure" {
 			t.Fatalf("rerun state = %s, want failure", ji.State)
 		}
-		// deleting the pipeline twice is not an error (SB-010 clause 11)
+		// deleting the pipeline twice is not an error
 		if err := c.DeletePipeline(pipe, false, false); err != nil {
 			t.Fatalf("first delete: %v", err)
 		}
@@ -209,7 +209,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 	})
 
 	t.Run("empty upstream output still processes downstream union", func(t *testing.T) {
-		// SB-010 clause 9 / RunPipelineEmptyUpstream: a downstream union
+		// RunPipelineEmptyUpstream: a downstream union
 		// pipeline succeeds when its upstream produced an EMPTY output
 		// (the upstream cross had data on only one side), and after the
 		// second branch lands the union combines: branch input + upstream
@@ -270,7 +270,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 	})
 
 	t.Run("run with provenance from upstream while cron mid-cycle", func(t *testing.T) {
-		// SB-010 clause 8 / RunPipelineDeduplicateSpecBranch: a pipeline
+		// RunPipelineDeduplicateSpecBranch: a pipeline
 		// crossing a cron input with a transitive upstream output can be
 		// run with provenance from the upstream commit while the cron is
 		// mid-cycle (no tick yet); the run completes without error — the
@@ -349,7 +349,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 }
 
 // waitTerminal blocks until the job settles via the server-side
-// long-poll (D-23 R-5): one request, no client polling.
+// long-poll: one request, no client polling.
 func waitTerminal(t *testing.T, id string) {
 	t.Helper()
 	if _, err := c.WaitJob(id, 90*time.Second); err != nil {

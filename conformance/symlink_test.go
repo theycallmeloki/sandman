@@ -1,7 +1,7 @@
 // Symlinked output: a pipeline may emit its output as symbolic links to
 // its input files and directories (and to external files it creates); the
 // output revision contains the linked content, and a linked file's stored
-// content is identical to the input's — no duplicated copy (SB-054).
+// content is identical to the input's — no duplicated copy..
 package conformance
 
 import (

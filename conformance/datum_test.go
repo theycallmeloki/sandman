@@ -1,6 +1,6 @@
 // The datum engine's contract: jobs execute their input as per-datum units
 // of work — parallelism, dedup, retries, reprocessing — while the output
-// stays one commit per job (SB-004/006/007/011/073/103/134/166).
+// stays one commit per job.
 package conformance
 
 import (
@@ -51,7 +51,7 @@ func TestSB004_ParallelPipelineProducesAllPerDatumOutputs(t *testing.T) {
 // TestSB006_UnchangedDatumsNotReprocessed — a datum processed once is not
 // re-executed for an unchanged input revision: an empty commit flushes far
 // faster than the 10s per-datum sleep, and the job records the datum as
-// skipped (SB-006).
+// skipped.
 func TestSB006_UnchangedDatumsNotReprocessed(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -95,7 +95,7 @@ func TestSB006_UnchangedDatumsNotReprocessed(t *testing.T) {
 
 // TestSB007_InputDataModifications — replace, delete, and add propagate to
 // the pipeline output: one output commit per input commit, a deleted file
-// genuinely absent, a replacement carried (SB-007).
+// genuinely absent, a replacement carried.
 func TestSB007_InputDataModifications(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -116,7 +116,7 @@ func TestSB007_InputDataModifications(t *testing.T) {
 	}
 
 	// replacement: delete then re-add the same path in one commit counts as
-	// a content replacement, not an append (FS-4 — a plain put would
+	// a content replacement, not an append (a a plain put would
 	// append "bar" to "foo")
 	cm2 := replaceCommit(t, repo, "master", map[string]string{"file": "bar"})
 	jobs2 := flushOK(t, cm2.ID)
@@ -164,7 +164,7 @@ func TestSB007_InputDataModifications(t *testing.T) {
 }
 
 // TestSB011_PipelineFailureMentionsDatum — a failing execution surfaces as
-// a failed job whose reason names the datum that failed (SB-011).
+// a failed job whose reason names the datum that failed.
 func TestSB011_PipelineFailureMentionsDatum(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -197,7 +197,7 @@ func TestSB011_PipelineFailureMentionsDatum(t *testing.T) {
 
 // TestSB073_LargeOutputAcrossParallelWorkers — 100 datums each producing
 // 100 output files (10,000 total) at parallelism 4 complete in one output
-// commit without loss (SB-073).
+// commit without loss.
 func TestSB073_LargeOutputAcrossParallelWorkers(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -235,8 +235,7 @@ func TestSB073_LargeOutputAcrossParallelWorkers(t *testing.T) {
 }
 
 // TestSB103_SlowDatumsParallelCompleteness — slow datums at parallelism 4
-// all complete; every input file appears in the single output commit
-// (SB-103).
+// all complete; every input file appears in the single output commit.
 func TestSB103_SlowDatumsParallelCompleteness(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -270,7 +269,7 @@ func TestSB103_SlowDatumsParallelCompleteness(t *testing.T) {
 }
 
 // TestSB134_DatumTries — a failing datum is retried exactly the configured
-// number of times, one log entry per attempt (SB-134).
+// number of times, one log entry per attempt.
 func TestSB134_DatumTries(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -314,14 +313,14 @@ func TestSB134_DatumTries(t *testing.T) {
 // TestSB166_ReprocessEveryJob — a pipeline configured to reprocess all of
 // its datums re-executes every datum on every job: unchanged declared
 // inputs do not skip, and each job's output reflects the data current at
-// processing time (SB-166).
+// processing time.
 func TestSB166_ReprocessEveryJob(t *testing.T) {
 	trigger := uniq(t) + "t"
 	mustRepo(t, trigger)
 	// The declared input's glob selects only the trigger-N datum paths; the
 	// value file is data outside the datum set. The full input view is
-	// mounted at /sandman/view/<input>, so a datum can read it (SB-166
-	// clause 5: execution — not input-diffing — determines output).
+	// mounted at /sandman/view/<input>, so a datum can read it (execution
+	// — not input-diffing — determines output).
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
@@ -376,10 +375,10 @@ func TestSB166_ReprocessEveryJob(t *testing.T) {
 
 // TestD13_ChangedTransformDoesNotReprocessUnchangedDatums — the dedup
 // cache is keyed per pipeline by the datum's content hash, independent of
-// the transform (D-13 isolating clause): changing the transform does NOT
+// the transform: changing the transform does NOT
 // reprocess unchanged datums. A same-content commit after an update is
 // skipped — the wave settles with no output commit. Reprocess is the
-// explicit override (SB-166).
+// explicit override.
 func TestD13_ChangedTransformDoesNotReprocessUnchangedDatums(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)

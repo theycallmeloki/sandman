@@ -1,13 +1,13 @@
 package conformance
 
-// Standby family (SB-025/049/050/158, D-09/11/12): a standby-enabled
-// pipeline idles in the standby state and activates only when work
-// arrives, returning to standby once the work settles. D-11: no fixed cap
-// on concurrent activation (staggering is a tuning choice, not asserted).
-// D-12: warm participant reuse is an implementation detail, not a
-// requirement. D-09: there is no degraded/crashing standby state —
-// partial-capacity conditions surface as failure (or crashed for
-// provisioning errors); the standby contract is the lifecycle itself.
+// Standby family: a standby-enabled pipeline idles in the standby state
+// and activates only when work arrives, returning to standby once the
+// work settles. No fixed cap on concurrent activation (staggering is a
+// tuning choice, not asserted). Warm participant reuse is an
+// implementation detail, not a requirement. There is no
+// degraded/crashing standby state — partial-capacity conditions surface
+// as failure (or crashed for provisioning errors); the standby contract
+// is the lifecycle itself.
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// standbyTransform is the standard copy transform (per SB-001).
+// standbyTransform is the standard copy transform.
 func standbyTransform(inputName string) *client.Transform {
 	return copyTransform(inputName)
 }
@@ -75,8 +75,8 @@ func TestSB049_StandbyChainAndManyCommits(t *testing.T) {
 	mustRepo(t, repo)
 
 	// a chain of 10 standby pipelines, created together in one transaction:
-	// each consumes the previous one, whose output repo does not exist yet
-	// (SB-162 cross-references). With no input history nothing is
+	// each consumes the previous one, whose output repo does not exist yet.
+	// With no input history nothing is
 	// scheduled, so all 10 settle into standby.
 	tx, err := c.StartTransaction()
 	if err != nil {
@@ -106,7 +106,7 @@ func TestSB049_StandbyChainAndManyCommits(t *testing.T) {
 	})
 
 	// new input (an empty commit) wakes the chain: the flush completes end
-	// to end and every pipeline returns to standby. D-11: the reference's
+	// to end and every pipeline returns to standby. The reference's
 	// "at most 2 active" cap is NOT contractual — no fixed cap is asserted.
 	empty := emptyCommit(t, repo)
 	flushOK(t, empty.ID)
@@ -121,7 +121,7 @@ func TestSB049_StandbyChainAndManyCommits(t *testing.T) {
 
 	// many consecutive commits: 100 empty commits wake one standby
 	// pipeline 100 times; every job succeeds and the pipeline rests again.
-	// D-12: the reference's same-participant marker is an implementation
+	// The reference's same-participant marker is an implementation
 	// detail, not a requirement — the observable contract is that the work
 	// is processed without per-job reconfiguration.
 	repo2 := uniq(t) + "m"

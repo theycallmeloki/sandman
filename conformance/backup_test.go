@@ -1,7 +1,7 @@
 package conformance
 
 // TestSB174_BackupRestoreRoundTrip — the full backup/restore cycle end to
-// end (M10: previously only the store level was covered). Create data,
+// end (previously only the store level was covered). Create data,
 // stream the backup, stop the daemon, wipe the state dir, extract the
 // archive into it, restart, and verify repos, pipelines, job records, and
 // content all come back. Restore is the documented procedure: stop the

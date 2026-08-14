@@ -1,4 +1,4 @@
-// Egress (SB-013, D-17): a configured external output destination the
+// Egress: a configured external output destination the
 // job's finished output is copied to after the output commit succeeds.
 // A failed egress write fails the job with an egress-related reason even
 // though the output commit itself succeeded — output success alone never
@@ -15,10 +15,13 @@ import (
 )
 
 // runEgress copies the job's finished output commit to the pipeline's
-// egress destination. Supported destinations: file://<dir> (the output
-// files are materialized into the directory, replacing its previous
-// contents). Any other scheme is refused — the job then fails with an
-// egress reason, never a silent success.
+// egress destination after the output commit succeeds. Supported
+// destinations: file://<dir> (the output files are materialized into
+// the directory, replacing its previous contents). Any other scheme is
+// refused here. A failed egress write settles the job as a failure with
+// an egress-related reason even though the output commit itself
+// succeeded — output success alone never makes the job successful when
+// the destination could not be written.
 func (d *daemon) runEgress(pl pipelineRec, outCommit client.Commit) error {
 	u, err := url.Parse(pl.Pipeline.Egress.URL)
 	if err != nil {

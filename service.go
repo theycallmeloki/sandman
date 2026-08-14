@@ -1,12 +1,12 @@
-// Service pipelines (SB-100/168): one long-lived process serving the
-// pipeline's input over HTTP. The pipeline declares an internal port
-// (where the user's process listens) and an external port (bound on the
+// Service pipelines: one long-lived process serving the pipeline's
+// input over HTTP. The pipeline declares an internal port (where the
+// user's process listens) and an external port (bound on the
 // control-plane host). The daemon proxies the external port to the
 // process wherever it runs — locally through the execution backend, or
 // on a placed execution host through the worker's service endpoints
-// (SB-168: clients only ever need the control-plane host's address).
+// (clients only ever need the control-plane host's address).
 // New input revisions are re-materialized into the served directory
-// without restarting the process (SB-100 clause 5).
+// without restarting the process.
 package main
 
 import (
@@ -31,7 +31,7 @@ import (
 // serviceRec is a service pipeline's running record: the declared ports,
 // the internal address the proxy forwards to, and the endpoint's
 // annotations — the user's own plus the system's identifying pipelineName
-// annotation (SB-100 clause 4).
+// annotation.
 type serviceRec struct {
 	Pipeline    string            `json:"pipeline"`
 	Internal    int               `json:"internalPort"`
@@ -73,7 +73,7 @@ func serviceRecord(name string) (serviceRec, bool) {
 // spawnServiceJob starts a service pipeline's single long-lived job.
 func (d *daemon) spawnServiceJob(rec *pipelineRec) string {
 	id := newJobID(d.name)
-	// mirror spawnJob (SB-045): pre-register the running handle so a
+	// mirror spawnJob: pre-register the running handle so a
 	// stop/delete arriving the instant the service spawns can always
 	// find it — a not-yet-registered handle would escape the cancel and
 	// keep serving (process up, external port bound) a stopped or
@@ -90,6 +90,21 @@ func (d *daemon) spawnServiceJob(rec *pipelineRec) string {
 // running for the process's lifetime and settles when the process exits
 // or the job is cancelled. rj is the pre-registered running handle
 // (spawnServiceJob) and is unregistered on every exit.
+//
+// The service is one long-lived process that stays up and serves the
+// materialized input over HTTP: the external port is bound on the
+// control plane and proxied to the process's internal port, the
+// control-plane API exposes a per-pipeline proxy route returning the
+// same content as the direct endpoint, user annotations are preserved
+// alongside the system's pipelineName annotation, and new input
+// revisions are re-served through the same endpoint without restarting
+// the process; reachability converges as the process comes up. A placed
+// service's endpoint is reachable at the control-plane host's external
+// port even though the process runs on a remote execution host: the
+// control plane forwards traffic arriving at its external port to the
+// remote worker's internal port, so clients only ever need the
+// control-plane host's address, and the response is the exact served
+// file content served from the pipeline's input data.
 func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 	defer d.unregisterRunning(id, rj)
 	dir := d.jobDir(id)
@@ -130,7 +145,7 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 	serveRoot := filepath.Join(serveDir, sideName)
 
 	// a placed service runs on the execution host; the control plane
-	// waits for a live host like any placed job (SB-169: the pipeline
+	// waits for a live host like any placed job (the pipeline
 	// surfaces the outage as crashed until a host registers)
 	remote := ""
 	if pl.Pipeline.Placement != "" {
@@ -205,7 +220,7 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 	if remote != "" {
 		// the service's container publishes its internal port on the
 		// worker's host address: dial host:internal, never the worker's
-		// exec endpoint (SB-168)
+		// exec endpoint
 		if host, _, err := net.SplitHostPort(remote); err == nil {
 			internal = host + ":" + strconv.Itoa(internalPort)
 		}
@@ -252,7 +267,7 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 
 	// bind the external port and forward it to the process (the process
 	// may not be listening yet — the proxy dials per connection, so the
-	// endpoint converges as the process comes up, SB-100/168 clause 4)
+	// endpoint converges as the process comes up)
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", pl.Pipeline.Service.ExternalPort))
 	if err != nil {
 		stop()
@@ -270,8 +285,8 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 		// head, so a signal that lands mid-read wakes this select; a
 		// signal that lands during the refresh work below is caught by
 		// the re-check after it (signal() replaces the channel, so a
-		// naive per-iteration registration would lose it — SB-100 clause
-		// 5 must not miss a revision)
+		// naive per-iteration registration would lose it — a refresh
+		// must not miss a revision)
 		ch := d.stateChanged.changed()
 		if h, err := d.store.HeadCommitRec(side.Repo, inputBranch(side)); err == nil && h.Finished && h.ID != lastID {
 			lastID = h.ID
@@ -368,7 +383,7 @@ func (d *daemon) serviceProxyH(w http.ResponseWriter, r *http.Request) error {
 	}
 	// forward the remainder of the path — and the query string — to the
 	// service's own endpoint: the response is identical to the direct
-	// one (SB-100 clause 3). A dropped query silently changes the
+	// one. A dropped query silently changes the
 	// service's behavior (a ?x=1 filter becomes unfiltered).
 	rest := r.PathValue("path")
 	if r.URL.RawQuery != "" {
@@ -406,7 +421,7 @@ func (d *daemon) listServicesH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ---- remote service plumbing (SB-168) ----
+// ---- remote service plumbing ----
 
 // serviceViewFiles returns the side's current head view as shipped files,
 // prefixed with the side's served directory name (the service serves
@@ -486,7 +501,7 @@ func (d *daemon) remoteServiceStart(host string, spec JobSpec, internalPort int,
 }
 
 // remoteServiceRefresh ships the side's new head view to the running
-// service — served without restarting the process (SB-100 clause 5).
+// service — served without restarting the process.
 func (d *daemon) remoteServiceRefresh(host, name string, side client.Input) error {
 	h, err := d.store.HeadCommitRec(side.Repo, inputBranch(side))
 	if err != nil {

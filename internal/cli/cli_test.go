@@ -2,8 +2,8 @@ package cli
 
 import "testing"
 
-// TestListingGlob pins M5: the [:path] argument is a path, but the
-// listing API accepts only prefix patterns (SB-047 clause 4) — a bare
+// TestListingGlob pins the rule that the [:path] argument is a path, but the
+// listing API accepts only prefix patterns — a bare
 // path was passed through and rejected ("unsupported listing glob").
 // A path without its own wildcard becomes a prefix of the listing; one
 // that already carries a * is passed through unchanged.

@@ -1,6 +1,5 @@
 // Observability and reclamation: the metrics endpoint, garbage
-// collection, and reset's removal of statistics state (SB-132, SB-079,
-// SB-130).
+// collection, and reset's removal of statistics state.
 package conformance
 
 import (
@@ -92,7 +91,7 @@ func TestSB132_MetricsEndpoint(t *testing.T) {
 }
 
 func TestSB079_GarbageCollection(t *testing.T) {
-	withIsolatedDaemon(t) // the tail resets the daemon; never the shared one (M10)
+	withIsolatedDaemon(t) // the tail resets the daemon; never the shared one
 	repo := uniq(t)
 	mustRepo(t, repo)
 	// the working pipeline appends to bar, so its output bar is a distinct
@@ -136,7 +135,7 @@ func TestSB079_GarbageCollection(t *testing.T) {
 		t.Fatalf("stop pipeline: %v", err)
 	}
 	// the stopped pipeline's in-flight job is terminated; wait for it
-	// server-side (D-23 R-5)
+	// server-side
 	if _, err := c.WaitJob(latestJob(t, slow).ID, 60*time.Second); err != nil {
 		t.Fatalf("slow job did not settle after stop: %v", err)
 	}
@@ -164,7 +163,7 @@ func TestSB079_GarbageCollection(t *testing.T) {
 	// unreferenced blob: the output "barbar" content is a distinct blob
 	// from the input's "bar", while the output "foo" shares the input's
 	// blob — so exactly one object is collected and the shared one
-	// survives (SB-079 clause 4, exact accounting)
+	// survives (exact accounting)
 	barbarSha := sha256Hex("barbar")
 	if !objectExists(t, barbarSha) {
 		t.Fatalf("expected the unreferenced barbar blob %s to exist before collection", barbarSha)
@@ -273,7 +272,7 @@ func objectCount(t *testing.T) int {
 }
 
 func TestSB130_ResetRemovesStatsState(t *testing.T) {
-	withIsolatedDaemon(t) // resets the daemon twice; never the shared one (M10)
+	withIsolatedDaemon(t) // resets the daemon twice; never the shared one
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})

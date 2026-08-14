@@ -1,5 +1,5 @@
 // Secrets: named typed metadata blobs with create/inspect/list/delete,
-// and binding into job environments (SB-153, SB-051).
+// and binding into job environments.
 package conformance
 
 import (
@@ -145,7 +145,7 @@ func TestSB051_SecretBinding(t *testing.T) {
 }
 
 // TestSB051_SecretBindingRejectsMissing — a pipeline may reference a
-// secret only through an explicit binding to an existing secret (D-05).
+// secret only through an explicit binding to an existing secret.
 func TestSB051_SecretBindingRejectsMissing(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -167,7 +167,7 @@ func TestSB051_SecretBindingRejectsMissing(t *testing.T) {
 }
 
 // TestSB051_SecretBindingSurvivesRestart — the binding is durable state,
-// not memory (D-05): after the daemon restarts, the pipeline still
+// not memory: after the daemon restarts, the pipeline still
 // carries its secret mount and a new commit is processed with the secret
 // available exactly as before.
 func TestSB051_SecretBindingSurvivesRestart(t *testing.T) {

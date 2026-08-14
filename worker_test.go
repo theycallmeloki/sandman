@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// TestRunExecTimeoutTimerStopsOnCompletion pins H4 on the worker side:
+// TestRunExecTimeoutTimerStopsOnCompletion pins the rule on the worker side:
 // runExec's per-attempt timer must be stopped when the attempt completes
 // (a restart re-runs with the same container name; a stale timer would
 // kill the restarted attempt's container). A fake docker in PATH records
