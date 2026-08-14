@@ -39,6 +39,7 @@ type nodeStats struct {
 	Addr        string          `json:"addr"`
 	Docker      string          `json:"docker,omitempty"`
 	Role        string          `json:"role,omitempty"` // "daemon" | "worker"
+	Version     string          `json:"version,omitempty"`
 	Error       string          `json:"error,omitempty"`
 	Containers  []containerInfo `json:"containers,omitempty"`
 	HostCpus    int             `json:"hostCpus,omitempty"`
@@ -182,7 +183,7 @@ func collectStats(state string, timeout time.Duration) []nodeStats {
 }
 
 func queryNodeStats(n fleetNode, timeout time.Duration) nodeStats {
-	ns := nodeStats{Node: n.Name, Addr: n.Addr, Role: n.Role}
+	ns := nodeStats{Node: n.Name, Addr: n.Addr, Role: n.Role, Version: n.Version}
 	conn, err := net.DialTimeout("tcp", n.Addr, timeout)
 	if err != nil {
 		ns.Error = err.Error()
