@@ -46,6 +46,19 @@ func die(msg string, code int) {
 	os.Exit(code)
 }
 
+// listingGlob turns a file-list [:path] argument into the server's
+// prefix glob: the listing API accepts only prefix patterns ("prefix*",
+// SB-047 clause 4), so a path without its own wildcard is made a prefix
+// of the listing — `file list r@master:subdir` lists everything under
+// subdir, exactly as the [:path] help advertises. A path that already
+// carries a * is passed through unchanged.
+func listingGlob(path string) string {
+	if !strings.Contains(path, "*") {
+		return path + "*"
+	}
+	return path
+}
+
 // PrintVersion reports the binary's baked version and, when a control
 // plane answers, the daemon's version — a stale daemon is visible at a
 // glance (the two come from the same binary, so a mismatch means the
@@ -642,7 +655,7 @@ func newFileCmd() *cobra.Command {
 				}
 				var files []client.FileInfo
 				if path != "" {
-					files, err = cliClient().ListFilesGlob(head, path)
+					files, err = cliClient().ListFilesGlob(head, listingGlob(path))
 				} else {
 					files, err = cliClient().ListFiles(head)
 				}
