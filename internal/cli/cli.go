@@ -198,8 +198,15 @@ func newBackupCmd() *cobra.Command {
 			if err != nil {
 				die("backup: "+err.Error(), 1)
 			}
-			defer f.Close()
 			if err := cliClient().Backup(f); err != nil {
+				f.Close()
+				// die() is os.Exit — no deferred cleanup runs; a
+				// truncated archive must not stay on disk looking valid
+				os.Remove(dest)
+				die("backup: "+err.Error(), 1)
+			}
+			if err := f.Close(); err != nil {
+				os.Remove(dest)
 				die("backup: "+err.Error(), 1)
 			}
 			fmt.Printf("backed up control-plane state to %s\n", dest)

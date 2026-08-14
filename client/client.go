@@ -43,9 +43,11 @@ package client
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -1547,12 +1549,28 @@ func (c *Client) FollowLogs(p LogParams) (io.ReadCloser, error) {
 // transactions, triggers — everything under the state dir. The store part
 // is captured under the store's write lock (the single-writer's buffer),
 // so a restored state is a consistent point-in-time snapshot.
+//
+// The response is validated as a gzip stream: the server writes its
+// gzip trailer only on the full success path (a mid-stream failure
+// returns without closing the writers), so a missing trailer means a
+// truncated archive. The raw bytes stream to w unchanged; a tee'd copy
+// is inflated concurrently and must end at the trailer (checksummed) —
+// otherwise Backup returns an error instead of silently landing a
+// corrupt archive in w.
 func (c *Client) Backup(w io.Writer) error {
 	req, err := http.NewRequest("GET", c.base+"/api/v1/backup", nil)
 	if err != nil {
 		return err
 	}
-	resp, err := c.hc.Do(req)
+	// The shared c.hc carries a 60s total-request timeout — right for
+	// JSON verbs, fatal for an archive that grows with the logs: a
+	// deadline mid-transfer aborts the stream. Dedicated client with a
+	// bounded connect and an unbounded transfer (flush/wait use the
+	// same per-call margin pattern; backup has no natural deadline).
+	hc := &http.Client{Transport: &http.Transport{
+		DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+	}}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}
@@ -1561,6 +1579,23 @@ func (c *Client) Backup(w io.Writer) error {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return decodeError(resp.StatusCode, b)
 	}
-	_, err = io.Copy(w, resp.Body)
-	return err
+	pr, pw := io.Pipe()
+	validated := make(chan error, 1)
+	go func() {
+		gz, err := gzip.NewReader(pr)
+		if err == nil {
+			_, err = io.Copy(io.Discard, gz)
+		}
+		validated <- err
+	}()
+	_, copyErr := io.Copy(io.MultiWriter(w, pw), resp.Body)
+	pw.Close()
+	gzErr := <-validated
+	if copyErr != nil {
+		return fmt.Errorf("backup: %w", copyErr)
+	}
+	if gzErr != nil {
+		return fmt.Errorf("backup: truncated archive: %w", gzErr)
+	}
+	return nil
 }
