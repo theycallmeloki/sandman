@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,9 +35,14 @@ func (d *daemon) logPath(id string) string {
 // logCapture turns a job's container output into timestamped JSON lines in
 // its log file. Only complete lines are ever appended (partials are held
 // until the newline arrives or Close), so a reader can always parse the
-// file tail — follow tails never need to handle torn lines.
+// file tail — follow tails never need to handle torn lines. Writes are
+// serialized: exec.Cmd happens to funnel both fds through one copy
+// goroutine when Stdout and Stderr are the same writer, but that is a
+// property of the caller's wiring, not of this type — concurrent writers
+// must be safe (the partial-line buffer and the file are shared state).
 type logCapture struct {
 	f    *os.File
+	mu   sync.Mutex
 	part []byte
 }
 
@@ -52,6 +58,8 @@ func newLogCapture(path string) (*logCapture, error) {
 }
 
 func (l *logCapture) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	data := append(l.part, p...)
 	l.part = l.part[:0]
 	start := 0
@@ -75,6 +83,8 @@ func (l *logCapture) emit(line string) {
 
 // Close flushes any unterminated line and closes the file.
 func (l *logCapture) Close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if len(l.part) > 0 {
 		l.emit(string(l.part))
 		l.part = nil
