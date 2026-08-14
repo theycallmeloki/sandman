@@ -324,18 +324,28 @@ func (d *daemon) followLogs(w http.ResponseWriter, r *http.Request, f *logFilter
 				continue
 			}
 			fh.Seek(off, 0)
-			sc := bufio.NewScanner(fh)
-			for sc.Scan() {
-				var rec logLineRec
-				if json.Unmarshal(sc.Bytes(), &rec) != nil || !sinceOK(rec, f.since) {
-					continue
+			// ReadString has no token cap: a bufio.Scanner (64KB default
+			// max token) stops on longer lines — ErrTooLong aborts the
+			// scan mid-line, the recorded offset lands mid-line, and the
+			// line is silently dropped (M9). ReadString grows as needed
+			// and the offset stays exact (at EOF everything is consumed).
+			rd := bufio.NewReader(fh)
+			for {
+				line, err := rd.ReadString('\n')
+				if len(line) > 0 {
+					var rec logLineRec
+					if json.Unmarshal([]byte(line), &rec) == nil && sinceOK(rec, f.since) {
+						enc.Line = rec.Line
+						b, _ := json.Marshal(enc)
+						b = append(b, '\n')
+						if _, err := w.Write(b); err != nil {
+							fh.Close()
+							return nil // client gone; follow is best-effort
+						}
+					}
 				}
-				enc.Line = rec.Line
-				b, _ := json.Marshal(enc)
-				b = append(b, '\n')
-				if _, err := w.Write(b); err != nil {
-					fh.Close()
-					return nil // client gone; follow is best-effort
+				if err != nil {
+					break // EOF or a read error: this poll is done
 				}
 			}
 			pos, _ := fh.Seek(0, io.SeekCurrent)
