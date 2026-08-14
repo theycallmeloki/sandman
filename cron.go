@@ -56,6 +56,15 @@ func (d *daemon) deriveCronRepos(p *client.Pipeline) {
 	}
 }
 
+// cronTicker is one pipeline's cron schedule: the owning pipeline and
+// the ticker's cancel. The owner enables exact-name cleanup: cron repos
+// are named <pipeline>-<input>, so a prefix match would let a "foo"
+// cleanup stop "foo-bar"'s schedule (M2).
+type cronTicker struct {
+	owner  string
+	cancel context.CancelFunc
+}
+
 // startCronTicker begins a cron input's schedule: every interval a tick
 // commit lands in the cron repository, triggering the pipeline. The
 // ticker is keyed by the cron repository, so pipeline updates never
@@ -68,14 +77,14 @@ func (d *daemon) startCronTicker(pipeline, name, schedule string, overwrite bool
 	repo := cronRepo(pipeline, name)
 	d.cronMu.Lock()
 	if d.cronTickers == nil {
-		d.cronTickers = map[string]context.CancelFunc{}
+		d.cronTickers = map[string]cronTicker{}
 	}
 	if _, ok := d.cronTickers[repo]; ok {
 		d.cronMu.Unlock()
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	d.cronTickers[repo] = cancel
+	d.cronTickers[repo] = cronTicker{owner: pipeline, cancel: cancel}
 	d.cronMu.Unlock()
 	go guard(func() {
 		t := time.NewTicker(dur)
@@ -91,14 +100,15 @@ func (d *daemon) startCronTicker(pipeline, name, schedule string, overwrite bool
 	})
 }
 
-// stopCronTickers stops every ticker whose cron repository belongs to the
-// pipeline (used by deletion and reset).
+// stopCronTickers stops every ticker owned by the pipeline (used by
+// deletion and reset). Ownership is exact: cron repos are named
+// <pipeline>-<input>, so a prefix match would also stop another
+// pipeline's schedule — a "foo" cleanup must not kill "foo-bar"'s (M2).
 func (d *daemon) stopCronTickers(pipeline string) {
-	prefix := pipeline + "-"
 	d.cronMu.Lock()
-	for repo, cancel := range d.cronTickers {
-		if strings.HasPrefix(repo, prefix) {
-			cancel()
+	for repo, t := range d.cronTickers {
+		if t.owner == pipeline {
+			t.cancel()
 			delete(d.cronTickers, repo)
 		}
 	}
@@ -111,8 +121,8 @@ func (d *daemon) stopCronTickers(pipeline string) {
 func (d *daemon) stopAllCronTickers() {
 	d.cronMu.Lock()
 	defer d.cronMu.Unlock()
-	for repo, cancel := range d.cronTickers {
-		cancel()
+	for repo, t := range d.cronTickers {
+		t.cancel()
 		delete(d.cronTickers, repo)
 	}
 }

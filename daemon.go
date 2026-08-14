@@ -91,7 +91,7 @@ type daemon struct {
 	// repository; the cancel functions stop the ticker goroutines
 	// (SB-089, SB-133).
 	cronMu      sync.Mutex
-	cronTickers map[string]context.CancelFunc
+	cronTickers map[string]cronTicker
 
 	// running is the single live-job registry: running job ids to their
 	// lifecycle handles (cancel, containers) and — while the job executes

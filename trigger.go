@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	"sandman/client"
@@ -179,7 +181,11 @@ func (d *daemon) fireOnce(pipeline, branch string, in client.Input, cm client.Co
 }
 
 // clearTriggerLedgers removes a pipeline's trigger accumulation state
-// (used by deletion and reset).
+// (used by deletion and reset). A ledger's name is
+// <pipeline>-<pos>.json with an integer pos, so a name belongs to this
+// pipeline only when the suffix after <pipeline>- parses as an integer
+// — a plain prefix match would also remove another pipeline's ledgers
+// ("foo" must not clear "foo-bar"'s, M2).
 func (d *daemon) clearTriggerLedgers(pipeline string) {
 	prefix := pipeline + "-"
 	entries, err := os.ReadDir(filepath.Join(d.state, "triggers"))
@@ -187,8 +193,16 @@ func (d *daemon) clearTriggerLedgers(pipeline string) {
 		return
 	}
 	for _, e := range entries {
-		if len(e.Name()) > len(prefix) && e.Name()[:len(prefix)] == prefix {
-			os.Remove(filepath.Join(d.state, "triggers", e.Name()))
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
 		}
+		rest := strings.TrimPrefix(name, prefix)
+		rest = strings.TrimSuffix(rest, ".tmp") // a crash-leftover tmp+rename
+		rest = strings.TrimSuffix(rest, ".json")
+		if _, err := strconv.Atoi(rest); err != nil {
+			continue // a different pipeline's ledger (foo-bar-0 under foo-)
+		}
+		os.Remove(filepath.Join(d.state, "triggers", name))
 	}
 }
