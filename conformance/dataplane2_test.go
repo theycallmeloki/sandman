@@ -222,7 +222,7 @@ func TestTagsListAndRetrieve(t *testing.T) {
 		t.Fatalf("tag0 = %q, want %q", got, "Object 0")
 	}
 
-	// clause 3: tags survive garbage collection — a tag holds a
+	// tags survive garbage collection — a tag holds a
 	// reference to its blob, so a GC cycle must not collect it
 	if err := c.CollectGarbage(); err != nil {
 		t.Fatalf("collect garbage: %v", err)

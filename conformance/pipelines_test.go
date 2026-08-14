@@ -162,7 +162,7 @@ func TestNoCommandAcceptedButFailsAtStart(t *testing.T) {
 // Pipeline creation validates the request shape and rejects every
 // malformed file-input variant cleanly, with the documented signals. (Cases
 // for aggregate inputs and services are deferred to the batches that
-// introduce those input types; git-input signals (clause 12) are asserted
+// introduce those input types; git-input signals are asserted
 // by TestGitURLValidation.)
 func TestMalformedPipelineRequestsRejected(t *testing.T) {
 	repo := uniq(t)
@@ -185,7 +185,7 @@ func TestMalformedPipelineRequestsRejected(t *testing.T) {
 		{"input named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Name: "out", Repo: repo, Glob: "/*"}}, `input cannot be named "out"`},
 		{"input repo named out", client.Pipeline{Name: uniq(t), Transform: copyTransform("out"), Input: &client.Input{Repo: "out", Glob: "/*"}}, `input cannot be named "out"`},
 		{"nonexistent repo", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Name: "in", Repo: "does-not-exist", Glob: "/*"}}, "not found"},
-		// clause 11a: a cron input missing its name (its derived repository
+		// a cron input missing its name (its derived repository
 		// needs the name)
 		{"cron missing name", client.Pipeline{Name: uniq(t), Transform: copyTransform("in"), Input: &client.Input{Cron: "@every 1m"}}, "input must specify a name"},
 	}

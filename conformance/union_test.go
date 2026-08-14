@@ -89,10 +89,10 @@ func TestUnionReprocessesRemovedIdenticalDatums(t *testing.T) {
 
 // TestUnionComposition covers the union semantics whose size
 // arithmetic is exact and clean-room derivable,
-// plus the alias-validation rejections of clauses 5 and 6. The reference's
+// plus the alias-validation rejections of the alias rules below. The reference's
 // deep compositions (cross-of-unions sizes, aliased union-of-crosses
 // sizes) depend on its internal accumulation; sandman's coherent model is
-// asserted on the same shapes in the clauses below.
+// asserted on the same shapes below.
 func TestUnionComposition(t *testing.T) {
 	// four repositories, each with file-0 ("0") and file-1 ("1")
 	var repos []string
@@ -128,7 +128,7 @@ func TestUnionComposition(t *testing.T) {
 		}
 	}
 
-	// clause 1: union of the repositories — same-named files merge; two
+	// case 1: union of the repositories — same-named files merge; two
 	// files of 4 bytes each
 	j := flushPipeline(t, mkUnion(t, []client.Input{
 		{Name: "a", Repo: repos[0], Glob: "/*"},
@@ -137,10 +137,10 @@ func TestUnionComposition(t *testing.T) {
 		{Name: "d", Repo: repos[3], Glob: "/*"},
 	}, "u"))
 	if sizeOf(j.OutputCommit, "file-0") != 4 || sizeOf(j.OutputCommit, "file-1") != 4 {
-		t.Fatalf("clause 1: merged file sizes wrong")
+		t.Fatalf("case 1: merged file sizes wrong")
 	}
 
-	// clause 2: union of two crosses — each repository is its own
+	// case 2: union of two crosses — each repository is its own
 	// top-level directory; every file appears once per cross combination
 	j = flushPipeline(t, mkUnion(t, []client.Input{
 		{Name: "c1", Cross: []client.Input{
@@ -154,14 +154,14 @@ func TestUnionComposition(t *testing.T) {
 	}, "u"))
 	for _, d := range []string{"r1", "r2", "r3", "r4"} {
 		if s := sizeOf(j.OutputCommit, d+"/file-0"); s != 2 {
-			t.Fatalf("clause 2: %s/file-0 = %d bytes, want 2", d, s)
+			t.Fatalf("case 2: %s/file-0 = %d bytes, want 2", d, s)
 		}
 		if s := sizeOf(j.OutputCommit, d+"/file-1"); s != 2 {
-			t.Fatalf("clause 2: %s/file-1 = %d bytes, want 2", d, s)
+			t.Fatalf("case 2: %s/file-1 = %d bytes, want 2", d, s)
 		}
 	}
 
-	// clause 4: union with an alias — one directory, merged files
+	// case 4: union with an alias — one directory, merged files
 	j = flushPipeline(t, mkUnion(t, []client.Input{
 		{Name: "a", Repo: repos[0], Glob: "/*"},
 		{Name: "b", Repo: repos[1], Glob: "/*"},
@@ -169,10 +169,10 @@ func TestUnionComposition(t *testing.T) {
 		{Name: "d", Repo: repos[3], Glob: "/*"},
 	}, "aliased"))
 	if s := sizeOf(j.OutputCommit, "file-0"); s != 4 {
-		t.Fatalf("clause 4: merged file-0 = %d bytes, want 4", s)
+		t.Fatalf("case 4: merged file-0 = %d bytes, want 4", s)
 	}
 
-	// clause 5 validation: a cross whose branches share an alias is
+	// case 5 validation: a cross whose branches share an alias is
 	// rejected at creation
 	bad := client.Pipeline{
 		Name:      uniq(t),
@@ -185,12 +185,12 @@ func TestUnionComposition(t *testing.T) {
 		}},
 	}
 	if err := c.CreatePipeline(bad); err == nil {
-		t.Fatalf("clause 5: a cross with a shared alias must be rejected")
+		t.Fatalf("case 5: a cross with a shared alias must be rejected")
 	} else if !containsStr(err.Error(), "distinct namespaces") {
-		t.Fatalf("clause 5: rejection error = %q", err.Error())
+		t.Fatalf("case 5: rejection error = %q", err.Error())
 	}
 
-	// clause 6 validation: a cross of two unions exposing the same alias
+	// case 6 validation: a cross of two unions exposing the same alias
 	// is rejected; distinct aliases are accepted
 	bad6 := client.Pipeline{
 		Name:      uniq(t),
@@ -207,9 +207,9 @@ func TestUnionComposition(t *testing.T) {
 		}},
 	}
 	if err := c.CreatePipeline(bad6); err == nil {
-		t.Fatalf("clause 6: a cross of unions with the same alias must be rejected")
+		t.Fatalf("case 6: a cross of unions with the same alias must be rejected")
 	} else if !containsStr(err.Error(), "distinct namespaces") {
-		t.Fatalf("clause 6: rejection error = %q", err.Error())
+		t.Fatalf("case 6: rejection error = %q", err.Error())
 	}
 	good6 := client.Pipeline{
 		Name:      uniq(t),
@@ -226,9 +226,9 @@ func TestUnionComposition(t *testing.T) {
 		}},
 	}
 	if err := c.CreatePipeline(good6); err != nil {
-		t.Fatalf("clause 6: distinct aliases must be accepted: %v", err)
+		t.Fatalf("case 6: distinct aliases must be accepted: %v", err)
 	}
-	// clause 6 positive: cross of unions with distinct aliases — one
+	// case 6 positive: cross of unions with distinct aliases — one
 	// directory per alias, each with 2 files of size 8 (the acceptance
 	// check above consumed good6's name; flushPipeline creates its own)
 	g6 := good6
@@ -245,10 +245,10 @@ func TestUnionComposition(t *testing.T) {
 	// content identity is preserved; the pinned sandman shape is 2
 	// top-level files of 6 bytes.
 	if len(paths) != 2 || paths[0] != "file-0(6)" || paths[1] != "file-1(6)" {
-		t.Fatalf("clause 6 positive: output = %v, want [file-0(6) file-1(6)] (sandman shape, see deviation note)", paths)
+		t.Fatalf("case 6 positive: output = %v, want [file-0(6) file-1(6)] (sandman shape, see deviation note)", paths)
 	}
 
-	// clause 3 positive: cross of unions — the unions' merged files pair
+	// case 3 positive: cross of unions — the unions' merged files pair
 	// by the cross; under each repository directory, 2 files of size 4
 	c3 := client.Pipeline{
 		Name: uniq(t),
@@ -271,7 +271,7 @@ func TestUnionComposition(t *testing.T) {
 	// the cross pairs every merged file of one union with every merged
 	// file of the other: exactly 4 datums (2 x 2) — the pairing contract
 	if j.Processed != 4 {
-		t.Fatalf("clause 3: cross of unions processed %d datums, want 4 (cartesian pairing)", j.Processed)
+		t.Fatalf("case 3: cross of unions processed %d datums, want 4 (cartesian pairing)", j.Processed)
 	}
 	// LAYOUT DEVIATION: the reference
 	// namespaces per repository directory with 4-byte files; sandman
@@ -283,10 +283,10 @@ func TestUnionComposition(t *testing.T) {
 		c3p = append(c3p, fmt.Sprintf("%s(%d)", f.Path, f.Size))
 	}
 	if len(c3p) != 2 || c3p[0] != "file-0(8)" || c3p[1] != "file-1(8)" {
-		t.Fatalf("clause 3 positive: output = %v, want [file-0(8) file-1(8)] (sandman shape, see deviation note)", c3p)
+		t.Fatalf("case 3 positive: output = %v, want [file-0(8) file-1(8)] (sandman shape, see deviation note)", c3p)
 	}
 
-	// clause 5 positive: union of crosses with per-branch aliases — one
+	// case 5 positive: union of crosses with per-branch aliases — one
 	// directory per alias, each with 2 files of size 4
 	c5 := client.Pipeline{
 		Name: uniq(t),
@@ -314,10 +314,10 @@ func TestUnionComposition(t *testing.T) {
 	want := map[string]int{"a1": 2, "a2": 2, "b1": 2, "b2": 2}
 	for _, a := range []string{"a1", "a2", "b1", "b2"} {
 		if s := sizeOf(j.OutputCommit, a+"/file-0"); s != want[a] {
-			t.Fatalf("clause 5: %s/file-0 = %d bytes, want %d (sandman shape, see deviation note)", a, s, want[a])
+			t.Fatalf("case 5: %s/file-0 = %d bytes, want %d (sandman shape, see deviation note)", a, s, want[a])
 		}
 		if s := sizeOf(j.OutputCommit, a+"/file-1"); s != want[a] {
-			t.Fatalf("clause 5: %s/file-1 = %d bytes, want %d (sandman shape, see deviation note)", a, s, want[a])
+			t.Fatalf("case 5: %s/file-1 = %d bytes, want %d (sandman shape, see deviation note)", a, s, want[a])
 		}
 	}
 }

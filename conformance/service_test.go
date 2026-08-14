@@ -19,9 +19,9 @@ import (
 )
 
 // TestServicePipeline serves the input over HTTP — the long-running
-// process (clause 1), the external endpoint (clause 2), the control-plane
-// proxy (clause 3), the annotation passthrough (clause 4), and the live
-// refresh when a new revision lands (clause 5). The external port is
+// process, the external endpoint, the control-plane
+// proxy, the annotation passthrough, and the live
+// refresh when a new revision lands. The external port is
 // allocated per run: a hardcoded port collides with a stale
 // leftover service from a previous run.
 func TestServicePipeline(t *testing.T) {
@@ -55,7 +55,7 @@ func TestServicePipeline(t *testing.T) {
 	}
 
 	// the control-plane proxy returns the same content as the direct
-	// endpoint (clause 3)
+	// endpoint
 	proxied, err := c.ServiceProxy(p.Name, repo+"/file1")
 	if err != nil {
 		t.Fatalf("service proxy: %v", err)
@@ -65,7 +65,7 @@ func TestServicePipeline(t *testing.T) {
 	}
 
 	// the endpoint's annotations are the user's own plus the system's
-	// identifying pipelineName annotation (clause 4)
+	// identifying pipelineName annotation
 	info, err := c.InspectService(p.Name)
 	if err != nil {
 		t.Fatalf("inspect service: %v", err)
@@ -84,7 +84,7 @@ func TestServicePipeline(t *testing.T) {
 	}
 
 	// a new revision is served through the same endpoint with no restart
-	// (clause 5); the file2 lookup retries while the refresh lands
+	//; the file2 lookup retries while the refresh lands
 	commitFiles(t, repo, "master", map[string]string{"file2": "bar"})
 	svcURL2 := "http://127.0.0.1:" + strconv.Itoa(port) + "/" + repo + "/file2"
 	getUntil(t, svcURL2, "bar")

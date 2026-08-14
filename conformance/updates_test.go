@@ -170,7 +170,7 @@ func TestUpdateChangesTransform(t *testing.T) {
 		return len(containerNames(t)) == 0
 	})
 
-	// reprocessing update re-runs the head under the new transform (clause 5)
+	// reprocessing update re-runs the head under the new transform
 	mustUpdate(t, name, echoTransform("buzz"), in, true)
 	flushOK(t, cm2.ID)
 	head, err := c.HeadCommit(name, "master")
