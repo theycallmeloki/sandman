@@ -379,13 +379,20 @@ func runExec(nodeName string, req execRequest) execResult {
 	}
 	cname := req.Cname
 	var timedOut atomic.Bool
+	var timeoutTimer *time.Timer
 	if req.DatumTimeout != "" {
 		if dur, err := time.ParseDuration(req.DatumTimeout); err == nil {
-			time.AfterFunc(dur, func() {
+			timeoutTimer = time.AfterFunc(dur, func() {
 				timedOut.Store(true)
 				exec.Command("docker", "kill", cname).Run()
 			})
 		}
+	}
+	// Same rule as runDatumAttempt: a pending timer must not outlive the
+	// attempt — a restart re-runs with the same container name, so a
+	// stale timer would kill the restarted attempt's container.
+	if timeoutTimer != nil {
+		defer timeoutTimer.Stop()
 	}
 	run := func(cname string, argv, stdin []string) (int, string) {
 		if len(argv) == 0 && len(stdin) == 0 {

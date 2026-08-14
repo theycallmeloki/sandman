@@ -856,13 +856,22 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	}
 	tr := jx.pl.Pipeline.Transform
 	var timedOut atomic.Bool
+	var timeoutTimer *time.Timer
 	if tr.DatumTimeout != "" {
 		if dur, err := time.ParseDuration(tr.DatumTimeout); err == nil {
-			time.AfterFunc(dur, func() {
+			timeoutTimer = time.AfterFunc(dur, func() {
 				timedOut.Store(true)
 				d.runner.Kill(cname)
 			})
 		}
+	}
+	// A stale timer must not outlive the attempt: a datum restart
+	// (SB-064) re-runs from attempt=1 with the SAME container name, so a
+	// pending timer from an aborted attempt would fire during the
+	// restarted attempt and kill its container mid-flight; stopping at
+	// completion also keeps one timer per attempt from accumulating.
+	if timeoutTimer != nil {
+		defer timeoutTimer.Stop()
 	}
 
 	run := func(cname string, argv, stdin []string) (int, string) {

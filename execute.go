@@ -473,10 +473,13 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// Whole-job deadline (SB-116): at the boundary the job is cancelled and
 	// its active containers killed; it settles as killed, never as a plain
 	// failure. A job that already settled is unaffected (its containers are
-	// unregistered by then).
+	// unregistered by then). The timer is stopped when the job settles
+	// (runJob returns after unregisterRunning): the late-fire guard would
+	// no-op on done, but a pending timer would otherwise hold the closure
+	// (and its rj references) live until the deadline.
 	if tr := pl.Pipeline.Transform; tr.JobTimeout != "" {
 		if dur, err := time.ParseDuration(tr.JobTimeout); err == nil {
-			time.AfterFunc(dur, func() {
+			jobTimer := time.AfterFunc(dur, func() {
 				select {
 				case <-rj.done:
 					return
@@ -487,6 +490,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 					exec.Command("docker", "kill", n).Run()
 				}
 			})
+			defer jobTimer.Stop()
 		}
 	}
 	failedAny := d.runDatums(jx, todo)
