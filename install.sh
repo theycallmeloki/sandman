@@ -84,6 +84,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/sandman worker -name $NAME -port $PORT -advertise $ADVERTISE:$PORT$control$labels
+# a crashed or OOM-killed worker must come back: without a restart
+# policy the control plane's host TTL silently drops it from placement
+Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target

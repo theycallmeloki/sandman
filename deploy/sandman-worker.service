@@ -15,6 +15,11 @@ Type=simple
 # baked in — edit them here and `systemctl restart sandman-worker` to
 # change name, advertise address, or placement labels.
 ExecStart=/usr/local/bin/sandman worker
+# a crashed or OOM-killed worker must come back: without a restart
+# policy the control plane's host TTL silently drops it from placement
+# (fleet capacity lost with no signal)
+Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
