@@ -167,8 +167,34 @@ func probeLocalDaemon(port int) (name, docker, version string) {
 }
 
 // collectStats polls every node in the fleet in parallel.
+// fleetCached returns the fleet view, refreshing it via mDNS at most once
+// per maxAge. The dashboard polls on a ~2s ticker and a browse per frame
+// would block up to 2.5s, so long-lived consumers share a cache;
+// one-shot commands are short-lived processes and always browse fresh.
+// The browse merges over the registry file (mdns rows win), so live nodes
+// and versions are always visible — the file alone goes stale when the
+// daemon moves (observed: after a host became a worker, its frozen
+// registry file hid the host itself from the dashboard and showed the
+// fleet's old versions).
+var (
+	fleetCacheMu    sync.Mutex
+	fleetCacheNodes []fleetNode
+	fleetCacheAt    time.Time
+)
+
+func fleetCached(state string, maxAge time.Duration) []fleetNode {
+	fleetCacheMu.Lock()
+	defer fleetCacheMu.Unlock()
+	if maxAge > 0 && len(fleetCacheNodes) > 0 && time.Since(fleetCacheAt) < maxAge {
+		return fleetCacheNodes
+	}
+	fleetCacheNodes = fleet(state, true)
+	fleetCacheAt = time.Now()
+	return fleetCacheNodes
+}
+
 func collectStats(state string, timeout time.Duration) []nodeStats {
-	nodes := fleet(state, false)
+	nodes := fleetCached(state, 10*time.Second)
 	out := make([]nodeStats, len(nodes))
 	var wg sync.WaitGroup
 	for i, n := range nodes {
