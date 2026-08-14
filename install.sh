@@ -55,9 +55,13 @@ if [ -z "$ADVERTISE" ]; then
 fi
 
 # build from source when Go exists, else install the release binary — both
-# paths are Makefile targets, so the install logic lives in one place
+# paths are Makefile targets, so the install logic lives in one place.
+# The explicit GO= is required: sudo resets PATH to root's secure_path
+# (user-local Go installs like ~/sdk/go/bin are not on it), so a bare
+# `sudo make` would resolve GO ?= go against that PATH and fail with
+# "make: go: No such file or directory".
 if command -v go >/dev/null 2>&1; then
-	sudo make install worker
+	sudo make GO="$(command -v go)" install worker
 else
 	echo "install.sh: go not found — installing the release binary (make install-release)"
 	sudo make install-release worker
