@@ -32,17 +32,24 @@ install: build do-install
 # per v* tag; this fetches, checksum-verifies, and installs them.
 install-release: release-fetch do-install
 
+# release-fetch downloads into a private 0700 mktemp dir: the old fixed
+# /tmp/sandman-<os>-<arch> paths were a local-user attack surface — a
+# pre-created symlink at the predictable path made root's curl write
+# through it (an arbitrary-file overwrite on curl versions that follow
+# symlinks; newer curls refuse the write, which breaks the installer
+# either way) — M8.
 release-fetch:
 	@test -n "$(VERSION)" || (echo "no release tags yet — use 'make install' (builds from source)" >&2; exit 1)
 	@set -e; os=$$(uname -s | tr 'A-Z' 'a-z'); arch=$$(uname -m); \
 	case "$$arch" in x86_64|amd64) goarch=amd64;; aarch64|arm64) goarch=arm64;; *) echo "unsupported arch $$arch" >&2; exit 1;; esac; \
 	asset="sandman-$$os-$$goarch"; \
 	base="https://github.com/theycallmeloki/sandman/releases/download/v$(VERSION)"; \
-	curl -fsSL -o "/tmp/$$asset" "$$base/$$asset"; \
-	curl -fsSL -o "/tmp/$$asset.sha256" "$$base/$$asset.sha256"; \
-	(cd /tmp && sha256sum -c "$$asset.sha256" >/dev/null); \
-	install -m 0755 "/tmp/$$asset" sandman; \
-	rm -f "/tmp/$$asset" "/tmp/$$asset.sha256"
+	tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	curl -fsSL -o "$$tmp/$$asset" "$$base/$$asset"; \
+	curl -fsSL -o "$$tmp/$$asset.sha256" "$$base/$$asset.sha256"; \
+	(cd "$$tmp" && sha256sum -c "$$asset.sha256" >/dev/null); \
+	install -m 0755 "$$tmp/$$asset" sandman
 
 # do-install: the actual install (binary + units). The role word is a
 # goal, so ROLE was picked up at parse time above.
