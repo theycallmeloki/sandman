@@ -228,11 +228,11 @@ func (containerRunner) Kill(name string) error {
 	return exec.CommandContext(ctx, "docker", "kill", name).Run()
 }
 
-// processRunner executes runs as local processes (TESTING_ARCHITECTURE.md
-// R-2/R-3): the command runs against the staging directories directly,
+// processRunner executes runs as local processes: the command runs
+// against the staging directories directly,
 // with the execution-internal paths translated via the spec's PathMap. No
 // container runtime, no images, millisecond-scale. Documented policy
-// differences from the container backend (R-4): resource requests/limits
+// differences from the container backend: resource requests/limits
 // are not enforced (accept-and-record), the configured user
 // identity is not applied (the process runs as the daemon's user), and
 // provisioning never fails — there is no image to obtain, so the crashed

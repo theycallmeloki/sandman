@@ -52,7 +52,7 @@ the worktree source after the maintainer's fix batch (commits `3e42a26`…`13fba
   the first → `echo -n v3 > ver.txt` produced head `v1v3`, then `v1v3v3` on
   the next partial reprocess (verified at the blob level: stored SHA =
   literal `v1v3`). Fix: `datumState.TransformHash` — carried content is
-  re-run-equivalent (FS-5 concatenation) only under the same transform;
+  re-run-equivalent (concatenation) only under the same transform;
   under a changed transform a fresh datum's output supersedes it.
 - **F10 — two `SecretMount`s on one `mountPath` failed the job.**
   `docker: Error response from daemon: Duplicate mount point:
@@ -105,7 +105,7 @@ live-verified 2026-08-14 on a fresh build of HEAD `79fb8b8`)
   errors.
 - Triggers are pipeline-input options (`trigger.sizeBytes`) not
   branch-level triggers; there is no branch-trigger CLI surface.
-- Git inputs are a push receiver (D-16): `POST /api/v1/git/push` with the
+- Git inputs are a push receiver: `POST /api/v1/git/push` with the
   pushed tree; URLs are validated but never cloned. No CLI verb for git
   push (curl only).
 - Cron/git derived repos (`<pipeline>-<cron>`, URL-derived) are deleted
@@ -123,7 +123,7 @@ live-verified 2026-08-14 on a fresh build of HEAD `79fb8b8`)
   worker exited 2 on restart. Overridden: current build installed,
   unit/env cleaned (`-token` dropped), worker active. The repo's
   `deploy/` files were already current.
-- SB-089's full-suite flush-timeout hang (batch 54-59 flake class) did not
+- The full-suite flush-timeout hang (batch 54-59 flake class) did not
   reproduce in any isolated manual run.
 - Leftover artifacts flagged during the walk: `sandman-miladyos-42-ecf45fc63d96-service`
   container on 133 (old svc pipeline, still up), stale `conformance-*`

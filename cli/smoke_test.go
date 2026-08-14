@@ -498,7 +498,7 @@ func TestCLI_VerbCoverage(t *testing.T) {
 }
 
 // pollCLI repeatedly runs a CLI verb until pred holds on its stdout or the
-// deadline passes — the CLI sequence's own polling helper (R-8: separate
+// deadline passes — the CLI sequence's own polling helper (separate
 // scaffolding from the conformance matrix).
 func pollCLI(t *testing.T, pred func(string) bool, timeout time.Duration, args ...string) string {
 	t.Helper()

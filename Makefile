@@ -37,7 +37,7 @@ install-release: release-fetch do-install
 # pre-created symlink at the predictable path made root's curl write
 # through it (an arbitrary-file overwrite on curl versions that follow
 # symlinks; newer curls refuse the write, which breaks the installer
-# either way) — M8.
+# either way).
 release-fetch:
 	@test -n "$(VERSION)" || (echo "no release tags yet — use 'make install' (builds from source)" >&2; exit 1)
 	@set -e; os=$$(uname -s | tr 'A-Z' 'a-z'); arch=$$(uname -m); \

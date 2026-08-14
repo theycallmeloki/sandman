@@ -55,7 +55,7 @@ const stabilityWindow = 250 * time.Millisecond
 
 // waitFor polls cond on every state-change broadcast until it holds,
 // timing out at deadline. The single long-poll loop: machine slowness
-// delays the response, it never fails the test (R-5).
+// delays the response, it never fails the test.
 func (d *daemon) waitFor(deadline time.Time, cond func() bool) bool {
 	for {
 		// grab-then-check: register the broadcast channel BEFORE reading
