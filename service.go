@@ -73,7 +73,13 @@ func serviceRecord(name string) (serviceRec, bool) {
 // spawnServiceJob starts a service pipeline's single long-lived job.
 func (d *daemon) spawnServiceJob(rec *pipelineRec) string {
 	id := newJobID(d.name)
-	go d.runServiceJob(*rec, id)
+	// mirror spawnJob (SB-045): pre-register the running handle so a
+	// stop/delete arriving the instant the service spawns can always
+	// find it — a not-yet-registered handle would escape the cancel and
+	// keep serving (process up, external port bound) a stopped or
+	// deleted pipeline
+	rj := d.registerRunning(id, rec.Pipeline.Name)
+	go d.runServiceJob(*rec, id, rj)
 	return id
 }
 
@@ -82,16 +88,15 @@ func (d *daemon) spawnServiceJob(rec *pipelineRec) string {
 // external port and proxy it to the process, and re-materialize the
 // served directory whenever the input head advances. The job stays
 // running for the process's lifetime and settles when the process exits
-// or the job is cancelled.
-func (d *daemon) runServiceJob(pl pipelineRec, id string) {
+// or the job is cancelled. rj is the pre-registered running handle
+// (spawnServiceJob) and is unregistered on every exit.
+func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
+	defer d.unregisterRunning(id, rj)
 	dir := d.jobDir(id)
 	outDir := filepath.Join(dir, "out")
 	serveDir := filepath.Join(dir, "serve")
 	os.MkdirAll(outDir, 0o755)
 	os.MkdirAll(serveDir, 0o755)
-
-	rj := d.registerRunning(id, pl.Pipeline.Name)
-	defer d.unregisterRunning(id, rj)
 
 	rec := newJobRec(pl, nil, id)
 	d.saveJob(rec)

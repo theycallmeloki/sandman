@@ -54,7 +54,13 @@ func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 			os.RemoveAll(dir)
 		}
 	}
-	go d.runSpoutJob(*rec, id)
+	// mirror spawnJob (SB-045): the running handle is registered before
+	// the goroutine starts, so a stop/delete arriving the instant the
+	// spout spawns can always find it — a not-yet-registered handle
+	// would escape the cancel and keep running (container up, cycles
+	// committing) against a stopped or deleted pipeline
+	rj := d.registerRunning(id, rec.Pipeline.Name)
+	go d.runSpoutJob(*rec, id, rj)
 	return id
 }
 
@@ -63,15 +69,16 @@ func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 // cycle (a set of new or changed files) to the output branch, and the
 // marker directory's changes to the marker branch. The job settles when
 // the container exits; a cancel kills the container and settles killed.
-func (d *daemon) runSpoutJob(pl pipelineRec, id string) {
+// rj is the pre-registered running handle (spawnSpoutJob) and is
+// unregistered on every exit, including the early MkdirAll failure.
+func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
+	defer d.unregisterRunning(id, rj)
+	defer d.standbySettle(pl.Pipeline.Name)
 	dir := d.jobDir(id)
 	outDir := filepath.Join(dir, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return
 	}
-	rj := d.registerRunning(id, pl.Pipeline.Name)
-	defer d.unregisterRunning(id, rj)
-	defer d.standbySettle(pl.Pipeline.Name)
 
 	rec := newJobRec(pl, nil, id)
 	d.saveJob(rec)
