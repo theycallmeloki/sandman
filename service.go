@@ -355,16 +355,26 @@ func proxyListener(ln net.Listener, internal string) {
 
 // ---- service HTTP endpoints ----
 
+// serviceProxyClient forwards service requests with a bounded total
+// timeout: a wedged service must fail the proxy request, not hold the
+// daemon's handler goroutine (and the client's connection) forever.
+var serviceProxyClient = &http.Client{Timeout: 30 * time.Second}
+
 func (d *daemon) serviceProxyH(w http.ResponseWriter, r *http.Request) error {
 	name := r.PathValue("pipeline")
 	rec, ok := serviceRecord(name)
 	if !ok {
 		return notFound("service pipeline %q not found", name)
 	}
-	// forward the remainder of the path to the service's own endpoint:
-	// the response is identical to the direct one (SB-100 clause 3)
+	// forward the remainder of the path — and the query string — to the
+	// service's own endpoint: the response is identical to the direct
+	// one (SB-100 clause 3). A dropped query silently changes the
+	// service's behavior (a ?x=1 filter becomes unfiltered).
 	rest := r.PathValue("path")
-	resp, err := http.Get("http://" + rec.internal + "/" + rest)
+	if r.URL.RawQuery != "" {
+		rest += "?" + r.URL.RawQuery
+	}
+	resp, err := serviceProxyClient.Get("http://" + rec.internal + "/" + rest)
 	if err != nil {
 		return fmt.Errorf("service %q unreachable: %v", name, err)
 	}
