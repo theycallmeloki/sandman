@@ -33,7 +33,7 @@ func TestSB100_ServicePipeline(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cd /sandman/in && exec python3 -m http.server 8000"},
 		},
 		Parallelism: &client.Parallelism{Constant: 1},
@@ -132,7 +132,7 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 	mk := func(svc *client.Service) client.Pipeline {
 		return client.Pipeline{
 			Name: uniq(t),
-			Transform: &client.Transform{Image: "alpine",
+			Transform: &client.Transform{Image: "alpine:3.21",
 				Cmd: []string{"sh", "-c", "cd /sandman/in && exec python3 -m http.server 8000"}},
 			Parallelism: &client.Parallelism{Constant: 1},
 			Input:       &client.Input{Repo: repo, Glob: "/"},
@@ -213,7 +213,7 @@ func TestSB168_RemoteServiceReachable(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "apk add --no-cache python3 >/dev/null 2>&1; cd /sandman/in && exec python3 -m http.server 8001"},
 		},
 		Parallelism: &client.Parallelism{Constant: 1},

@@ -32,7 +32,7 @@ func TestSB074_JoinInputPairsByKey(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "a=$(ls -r ${a} | tr -d '\\n'); b=$(ls -r ${b} | tr -d '\\n'); touch ${OUT}/${a}${b}"},
 		},
 		Input: &client.Input{Join: []client.Input{
@@ -82,7 +82,7 @@ func TestSB075_OuterJoinKeepsUnmatchedOuterOnly(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", `out=""; if [ -d ${a} ]; then out="${out}$(ls -r ${a} | tr -d '\n')"; fi; if [ -d ${b} ]; then out="${out}$(ls -r ${b} | tr -d '\n')"; fi; touch ${OUT}/${out}`},
 		},
 		Input: &client.Input{Join: []client.Input{
@@ -131,7 +131,7 @@ func TestSB076_GroupInputs(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input: &client.Input{Group: []client.Input{
 				{Name: "a", Repo: repo, Glob: "/file.(?)(?)(?)(?)", GroupBy: "$3"},
 			}},
@@ -166,7 +166,7 @@ func TestSB076_GroupInputs(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input: &client.Input{Group: []client.Input{
 				{Name: "a", Repo: r0, Glob: "/file-0.(?)(?)(?)(?)", GroupBy: "$3"},
 				{Name: "b", Repo: r1, Glob: "/file-1.(?)(?)(?)(?)", GroupBy: "$2"},
@@ -207,7 +207,7 @@ func TestSB076_GroupInputs(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input: &client.Input{Group: []client.Input{
 				{Name: "a", Repo: r0, Glob: "/file-0.(?)(?)(?)(?)", JoinOn: "$1$2$3$4", GroupBy: "$3"},
 				{Name: "b", Repo: r1, Glob: "/file-1.(?)(?)(?)(?)", JoinOn: "$4$3$2$1", GroupBy: "$2"},
@@ -241,7 +241,7 @@ func TestSB076_GroupInputs(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:        pipe,
-			Transform:   &client.Transform{Image: "alpine"},
+			Transform:   &client.Transform{Image: "alpine:3.21"},
 			Input:       &client.Input{Group: []client.Input{{Name: "a", Repo: repo, Glob: "/*-PATID(*)-*.txt", GroupBy: "$1"}}},
 			EnableStats: true,
 		})

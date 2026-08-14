@@ -17,7 +17,7 @@ func TestSB142_DeferredProcessingAcrossBranches(t *testing.T) {
 	p1 := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:         p1,
-		Transform:    &client.Transform{Image: "alpine"},
+		Transform:    &client.Transform{Image: "alpine:3.21"},
 		Input:        &client.Input{Repo: data, Glob: "/*"},
 		OutputBranch: "staging",
 	})
@@ -26,7 +26,7 @@ func TestSB142_DeferredProcessingAcrossBranches(t *testing.T) {
 	p2 := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      p2,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: p1, Glob: "/*"},
 	})
 

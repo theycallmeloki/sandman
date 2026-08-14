@@ -51,7 +51,7 @@ func TestSB101_CustomEnvVarsVisible(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "echo ${CUSTOM_ENV_VAR} > ${OUT}/value"},
 			Env:   map[string]string{"CUSTOM_ENV_VAR": "custom-value"},
 		},
@@ -82,7 +82,7 @@ func TestSB051_JobMetadataEnvVars(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd: []string{"sh", "-c",
 				fmt.Sprintf(`printf '%%s' "${CUSTOM}" > ${OUT}/custom; printf '%%s' "${JOB_ID}" > ${OUT}/jobid; printf '%%s' "${OUTPUT_COMMIT}" > ${OUT}/outcommit; printf '%%s' "${%s_COMMIT}" > ${OUT}/incommit; printf '%%s' "${%s}/file" > ${OUT}/inpath`, repo, repo)},
 			Env: map[string]string{"CUSTOM": "bar"},

@@ -296,7 +296,7 @@ func (processRunner) Run(spec JobSpec) RunResult {
 	for i, a := range spec.Cmd {
 		cmdArgs[i] = translateText(a)
 	}
-	if os.Getenv("SANDBOX_DEBUG_RUNNER") != "" {
+	if os.Getenv("SANDMAN_DEBUG_RUNNER") != "" {
 		fmt.Fprintf(os.Stderr, "DEBUG runner: name=%s env=%v cmd=%v dir=%s pathmap=%v\n", spec.Name, env, cmdArgs, workdir, spec.PathMap)
 	}
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -354,7 +354,7 @@ func (processRunner) Kill(name string) error {
 	procMu.Lock()
 	cmd, ok := procs[name]
 	procMu.Unlock()
-	if os.Getenv("SANDBOX_DEBUG_RUNNER") != "" {
+	if os.Getenv("SANDMAN_DEBUG_RUNNER") != "" {
 		fmt.Fprintf(os.Stderr, "DEBUG kill: name=%s found=%v\n", name, ok)
 	}
 	if !ok {

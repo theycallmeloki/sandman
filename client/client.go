@@ -132,6 +132,13 @@ func (c *Client) doClient(hc *http.Client, method, p string, in, out any) error 
 	return err
 }
 
+// maxFetchBytes is the largest response body the client will read into
+// memory (or stream) from a raw GET: the server's own file/tag cap is
+// 1 GiB, so anything past it is a misbehaving peer, not a legitimate
+// payload. Bounds GetFile/GetTag, whose buffered paths would otherwise
+// allocate without limit.
+const maxFetchBytes = 1 << 30
+
 // doRaw is do with a raw byte body and raw byte response.
 func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 	req, err := http.NewRequest(method, c.base+p, bytes.NewReader(body))
@@ -144,7 +151,7 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
+	b, err := readCapped(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -154,33 +161,34 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 	return b, nil
 }
 
-// doRawHeaders is doRaw that also returns the response headers.
-func (c *Client) doRawHeaders(method, p string) (FileFetch, error) {
-	req, err := http.NewRequest(method, c.base+p, nil)
+// readCapped drains r up to maxFetchBytes; a larger body is an error, not
+// an allocation (the 1 GiB server cap is the client's ceiling too).
+func readCapped(r io.Reader) ([]byte, error) { return readCappedLimit(r, maxFetchBytes) }
+
+func readCappedLimit(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
-		return FileFetch{}, err
+		return nil, err
 	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return FileFetch{}, err
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("response exceeds the %d byte limit", limit)
 	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return FileFetch{}, err
-	}
-	if resp.StatusCode >= 400 {
-		return FileFetch{}, decodeError(resp.StatusCode, b)
-	}
-	return FileFetch{
-		Data:            b,
-		ContentType:     resp.Header.Get("Content-Type"),
-		ContentDisp:     resp.Header.Get("Content-Disposition"),
-		ContentEncoding: resp.Header.Get("Content-Encoding"),
-	}, nil
+	return b, nil
 }
 
-// ---- Repositories ----
+// copyCapped streams r into w up to limit; a larger body is an error.
+func copyCapped(w io.Writer, r io.Reader, limit int64) error {
+	lr := &io.LimitedReader{R: r, N: limit + 1}
+	if _, err := io.Copy(w, lr); err != nil {
+		return err
+	}
+	if lr.N == 0 {
+		return fmt.Errorf("file exceeds the %d byte limit", limit)
+	}
+	return nil
+}
+
+// doRaw is do with a raw byte body and raw byte response.
 
 type Repo struct {
 	Name      string   `json:"name"`
@@ -303,19 +311,29 @@ func (c *Client) DeleteBranch(repo, branch string) error {
 	return c.do("DELETE", "/api/v1/repos/"+url.PathEscape(repo)+"/branches/"+url.PathEscape(branch), nil, nil)
 }
 
-// CommitHistory walks the branch's commit chain oldest-first.
+// CommitHistory walks the branch's commit chain oldest-first. The walk
+// is brief-inspect (the server skips its per-commit subvenant scan, which
+// is O(all commits) each — the unconditional form would make a commit
+// list O(depth x total) of server work), and cycle-guarded: a corrupt
+// parent chain (a record whose parent points back into the visited set)
+// stops the walk instead of spinning forever.
 func (c *Client) CommitHistory(repo, branch string) ([]Commit, error) {
 	head, err := c.HeadCommit(repo, branch)
 	if err != nil {
 		return nil, err
 	}
 	var chain []Commit
+	seen := map[string]bool{}
 	for cur := &head; cur != nil && cur.ID != ""; {
+		if seen[cur.ID] {
+			return nil, fmt.Errorf("commit history of %s@%s: corrupt parent cycle at %s", repo, branch, cur.ID)
+		}
+		seen[cur.ID] = true
 		chain = append(chain, *cur)
 		if cur.ParentID == "" {
 			break
 		}
-		next, err := c.InspectCommit(cur.ParentID)
+		next, err := c.inspectCommitBrief(cur.ParentID)
 		if err != nil {
 			return nil, err
 		}
@@ -325,6 +343,13 @@ func (c *Client) CommitHistory(repo, branch string) ([]Commit, error) {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
 	return chain, nil
+}
+
+// inspectCommitBrief is InspectCommit without the server's subvenant
+// scan (the walkers' per-commit hot path).
+func (c *Client) inspectCommitBrief(id string) (Commit, error) {
+	var out Commit
+	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(id)+"?brief=1", nil, &out)
 }
 
 // ---- Files ----
@@ -1362,14 +1387,54 @@ type FileFetch struct {
 }
 
 // FetchFile GETs a file's raw bytes with response headers. With download
-// true the server attaches an attachment Content-Disposition.
+// true the server attaches an attachment Content-Disposition. The body is
+// buffered and bounded at the server's 1 GiB cap; a streaming variant
+// with a per-call timeout is FetchFileTo.
 func (c *Client) FetchFile(commitID, p string, download bool) (FileFetch, error) {
+	var buf bytes.Buffer
+	f, err := c.FetchFileTo(&buf, commitID, p, download, 0)
+	f.Data = buf.Bytes()
+	return f, err
+}
+
+// FetchFileTo streams a file GET's body into w, returning the response
+// headers without buffering the payload (a multi-hundred-MB file never
+// lives in client memory). The stream is bounded at the server's 1 GiB
+// cap. timeout overrides the client's default 60s deadline per call —
+// a slow large transfer aborts mid-read under the shared cap; 0 keeps
+// the client default.
+func (c *Client) FetchFileTo(w io.Writer, commitID, p string, download bool, timeout time.Duration) (FileFetch, error) {
 	u := "/api/v1/commits/" + url.PathEscape(commitID) + "/files/" + url.PathEscape(p)
 	if download {
 		u += "?download=true"
 	}
-	data, err := c.doRawHeaders("GET", u)
-	return data, err
+	hc := c.hc
+	if timeout > 0 {
+		cp := *c.hc
+		cp.Timeout = timeout
+		hc = &cp
+	}
+	req, err := http.NewRequest("GET", c.base+u, nil)
+	if err != nil {
+		return FileFetch{}, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return FileFetch{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return FileFetch{}, decodeError(resp.StatusCode, b)
+	}
+	if err := copyCapped(w, resp.Body, maxFetchBytes); err != nil {
+		return FileFetch{}, err
+	}
+	return FileFetch{
+		ContentType:     resp.Header.Get("Content-Type"),
+		ContentDisp:     resp.Header.Get("Content-Disposition"),
+		ContentEncoding: resp.Header.Get("Content-Encoding"),
+	}, nil
 }
 
 // ---- Transactions (SB-162/163) ----

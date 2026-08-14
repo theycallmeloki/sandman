@@ -3,7 +3,7 @@
 // JSON modification list (PodPatch) that are validated as JSON at
 // creation and applied to every execution participant at provisioning.
 //
-// The sandbox vocabulary (backend-specific per the records):
+// The sandman vocabulary (backend-specific per the records):
 //
 //	{
 //	  "env":     {"NAME": "value", ...},            // job environment variables
@@ -91,7 +91,7 @@ func parseCustomization(tr *client.Transform) (*envCustomization, error) {
 }
 
 // applyPatchOp applies one RFC 6902 operation (add/replace/remove) to the
-// document; the sandbox vocabulary covers object keys under /env, /volumes
+// document; the sandman vocabulary covers object keys under /env, /volumes
 // and /workdir.
 func applyPatchOp(doc map[string]any, raw json.RawMessage) error {
 	var op struct {

@@ -155,7 +155,7 @@ func TestSB057_DeleteJobFinalizesOutput(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pipe,
-		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 60"}},
+		Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 60"}},
 		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	})
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
@@ -202,7 +202,7 @@ func TestSB122_CancelRunningJob(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep $(cat ${%s}/job/sleep); cp ${%s}/job/data ${OUT}/data", repo, repo)},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/job"},

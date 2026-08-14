@@ -44,8 +44,11 @@ NAME=${NAME:-$(hostname)}
 PORT=${PORT:-4343}
 # the default-route interface's source address is the LAN-reachable IP —
 # `hostname -I` can lead with the docker bridge (172.x), which the daemon
-# could not dial
-ADVERTISE=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p')
+# could not dial. ADVERTISE is an explicit opt-in: it flips the worker's
+# exec endpoint from loopback to 0.0.0.0 (worker.go), and that endpoint
+# is unauthenticated — remote placement needs it, a single-host install
+# can leave ADVERTISE empty to keep the loopback bind.
+ADVERTISE=${ADVERTISE:-$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p')}
 if [ -z "$ADVERTISE" ]; then
 	ADVERTISE=$(hostname -I 2>/dev/null | awk '{print $1}')
 fi
@@ -53,6 +56,32 @@ if [ -z "$ADVERTISE" ]; then
 	echo "install.sh: cannot determine this host's LAN address" >&2
 	exit 1
 fi
+
+# unit_safe rejects values that would corrupt the root-written systemd
+# unit below: a newline injects a fresh directive, % triggers systemd's
+# specifier expansion, and quotes/whitespace misparse ExecStart's argv.
+# NAME additionally gets the daemon's default dot-to-dash rule (main.go
+# sanitizeName), so a DHCP-style "host.local" stays a single argv word.
+unit_safe() { # $1 = field label, $2 = value, $3 = allow-space (1)
+	case "$2" in
+		*$'\n'*|*$'\r'*|*'%'*|*'"'*)
+			echo "install.sh: $1 contains characters that would corrupt the systemd unit (newline, %, or quote)" >&2
+			exit 1 ;;
+	esac
+	if [ "$3" != 1 ]; then
+		case "$2" in
+			*' '*) echo "install.sh: $1 must not contain spaces" >&2; exit 1 ;;
+		esac
+	fi
+}
+NAME=$(printf '%s' "$NAME" | tr '.' '-')
+unit_safe "NAME" "$NAME" 0
+case "$PORT" in
+	''|*[!0-9]*) echo "install.sh: PORT must be numeric" >&2; exit 1 ;;
+esac
+unit_safe "ADVERTISE" "$ADVERTISE" 0
+unit_safe "CONTROL" "${CONTROL:-}" 0
+unit_safe "LABELS" "${LABELS:-}" 1
 
 # build from source when Go exists, else install the release binary — both
 # paths are Makefile targets, so the install logic lives in one place.
@@ -99,6 +128,9 @@ EOF
 sudo systemctl daemon-reload
 
 echo "install.sh: wrote /etc/systemd/system/sandman-worker.service (name=$NAME advertise=$ADVERTISE:$PORT control=${CONTROL:-<mDNS discovery>})"
+if [ -n "$ADVERTISE" ]; then
+	echo "install.sh: WARNING: -advertise $ADVERTISE:$PORT binds the worker's unauthenticated exec endpoint on all interfaces — any LAN host can submit jobs to this worker. Leave ADVERTISE empty (single-host install) to keep the loopback bind."
+fi
 
 sudo systemctl enable --now sandman-worker
 echo "install.sh: worker $NAME is up — it registers with the discovered daemon and appears in the fleet"

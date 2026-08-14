@@ -21,13 +21,13 @@ func TestSB160_SizeTriggers(t *testing.T) {
 	p1 := uniq(t) // 1K trigger watching data@master
 	mustPipeline(t, client.Pipeline{
 		Name:      p1,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: data, Glob: "/*", Trigger: &client.Trigger{SizeBytes: 1000}},
 	})
 	p2 := uniq(t) // 2K trigger watching p1's output
 	mustPipeline(t, client.Pipeline{
 		Name:      p2,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: p1, Glob: "/*", Trigger: &client.Trigger{SizeBytes: 2000}},
 	})
 
@@ -123,7 +123,7 @@ func TestSB160_SizeTriggers(t *testing.T) {
 	// repo keeps exactly 2 branches)
 	update := client.Pipeline{
 		Name:      p2,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: p1, Glob: "/*", Trigger: &client.Trigger{SizeBytes: 3000}},
 		Update:    true,
 	}
@@ -184,7 +184,7 @@ func TestSB160_SizeTriggerLedgerSurvivesRestart(t *testing.T) {
 	p1 := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      p1,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: data, Glob: "/*", Trigger: &client.Trigger{SizeBytes: 1000}},
 	})
 

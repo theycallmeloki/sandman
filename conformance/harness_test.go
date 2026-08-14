@@ -74,7 +74,7 @@ func TestMain(m *testing.M) {
 			}
 		}
 	}
-	// Stale sandbox containers from interrupted runs (a SIGKILLed daemon
+	// Stale sandman containers from interrupted runs (a SIGKILLed daemon
 	// cannot run its docker rm -f) hold external ports and poison later
 	// runs. Scoped to the harness's own naming namespace
 	// (sandman-conformance-*): the node label is an exact per-daemon
@@ -454,7 +454,7 @@ func cleanupPipeline(t *testing.T, name string) {
 // matched by the glob into the output directory (per SB-001).
 func copyTransform(inputName string) *client.Transform {
 	return &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd:   []string{"sh", "-c", fmt.Sprintf("cp -r ${%s}/* ${OUT}/", inputName)},
 	}
 }

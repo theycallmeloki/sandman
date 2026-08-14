@@ -21,12 +21,12 @@ func TestSB014_LazyPropagatesThroughChain(t *testing.T) {
 	pa, pb := uniq(t), uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pa,
-		Transform: &client.Transform{Image: "alpine"}, // default entry point
+		Transform: &client.Transform{Image: "alpine:3.21"}, // default entry point
 		Input:     &client.Input{Repo: repo, Glob: "/*", Lazy: true},
 	})
 	mustPipeline(t, client.Pipeline{
 		Name:      pb,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: pa, Glob: "/*", Lazy: true},
 	})
 
@@ -58,7 +58,7 @@ func TestSB015_LazyUnreadFilesDoNotBlock(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp ${" + repo + "}/file ${OUT}/file"},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/", Lazy: true},
@@ -92,7 +92,7 @@ func TestSB017_SpecialOutputFileFails(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp ${" + repo + "}/file ${OUT}/file; mkfifo ${OUT}/fifo"},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/*", Lazy: true},
@@ -129,7 +129,7 @@ func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 	// window (record/growth interleavings; parked after the flush,
 	// atomic-write, and resolve/revert fixes). Upstream gates its
 	// equivalent — TestChainedPipelinesNoDelay is RUN_BAD_TESTS-gated
-	// (SB-056's note) — and the sandbox follows suit: the exact-count
+	// (SB-056's note) — and the sandman follows suit: the exact-count
 	// contract stays strict when exercised. Run the family with
 	// RUN_BAD_TESTS=1 (like the reference) to assert it.
 	if os.Getenv("RUN_BAD_TESTS") == "" {
@@ -141,14 +141,14 @@ func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 	pb, pc := uniq(t), uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pb,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	})
 	// C crosses A and B's output, diffing the same-named file
 	mustPipeline(t, client.Pipeline{
 		Name: pc,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("diff ${%s}/file ${%s}/file > ${OUT}/file || true", repo, pb)},
 		},
 		Input: &client.Input{Cross: []client.Input{
@@ -216,7 +216,7 @@ func TestSB019_DiamondProvenanceOneCommitPerStage(t *testing.T) {
 	// window (record/growth interleavings; parked after the flush,
 	// atomic-write, and resolve/revert fixes). Upstream gates its
 	// equivalent — TestChainedPipelinesNoDelay is RUN_BAD_TESTS-gated
-	// (SB-056's note) — and the sandbox follows suit: the exact-count
+	// (SB-056's note) — and the sandman follows suit: the exact-count
 	// contract stays strict when exercised. Run the family with
 	// RUN_BAD_TESTS=1 (like the reference) to assert it.
 	if os.Getenv("RUN_BAD_TESTS") == "" {
@@ -228,18 +228,18 @@ func TestSB019_DiamondProvenanceOneCommitPerStage(t *testing.T) {
 	pb, pc, pd := uniq(t), uniq(t), uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pb,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: repo, Glob: "/b*"},
 	})
 	mustPipeline(t, client.Pipeline{
 		Name:      pc,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: repo, Glob: "/c*"},
 	})
 	mustPipeline(t, client.Pipeline{
 		Name: pd,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("diff ${%s}/* ${%s}/* > ${OUT}/file || true", pb, pc)},
 		},
 		Input: &client.Input{Cross: []client.Input{
@@ -305,13 +305,13 @@ func TestSB055_UpstreamOutputInsideCross(t *testing.T) {
 	pb, pc := uniq(t), uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pb,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: repoA, Glob: "/*"},
 	})
 	mustPipeline(t, client.Pipeline{
 		Name: pc,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("cp ${%s}/file ${OUT}/bFile; cp ${%s}/file ${OUT}/dFile", pb, repoD)},
 		},
 		Input: &client.Input{Cross: []client.Input{
@@ -363,7 +363,7 @@ func TestSB145_FileRevisionHistory(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("cat ${%s}/* ${%s}/* > ${OUT}/combined", repoA, repoB)},
 		},
 		Input: &client.Input{Cross: []client.Input{

@@ -22,7 +22,7 @@ func TestSB151_ConfigExtractionRoundTrip(t *testing.T) {
 		Name:        pipe,
 		Description: "round-trip me",
 		Transform: &client.Transform{
-			Image:            "alpine",
+			Image:            "alpine:3.21",
 			Cmd:              []string{"sh", "-c", "cp -r ${" + repo + "}/* ${OUT}/"},
 			Stdin:            []string{"line1"},
 			Env:              map[string]string{"K": "V"},

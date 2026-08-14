@@ -124,6 +124,13 @@ func (d *daemon) accumulateTriggers(cm client.Commit) {
 			for i := range in.Cross {
 				walk(&in.Cross[i])
 			}
+			for i := range in.Union {
+				// union members carry no size triggers (rejected at
+				// creation); the walk keeps the position counter in lock
+				// step with deriveTriggerBranches, whose numbering the
+				// trigger ledgers and accumulation branches depend on
+				walk(&in.Union[i])
+			}
 			if in.Trigger != nil && in.Trigger.SizeBytes > 0 && in.Repo == cm.Repo && in.Trigger.Branch == cm.Branch {
 				d.fireTrigger(rec.Pipeline.Name, pos, *in, cm)
 			}

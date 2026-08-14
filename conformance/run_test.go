@@ -18,7 +18,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cat ${a}/file ${b}/file > ${OUT}/file"},
 			},
 			Input: &client.Input{Cross: []client.Input{
@@ -86,12 +86,12 @@ func TestSB010_RunPipeline(t *testing.T) {
 		up, down := uniq(t), uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      up,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: repo, Glob: "/*"},
 		})
 		mustPipeline(t, client.Pipeline{
 			Name:      down,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: up, Glob: "/*"},
 		})
 		cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -137,7 +137,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: repo, Glob: "/*"},
 		})
 		cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -150,7 +150,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		pipe2 := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe2,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: empty, Glob: "/*"},
 		})
 		if _, err := c.RunPipeline(pipe2, nil, ""); err == nil {
@@ -180,7 +180,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "exit 7"},
 			},
 			Input: &client.Input{Repo: repo, Glob: "/*"},
@@ -220,7 +220,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: up,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cat ${a}/file ${b}/file > ${OUT}/file"},
 			},
 			Input: &client.Input{Cross: []client.Input{
@@ -231,7 +231,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: down,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cp ${u}/file ${OUT}/file"},
 			},
 			Input: &client.Input{Name: "u", Union: []client.Input{
@@ -280,13 +280,13 @@ func TestSB010_RunPipeline(t *testing.T) {
 		up, pipe := uniq(t), uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      up,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: repo, Glob: "/*"},
 		})
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cat ${u}/* ${c}/* > ${OUT}/out"},
 			},
 			Input: &client.Input{Cross: []client.Input{
@@ -326,7 +326,7 @@ func TestSB010_RunPipeline(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:        pipe,
-			Transform:   &client.Transform{Image: "alpine"},
+			Transform:   &client.Transform{Image: "alpine:3.21"},
 			Input:       &client.Input{Repo: repo, Glob: "/*"},
 			EnableStats: true,
 		})

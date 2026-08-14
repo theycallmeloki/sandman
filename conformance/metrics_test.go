@@ -50,14 +50,14 @@ func TestSB132_MetricsEndpoint(t *testing.T) {
 	// read latency carries exactly two outcome series (success + error)
 	readOutcomes := map[string]bool{}
 	for _, line := range strings.Split(metrics, "\n") {
-		if strings.HasPrefix(line, "sandbox_file_read_seconds_sum{outcome=") {
+		if strings.HasPrefix(line, "sandman_file_read_seconds_sum{outcome=") {
 			readOutcomes[line] = true
 			if !strings.Contains(line, `outcome="success"`) && !strings.Contains(line, `outcome="error"`) {
 				t.Fatalf("read series with an unknown outcome: %s", line)
 			}
 		}
 	}
-	succ := strings.Contains(metrics, `sandbox_file_read_seconds_count{outcome="success"} 0`)
+	succ := strings.Contains(metrics, `sandman_file_read_seconds_count{outcome="success"} 0`)
 	if succ {
 		t.Fatalf("no successful read recorded")
 	}
@@ -67,7 +67,7 @@ func TestSB132_MetricsEndpoint(t *testing.T) {
 	// write and job-listing latency each carry one series (no outcome split)
 	writes := 0
 	for _, line := range strings.Split(metrics, "\n") {
-		if strings.HasPrefix(line, "sandbox_file_write_seconds_sum") {
+		if strings.HasPrefix(line, "sandman_file_write_seconds_sum") {
 			writes++
 		}
 	}
@@ -76,7 +76,7 @@ func TestSB132_MetricsEndpoint(t *testing.T) {
 	}
 	lists := 0
 	for _, line := range strings.Split(metrics, "\n") {
-		if strings.HasPrefix(line, "sandbox_job_list_seconds_sum") {
+		if strings.HasPrefix(line, "sandman_job_list_seconds_sum") {
 			lists++
 		}
 	}
@@ -84,7 +84,7 @@ func TestSB132_MetricsEndpoint(t *testing.T) {
 		t.Fatalf("job-list-seconds has %d series, want 1", lists)
 	}
 	// the counters report values
-	for _, name := range []string{"sandbox_file_read_total", "sandbox_file_write_total", "sandbox_job_list_total"} {
+	for _, name := range []string{"sandman_file_read_total", "sandman_file_write_total", "sandman_job_list_total"} {
 		if !strings.Contains(metrics, name+" ") {
 			t.Fatalf("missing counter %s", name)
 		}
@@ -102,7 +102,7 @@ func TestSB079_GarbageCollection(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("cp ${%s}/foo ${OUT}/foo; cat ${%s}/bar ${%s}/bar > ${OUT}/bar", repo, repo, repo)},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/"}, // the whole commit is the single datum
@@ -117,7 +117,7 @@ func TestSB079_GarbageCollection(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: slow,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "sleep 600"},
 		},
 		Input: &client.Input{Repo: repo2, Glob: "/*"},
@@ -217,7 +217,7 @@ func TestSB079_GarbageCollection(t *testing.T) {
 	mustRepo(t, repo)
 	mustPipeline(t, client.Pipeline{
 		Name:      pipe,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	})
 	cm3 := commitFiles(t, repo, "master", map[string]string{"foo": "foo", "bar": "bar"})
@@ -280,7 +280,7 @@ func TestSB130_ResetRemovesStatsState(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:        pipe,
-		Transform:   &client.Transform{Image: "alpine"},
+		Transform:   &client.Transform{Image: "alpine:3.21"},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
 		EnableStats: true,
 	})
@@ -295,7 +295,7 @@ func TestSB130_ResetRemovesStatsState(t *testing.T) {
 	cm2 := commitFiles(t, repo, "master", map[string]string{"file2": "y"})
 	mustPipeline(t, client.Pipeline{
 		Name:        pipe,
-		Transform:   &client.Transform{Image: "alpine"},
+		Transform:   &client.Transform{Image: "alpine:3.21"},
 		Input:       &client.Input{Repo: repo, Glob: "/file*"}, // a different glob
 		EnableStats: true,
 	})

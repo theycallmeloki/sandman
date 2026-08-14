@@ -510,11 +510,9 @@ func getCmd() *cobra.Command {
 			if err != nil {
 				die("get file: "+err.Error(), 1)
 			}
-			data, err := cliClient().GetFile(head, path)
-			if err != nil {
+			if _, err := cliClient().FetchFileTo(os.Stdout, head, path, false, 0); err != nil {
 				die("get file: "+err.Error(), 1)
 			}
-			_, _ = os.Stdout.Write(data)
 		},
 	})
 	return cmd
@@ -611,11 +609,9 @@ func newFileCmd() *cobra.Command {
 				if err != nil {
 					die("file get: "+err.Error(), 1)
 				}
-				data, err := cliClient().GetFile(head, path)
-				if err != nil {
+				if _, err := cliClient().FetchFileTo(os.Stdout, head, path, false, 0); err != nil {
 					die("file get: "+err.Error(), 1)
 				}
-				_, _ = os.Stdout.Write(data)
 			},
 		},
 		&cobra.Command{

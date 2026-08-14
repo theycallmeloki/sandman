@@ -19,14 +19,14 @@ func TestSB089_CronInputs(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cp -r ${cron}/* ${OUT}/"},
 			},
 			Input: &client.Input{Name: "cron", Cron: "@every 2s"},
 		})
 		mustPipeline(t, client.Pipeline{
 			Name:      down,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: pipe, Glob: "/*"},
 		})
 		cleanupPipeline(t, pipe)
@@ -34,10 +34,10 @@ func TestSB089_CronInputs(t *testing.T) {
 		cronRepo := pipe + "-cron"
 		// wait for two ticks, then flush each through both stages
 		first := waitCronTicks(t, cronRepo, 2, 60*time.Second)
-		// the tick file is named by the tick time in UTC RFC3339 — a
-		// legal path with no glob metacharacters (SB-089 edge case);
-		// append-mode ticks accumulate, so after two ticks the commit
-		// holds two tick files
+		// the tick file is named by the tick time in UTC RFC3339 with
+		// fractional seconds — a legal path with no glob metacharacters
+		// (SB-089 edge case); append-mode ticks accumulate, so after two
+		// ticks the commit holds two tick files
 		tickFiles, err := c.ListFiles(first.ID)
 		if err != nil {
 			t.Fatalf("list tick files: %v", err)
@@ -80,7 +80,7 @@ func TestSB089_CronInputs(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cp -r ${cron}/* ${OUT}/"},
 			},
 			Input: &client.Input{Name: "cron", Cron: "@every 2s", Overwrite: true},
@@ -121,7 +121,7 @@ func TestSB089_CronInputs(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cat ${cron}/* ${data}/* > ${OUT}/out"},
 			},
 			Input: &client.Input{Cross: []client.Input{
@@ -152,7 +152,7 @@ func TestSB089_CronInputs(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cp -r ${cron}/* ${OUT}/"},
 			},
 			Input: &client.Input{Name: "cron", Cron: "@every 1m", Overwrite: true},
@@ -193,7 +193,7 @@ func TestSB089_CronInputs(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cp -r ${cron}/* ${OUT}/"},
 			},
 			Input: &client.Input{Name: "cron", Cron: "@every 1h"},
@@ -201,7 +201,7 @@ func TestSB089_CronInputs(t *testing.T) {
 		cleanupPipeline(t, pipe)
 		mustPipeline(t, client.Pipeline{
 			Name:      down,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: pipe, Glob: "/*"},
 		})
 		cleanupPipeline(t, down)
@@ -223,7 +223,7 @@ func TestSB089_CronInputs(t *testing.T) {
 		mustPipeline(t, client.Pipeline{
 			Name: pipe,
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cat ${c1}/* ${c2}/* > ${OUT}/out"},
 			},
 			Input: &client.Input{Cross: []client.Input{
@@ -279,7 +279,7 @@ func TestSB133_CronCadenceSurvivesUpdates(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp -r ${cron}/* ${OUT}/"},
 		},
 		Input: &client.Input{Name: "cron", Cron: "@every 30s", Overwrite: true},
@@ -330,7 +330,7 @@ func TestSB133_CronCadenceSurvivesUpdates(t *testing.T) {
 	// double-schedule a tick
 	update := client.Pipeline{
 		Name:      pipe,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Name: "cron", Cron: "@every 30s", Overwrite: true},
 		Update:    true,
 		Reprocess: true,

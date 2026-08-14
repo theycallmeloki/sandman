@@ -21,7 +21,7 @@ func TestSB077_UnionReprocessesRemovedIdenticalDatums(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp -r ${u}/* ${OUT}/"},
 		},
 		Input: &client.Input{
@@ -121,7 +121,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 		return client.Pipeline{
 			Name: uniq(t),
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "cp -r ${" + name + "}/* ${OUT}/"},
 			},
 			Input: &client.Input{Name: name, Union: branches},
@@ -176,7 +176,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	// rejected at creation
 	bad := client.Pipeline{
 		Name:      uniq(t),
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input: &client.Input{Name: "u", Union: []client.Input{
 			{Name: "uc", Cross: []client.Input{
 				{Name: "same", Repo: repos[0], Glob: "/*"},
@@ -194,7 +194,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	// is rejected; distinct aliases are accepted
 	bad6 := client.Pipeline{
 		Name:      uniq(t),
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input: &client.Input{Cross: []client.Input{
 			{Name: "in1", Union: []client.Input{
 				{Name: "a", Repo: repos[0], Glob: "/*"},
@@ -213,7 +213,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	}
 	good6 := client.Pipeline{
 		Name:      uniq(t),
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input: &client.Input{Cross: []client.Input{
 			{Name: "in1", Union: []client.Input{
 				{Name: "a", Repo: repos[0], Glob: "/*"},
@@ -242,10 +242,10 @@ func TestSB078_UnionComposition(t *testing.T) {
 	// LAYOUT DEVIATION (recorded in behaviors/SB-078.md): the reference
 	// exposes one directory per alias with 8-byte merged files; sandman
 	// merges the cross-of-unions' branches into top-level files. The
-	// content identity is preserved; the pinned sandbox shape is 2
+	// content identity is preserved; the pinned sandman shape is 2
 	// top-level files of 6 bytes.
 	if len(paths) != 2 || paths[0] != "file-0(6)" || paths[1] != "file-1(6)" {
-		t.Fatalf("clause 6 positive: output = %v, want [file-0(6) file-1(6)] (sandbox shape, see deviation note)", paths)
+		t.Fatalf("clause 6 positive: output = %v, want [file-0(6) file-1(6)] (sandman shape, see deviation note)", paths)
 	}
 
 	// clause 3 positive: cross of unions — the unions' merged files pair
@@ -253,7 +253,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	c3 := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "for f in ${u1}/*; do cat $f >> ${OUT}/$(basename $f); done; for f in ${u2}/*; do cat $f >> ${OUT}/$(basename $f); done"},
 		},
 		Input: &client.Input{Cross: []client.Input{
@@ -283,7 +283,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 		c3p = append(c3p, fmt.Sprintf("%s(%d)", f.Path, f.Size))
 	}
 	if len(c3p) != 2 || c3p[0] != "file-0(8)" || c3p[1] != "file-1(8)" {
-		t.Fatalf("clause 3 positive: output = %v, want [file-0(8) file-1(8)] (sandbox shape, see deviation note)", c3p)
+		t.Fatalf("clause 3 positive: output = %v, want [file-0(8) file-1(8)] (sandman shape, see deviation note)", c3p)
 	}
 
 	// clause 5 positive: union of crosses with per-branch aliases — one
@@ -291,7 +291,7 @@ func TestSB078_UnionComposition(t *testing.T) {
 	c5 := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp -r ${u}/* ${OUT}/"},
 		},
 		Input: &client.Input{Name: "u", Union: []client.Input{
@@ -314,10 +314,10 @@ func TestSB078_UnionComposition(t *testing.T) {
 	want := map[string]int{"a1": 2, "a2": 2, "b1": 2, "b2": 2}
 	for _, a := range []string{"a1", "a2", "b1", "b2"} {
 		if s := sizeOf(j.OutputCommit, a+"/file-0"); s != want[a] {
-			t.Fatalf("clause 5: %s/file-0 = %d bytes, want %d (sandbox shape, see deviation note)", a, s, want[a])
+			t.Fatalf("clause 5: %s/file-0 = %d bytes, want %d (sandman shape, see deviation note)", a, s, want[a])
 		}
 		if s := sizeOf(j.OutputCommit, a+"/file-1"); s != want[a] {
-			t.Fatalf("clause 5: %s/file-1 = %d bytes, want %d (sandbox shape, see deviation note)", a, s, want[a])
+			t.Fatalf("clause 5: %s/file-1 = %d bytes, want %d (sandman shape, see deviation note)", a, s, want[a])
 		}
 	}
 }

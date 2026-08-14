@@ -29,7 +29,7 @@ import (
 // substitution), plus six numbered lines so follow mode has volume.
 func logsEchoTransform(inName string) *client.Transform {
 	return &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd: []string{"sh", "-c",
 			fmt.Sprintf("echo foo; echo %%s; i=0; while [ $i -lt 6 ]; do echo line$i; i=$((i+1)); done")},
 	}
@@ -236,7 +236,7 @@ func TestSB061_ManyLogs(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "seq 0 9999"},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/*"},
@@ -271,11 +271,11 @@ func TestSB062_GlobalLogStore(t *testing.T) {
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "", map[string]string{"a": "1\n", "b": "2\n", "c": "3\n"})
 	perDatum := &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd:   []string{"sh", "-c", fmt.Sprintf("for f in ${%s}/*; do echo foo; done", repo)},
 	}
 	mustPipeline(t, client.Pipeline{Name: pa, Transform: perDatum, Input: &client.Input{Repo: repo, Glob: "/*"}})
-	mustPipeline(t, client.Pipeline{Name: pb, Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "echo bar"}}, Input: &client.Input{Repo: repo, Glob: "/*"}})
+	mustPipeline(t, client.Pipeline{Name: pb, Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "echo bar"}}, Input: &client.Input{Repo: repo, Glob: "/*"}})
 	jobs := flushOK(t, cm.ID)
 	var aJob client.Job
 	seenA, seenB := false, false

@@ -3,7 +3,7 @@
 // pipeline's declaration is validated at creation (URL form SB-104/159-12,
 // duplicate names/URLs SB-106); each push event for the tracked branch
 // commits the pushed revision into the mapped repository and triggers the
-// pipeline (SB-107/108). The push receiver is the sandbox's interface
+// pipeline (SB-107/108). The push receiver is the sandman's interface
 // choice (D-16: "push-receiver mechanics are an interface choice"): a
 // POST /api/v1/git/push carries the pushed refs AND the revision's
 // working tree — the webhook delivers the clone result, so no git server
@@ -190,7 +190,7 @@ func (d *daemon) deriveGitRepos(p *client.Pipeline) {
 	}
 }
 
-// gitPushEvent is the push-receiver payload (the sandbox's git-input
+// gitPushEvent is the push-receiver payload (the sandman's git-input
 // interface): the pushed refs plus the revision's working tree. private
 // marks a repository the control plane cannot clone (no credentials).
 type gitPushEvent struct {

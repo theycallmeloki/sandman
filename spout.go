@@ -113,7 +113,10 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 	// of the stopped container, and auto-removal would read as an
 	// unexpected-exit failure.
 	argv := []string{"run", "-d", "--name", cname, "--label", "sandman.node=" + d.name, "-e", "OUT=/sandman/out", "-e", "JOB_ID=" + id}
-	if markerDir != "" {
+	if pl.Pipeline.Spout.Marker != "" {
+		// the marker dir path is always derivable, so only the declared
+		// marker decides: a spout without one must not see a MARKER that
+		// points at a mount that was never attached
 		argv = append(argv, "-e", "MARKER=/sandman/marker")
 	}
 	argv = append(argv, mounts...)
@@ -149,7 +152,7 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 	// final state, and a file deferred by an earlier mid-write check
 	// must not be lost to the exit.
 	commitCycle := func(final bool) {
-		if dbg := os.Getenv("SANDBOX_SPOUT_DEBUG"); dbg != "" {
+		if dbg := os.Getenv("SANDMAN_SPOUT_DEBUG"); dbg != "" {
 			snap := spoutSnapshot(outDir)
 			log.Printf("spout %s: poll snapshot %d files: %v", pl.Pipeline.Name, len(snap), sortedStringKeys(snap))
 		}

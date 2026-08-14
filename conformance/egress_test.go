@@ -25,7 +25,7 @@ func TestSB013_EgressFailure(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp ${" + repo + "}/file ${OUT}/file"},
 		},
 		Input:  &client.Input{Repo: repo, Glob: "/"},
@@ -73,7 +73,7 @@ func TestEgressFileDestination(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp ${" + repo + "}/file ${OUT}/file"},
 		},
 		Input:  &client.Input{Repo: repo, Glob: "/"},

@@ -35,7 +35,7 @@ func TestSB141_CrossUnionHeadResolution(t *testing.T) {
 	j := flushPipeline(t, client.Pipeline{
 		Name: impute,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp -r ${ds}/* ${OUT}/"},
 		},
 		Input: &client.Input{Cross: []client.Input{

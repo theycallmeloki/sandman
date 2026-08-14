@@ -71,7 +71,7 @@ func cmdUpdate(args []string) {
 		return
 	}
 
-	if os.Getenv("SANDBOX_UPDATE_REEXEC") == "" {
+	if os.Getenv("SANDMAN_UPDATE_REEXEC") == "" {
 		fmt.Printf("new version available: %s (you have %s)\n", rel.TagName, Version)
 	}
 	if *checkOnly {
@@ -336,7 +336,7 @@ var errReexecInstalled = errors.New("installed via sudo re-exec")
 // installAsRoot re-executes the same update through sudo (the target
 // directory is root-owned). The check passes again under root; the
 // install then succeeds. os.Args[1:] is the original verb + flags. The
-// re-exec sets SANDBOX_UPDATE_REEXEC so the child's run does not repeat
+// re-exec sets SANDMAN_UPDATE_REEXEC so the child's run does not repeat
 // the "new version available" line the parent already printed.
 func installAsRoot() error {
 	self := os.Args[0]
@@ -346,7 +346,7 @@ func installAsRoot() error {
 		}
 	}
 	cmd := exec.Command("sudo", append([]string{"-p", "sudo password: ", self}, os.Args[1:]...)...)
-	cmd.Env = append(os.Environ(), "SANDBOX_UPDATE_REEXEC=1")
+	cmd.Env = append(os.Environ(), "SANDMAN_UPDATE_REEXEC=1")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
@@ -355,5 +355,7 @@ func installAsRoot() error {
 		}
 		return err
 	}
-	return nil
+	// the re-exec's own run printed "updated to …"; the caller must not
+	// print it again (cmdUpdate returns early on this sentinel)
+	return errReexecInstalled
 }

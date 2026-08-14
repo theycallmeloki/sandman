@@ -32,7 +32,7 @@ func TestSB008_MultipleInputsFromTheSameBranch(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cat ${a}/dirA/file >> ${OUT}/file; cat ${b}/dirB/file >> ${OUT}/file"},
 		},
 		Input: &client.Input{Cross: []client.Input{
@@ -96,7 +96,7 @@ func TestSB009_CrossInputsTwoBranchesSameRepo(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cat ${branchA}/file >> ${OUT}/file; cat ${branchB}/file >> ${OUT}/file"},
 		},
 		Input: &client.Input{Cross: []client.Input{
@@ -145,7 +145,7 @@ func TestSB063_CrossInputProcessesEveryCombination(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cat ${r1}/* ${r2}/* >> ${OUT}/file"},
 		},
 		Input: cross,
@@ -192,7 +192,7 @@ func TestSB120_ListJobInputCommits(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cat ${a}/* ${b}/* > ${OUT}/file"},
 		},
 		Input: &client.Input{Cross: []client.Input{

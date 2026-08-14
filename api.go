@@ -388,6 +388,14 @@ func (d *daemon) inspectCommitH(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// ?brief=1 omits the subvenant scan: a chain-walker (CommitHistory)
+	// inspects every ancestor and never reads Subvenants, and the scan is
+	// O(all commits) per inspection — the unconditional form would make a
+	// commit list O(depth x total commits) of server work.
+	if r.URL.Query().Get("brief") == "1" {
+		writeJSON(w, cm)
+		return nil
+	}
 	// Subvenants are the commits that derive from this one: every commit
 	// whose recorded provenance includes it (SB-140 — a spec commit's
 	// subvenants are its pipeline's spout output and the downstream
@@ -501,10 +509,6 @@ func (d *daemon) instrument(op string, h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// metricsH renders the runtime metrics in Prometheus exposition format:
-// invocation counters and latency sum/count aggregates for file reads,
-// file writes, and job listings, with read latency split by outcome
-// (SB-132).
 // versionH reports the daemon's baked build version (the same Version the
 // binary carries; a `sandman --version` shows both so a stale daemon is
 // visible).
@@ -513,6 +517,10 @@ func (d *daemon) versionH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// metricsH renders the runtime metrics in Prometheus exposition format:
+// invocation counters and latency sum/count aggregates for file reads,
+// file writes, and job listings, with read latency split by outcome
+// (SB-132).
 func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	d.metrics.mu.Lock()
 	readTotal := d.metrics.readTotal
@@ -521,20 +529,20 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	listTotal, listH := d.metrics.listTotal, d.metrics.list
 	d.metrics.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	fmt.Fprintf(w, "# HELP sandbox_file_read_total File read invocations.\n# TYPE sandbox_file_read_total counter\nsandbox_file_read_total %d\n", readTotal)
-	fmt.Fprintf(w, "# TYPE sandbox_file_read_seconds histogram\n")
-	fmt.Fprintf(w, "sandbox_file_read_seconds_sum{outcome=\"success\"} %g\n", readOK.sum)
-	fmt.Fprintf(w, "sandbox_file_read_seconds_count{outcome=\"success\"} %d\n", readOK.count)
-	fmt.Fprintf(w, "sandbox_file_read_seconds_sum{outcome=\"error\"} %g\n", readErr.sum)
-	fmt.Fprintf(w, "sandbox_file_read_seconds_count{outcome=\"error\"} %d\n", readErr.count)
-	fmt.Fprintf(w, "# HELP sandbox_file_write_total File write invocations.\n# TYPE sandbox_file_write_total counter\nsandbox_file_write_total %d\n", writeTotal)
-	fmt.Fprintf(w, "# TYPE sandbox_file_write_seconds histogram\n")
-	fmt.Fprintf(w, "sandbox_file_write_seconds_sum %g\n", writeH.sum)
-	fmt.Fprintf(w, "sandbox_file_write_seconds_count %d\n", writeH.count)
-	fmt.Fprintf(w, "# HELP sandbox_job_list_total Job listing invocations.\n# TYPE sandbox_job_list_total counter\nsandbox_job_list_total %d\n", listTotal)
-	fmt.Fprintf(w, "# TYPE sandbox_job_list_seconds histogram\n")
-	fmt.Fprintf(w, "sandbox_job_list_seconds_sum %g\n", listH.sum)
-	fmt.Fprintf(w, "sandbox_job_list_seconds_count %d\n", listH.count)
+	fmt.Fprintf(w, "# HELP sandman_file_read_total File read invocations.\n# TYPE sandman_file_read_total counter\nsandman_file_read_total %d\n", readTotal)
+	fmt.Fprintf(w, "# TYPE sandman_file_read_seconds histogram\n")
+	fmt.Fprintf(w, "sandman_file_read_seconds_sum{outcome=\"success\"} %g\n", readOK.sum)
+	fmt.Fprintf(w, "sandman_file_read_seconds_count{outcome=\"success\"} %d\n", readOK.count)
+	fmt.Fprintf(w, "sandman_file_read_seconds_sum{outcome=\"error\"} %g\n", readErr.sum)
+	fmt.Fprintf(w, "sandman_file_read_seconds_count{outcome=\"error\"} %d\n", readErr.count)
+	fmt.Fprintf(w, "# HELP sandman_file_write_total File write invocations.\n# TYPE sandman_file_write_total counter\nsandman_file_write_total %d\n", writeTotal)
+	fmt.Fprintf(w, "# TYPE sandman_file_write_seconds histogram\n")
+	fmt.Fprintf(w, "sandman_file_write_seconds_sum %g\n", writeH.sum)
+	fmt.Fprintf(w, "sandman_file_write_seconds_count %d\n", writeH.count)
+	fmt.Fprintf(w, "# HELP sandman_job_list_total Job listing invocations.\n# TYPE sandman_job_list_total counter\nsandman_job_list_total %d\n", listTotal)
+	fmt.Fprintf(w, "# TYPE sandman_job_list_seconds histogram\n")
+	fmt.Fprintf(w, "sandman_job_list_seconds_sum %g\n", listH.sum)
+	fmt.Fprintf(w, "sandman_job_list_seconds_count %d\n", listH.count)
 	return nil
 }
 
@@ -775,7 +783,17 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return fmt.Errorf("fetch %s: only http(s) URLs are allowed", u)
 		}
-		if ip := net.ParseIP(parsed.Hostname()); ip != nil {
+		// The host is resolved now and every address checked, so a
+		// hostname resolving to the forbidden ranges is rejected too, not
+		// just a literal IP (a DNS-rebinding URL must not reach cloud
+		// metadata like 169.254.169.254). The dial itself re-resolves, so
+		// this is a gate for the common single-answer case, not a binding
+		// guarantee.
+		addrs, err := net.LookupIP(parsed.Hostname())
+		if err != nil {
+			return internal("fetch %s: %v", u, err)
+		}
+		for _, ip := range addrs {
 			if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 				return fmt.Errorf("fetch %s: link-local and broadcast addresses are not reachable", u)
 			}

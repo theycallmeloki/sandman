@@ -4,7 +4,7 @@ package conformance
 // name/URL rejection, auto-created empty repositories, one commit per
 // push event on the tracked branch (tree + .git/HEAD revision marker),
 // custom-name and shared-repo fan-out, branch filtering, and the
-// clone-failure path. The push receiver is the sandbox's interface choice
+// clone-failure path. The push receiver is the sandman's interface choice
 // (D-16): a POST /api/v1/git/push carries the pushed refs and the
 // revision's working tree.
 
@@ -24,7 +24,7 @@ import (
 // assertion.
 func gitTransform(side string) *client.Transform {
 	return &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd:   []string{"sh", "-c", fmt.Sprintf("cat ${%s}/.git/HEAD > ${OUT}/rev", side)},
 	}
 }

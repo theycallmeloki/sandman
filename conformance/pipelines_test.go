@@ -73,7 +73,7 @@ func TestSB129_EmptyCommitsTriggerJobsNoStdinDeadlock(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"true"}, // never reads stdin
 			Stdin: []string{"data the command never reads"},
 		},
@@ -127,7 +127,7 @@ func TestSB149_NoCommandAcceptedButFailsAtStart(t *testing.T) {
 	p := client.Pipeline{
 		Name: name,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Stdin: []string{"a stdin line"}, // no command
 		},
 		Input: &client.Input{Repo: repo, Glob: "/*"},
@@ -173,9 +173,9 @@ func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
 		p    client.Pipeline
 		want string
 	}{
-		{"git missing url", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine"}, Input: &client.Input{Git: &client.GitInput{}}}, "clone URL is missing ("},
-		{"git no .git suffix", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine"}, Input: &client.Input{Git: &client.GitInput{URL: "https://host/path"}}}, "clone URL is missing .git suffix"},
-		{"git not https", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine"}, Input: &client.Input{Git: &client.GitInput{URL: "git://host/path.git"}}}, "clone URL must use https protocol"},
+		{"git missing url", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine:3.21"}, Input: &client.Input{Git: &client.GitInput{}}}, "clone URL is missing ("},
+		{"git no .git suffix", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine:3.21"}, Input: &client.Input{Git: &client.GitInput{URL: "https://host/path"}}}, "clone URL is missing .git suffix"},
+		{"git not https", client.Pipeline{Name: uniq(t), Transform: &client.Transform{Image: "alpine:3.21"}, Input: &client.Input{Git: &client.GitInput{URL: "git://host/path.git"}}}, "clone URL must use https protocol"},
 		{"no name no transform", client.Pipeline{}, "invalid pipeline spec"},
 		{"name without transform", client.Pipeline{Name: uniq(t), Input: &client.Input{Repo: repo, Glob: "/*"}}, "transform"},
 		{"empty input", client.Pipeline{Name: uniq(t), Transform: copyTransform(repo)}, "no input set"},
@@ -318,7 +318,7 @@ func TestHyphenatedRepoName(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: name,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp ${" + env + "}/file ${OUT}/file"},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/*"},

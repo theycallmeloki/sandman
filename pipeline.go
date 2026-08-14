@@ -102,7 +102,17 @@ func validateInputSides(in *client.Input, pipelineName string) error {
 		if !shIdent.MatchString(in.Name) || in.Name == "out" {
 			return fmt.Errorf("invalid union name %q", in.Name)
 		}
+		if in.Trigger != nil && in.Trigger.SizeBytes > 0 {
+			return fmt.Errorf("size triggers are not supported on union inputs")
+		}
 		for i := range in.Union {
+			if hasSizeTrigger(&in.Union[i]) {
+				// a union member is accumulated and fired as one datum; a
+				// size trigger's accumulation branch is keyed by input
+				// position and only fires on a watched branch, semantics
+				// that do not extend to a union's merged view (SB-160)
+				return fmt.Errorf("size triggers are not supported inside union inputs")
+			}
 			if err := validateInputSides(&in.Union[i], pipelineName); err != nil {
 				return err
 			}
@@ -334,6 +344,29 @@ func validateSecrets(p client.Pipeline) error {
 		}
 	}
 	return nil
+}
+
+// hasSizeTrigger reports whether the input subtree declares a size
+// trigger: unions reject them at creation (validateInputSides), so the
+// subtree scan only ever fires in the union-rejection path.
+func hasSizeTrigger(in *client.Input) bool {
+	if in == nil {
+		return false
+	}
+	if in.Trigger != nil && in.Trigger.SizeBytes > 0 {
+		return true
+	}
+	for i := range in.Cross {
+		if hasSizeTrigger(&in.Cross[i]) {
+			return true
+		}
+	}
+	for i := range in.Union {
+		if hasSizeTrigger(&in.Union[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // externalPortTaken reports whether another live pipeline already declares

@@ -61,7 +61,7 @@ func TestSB006_UnchangedDatumsNotReprocessed(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep 10; cp -r ${%s}/* ${OUT}/", repo)},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/*"},
@@ -172,7 +172,7 @@ func TestSB011_PipelineFailureMentionsDatum(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pipe,
-		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "exit 1"}},
+		Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "exit 1"}},
 		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	})
 
@@ -211,7 +211,7 @@ func TestSB073_LargeOutputAcrossParallelWorkers(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("for i in $(seq 1 100); do touch ${OUT}/$(basename ${%s}/*)-$i; done", repo)},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
@@ -250,7 +250,7 @@ func TestSB103_SlowDatumsParallelCompleteness(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep 2; cp -r ${%s}/* ${OUT}/", repo)},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
@@ -279,7 +279,7 @@ func TestSB134_DatumTries(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image:      "alpine",
+			Image:      "alpine:3.21",
 			Cmd:        []string{"sh", "-c", "definitely-not-a-command-xyz"},
 			DatumTries: 5,
 		},
@@ -326,7 +326,7 @@ func TestSB166_ReprocessEveryJob(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("cat /sandman/view/%s/value >> ${OUT}/file", trigger)},
 		},
 		Input:     &client.Input{Repo: trigger, Glob: "/trigger-*"},
@@ -384,7 +384,7 @@ func TestD13_ChangedTransformDoesNotReprocessUnchangedDatums(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
-	tr := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cp ${" + repo + "}/file ${OUT}/file"}}
+	tr := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "cp ${" + repo + "}/file ${OUT}/file"}}
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: pipe, Transform: tr, Input: in})
 
@@ -396,7 +396,7 @@ func TestD13_ChangedTransformDoesNotReprocessUnchangedDatums(t *testing.T) {
 	// change the transform (same pipeline, update flag); the update must
 	// not invalidate the dedup memory for unchanged content
 	mustPipeline(t, client.Pipeline{
-		Name: pipe, Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cp -r ${" + repo + "}/* ${OUT}/"}}, Input: in, Update: true,
+		Name: pipe, Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "cp -r ${" + repo + "}/* ${OUT}/"}}, Input: in, Update: true,
 	})
 
 	// a new commit that does NOT touch "file": that datum's content is

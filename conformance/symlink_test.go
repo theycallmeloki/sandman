@@ -19,7 +19,7 @@ func TestSB054_SymlinkOutputs(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd: []string{"sh", "-c", fmt.Sprintf(
 				"echo buzz > /tmp/sandman-sb054-$$; "+
 					"ln -s ${%s}/foo ${OUT}/foo; "+

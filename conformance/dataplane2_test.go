@@ -51,7 +51,7 @@ func TestSB038_RecursiveDirectoryCopy(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pipe,
-		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", fmt.Sprintf("cp -r ${%s} ${OUT}/", repo)}},
+		Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", fmt.Sprintf("cp -r ${%s} ${OUT}/", repo)}},
 		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	})
 

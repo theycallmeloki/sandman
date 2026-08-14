@@ -68,7 +68,7 @@ func TestSB029_PipelineJobCounts(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: slow,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "sleep 3; cp ${" + repo2 + "}/f ${OUT}/f"},
 		},
 		Input: &client.Input{Repo: repo2, Glob: "/*"},
@@ -128,7 +128,7 @@ func TestSB047_TwentyThousandOutputFiles(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("while read n; do echo data > ${OUT}/$n; done < ${%s}/input", repo)},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/*"},

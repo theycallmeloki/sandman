@@ -128,11 +128,12 @@ func (d *daemon) stopAllCronTickers() {
 }
 
 // cronTick creates one tick commit: a file named by the tick time (UTC
-// RFC3339 — a legal path with no glob metacharacters, SB-089) in the cron
-// repository. With overwrite the previous tick's file is tombstoned so
-// the branch holds exactly one tick file.
+// RFC3339 with fractional seconds — a legal path with no glob
+// metacharacters, SB-089; the fractional part keeps a sub-second schedule
+// from writing two ticks into one filename). With overwrite the previous
+// tick's file is tombstoned so the branch holds exactly one tick file.
 func (d *daemon) cronTick(repo string, overwrite bool) {
-	name := time.Now().UTC().Format(time.RFC3339)
+	name := time.Now().UTC().Format(time.RFC3339Nano)
 	d.commitRevision(repo, defaultBranch, func(commitID string) bool {
 		if overwrite {
 			if view, err := d.store.ResolveViewByID(commitID); err == nil {

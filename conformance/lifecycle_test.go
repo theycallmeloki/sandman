@@ -289,7 +289,7 @@ func TestSB031_MidFlightJobRecordedFailedOnRestart(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
-	slow := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 15"}}
+	slow := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 15"}}
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: slow, Input: in})
 	standby := uniq(t)

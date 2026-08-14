@@ -22,7 +22,7 @@ func TestSB137_DelimitedUploadsReplicateHeader(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("for f in ${%s}/d/*; do head -1 $f | grep -qx 'HDR' || exit 1; done; cp -r ${%s}/d ${OUT}/d", repo, repo)},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/d/*"},
@@ -85,7 +85,7 @@ func TestSB138_ChangedHeaderReprocessesAll(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pipe,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: repo, Glob: "/d/*"},
 	})
 
@@ -137,8 +137,8 @@ func TestSB088_UrlIngestionJsonSpecPipelines(t *testing.T) {
 	}
 
 	// pipelines defined from JSON specs form a two-stage DAG
-	spec1 := fmt.Sprintf(`{"name": %q, "transform": {"image": "alpine"}, "input": {"repo": %q, "glob": "/*"}}`, uniq(t), repo)
-	spec2 := fmt.Sprintf(`{"name": %q, "transform": {"image": "alpine"}, "input": {"repo": %q, "glob": "/*"}}`, uniq(t), uniq(t))
+	spec1 := fmt.Sprintf(`{"name": %q, "transform": {"image": "alpine:3.21"}, "input": {"repo": %q, "glob": "/*"}}`, uniq(t), repo)
+	spec2 := fmt.Sprintf(`{"name": %q, "transform": {"image": "alpine:3.21"}, "input": {"repo": %q, "glob": "/*"}}`, uniq(t), uniq(t))
 	var p1, p2 client.Pipeline
 	if err := json.Unmarshal([]byte(spec1), &p1); err != nil {
 		t.Fatalf("spec1: %v", err)

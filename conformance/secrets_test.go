@@ -115,7 +115,7 @@ func TestSB051_SecretBinding(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd: []string{"sh", "-c",
 				"cat /sandman/secrets/foo > ${OUT}/mounted; echo ${SECRET_FOO} > ${OUT}/env"},
 			Secrets: []client.SecretMount{
@@ -152,7 +152,7 @@ func TestSB051_SecretBindingRejectsMissing(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "true"},
 			Secrets: []client.SecretMount{
 				{Name: "does-not-exist", Key: "k", EnvVar: "K"},
@@ -182,7 +182,7 @@ func TestSB051_SecretBindingSurvivesRestart(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cat /sandman/secrets/foo > ${OUT}/mounted; echo ${SECRET_FOO} > ${OUT}/env"},
 			Secrets: []client.SecretMount{
 				{Name: secretName, Key: "foo", MountPath: "/sandman/secrets", EnvVar: "SECRET_FOO"},
@@ -236,7 +236,7 @@ func TestSB051_SameMountPathMerges(t *testing.T) {
 		p := client.Pipeline{
 			Name: uniq(t),
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd: []string{"sh", "-c",
 					"cat /sandman/secrets/foo > ${OUT}/a; cat /sandman/secrets/bar > ${OUT}/b"},
 				Secrets: []client.SecretMount{
@@ -267,7 +267,7 @@ func TestSB051_SameMountPathMerges(t *testing.T) {
 		p := client.Pipeline{
 			Name: uniq(t),
 			Transform: &client.Transform{
-				Image: "alpine",
+				Image: "alpine:3.21",
 				Cmd:   []string{"sh", "-c", "true"},
 				Secrets: []client.SecretMount{
 					{Name: secretName, Key: "foo", MountPath: "/sandman/secrets"},

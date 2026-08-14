@@ -17,9 +17,21 @@ on:
   pull_request:
     branches: ["main"]
 
+# A push supersedes its own in-flight runs: parallel pushes would
+# otherwise duplicate the docker-heavy conformance suite on shared
+# runners. cancel-in-progress applies to same-ref pushes only; a PR and
+# its base branch never cancel each other.
+concurrency:
+  group: go-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -55,6 +67,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -80,11 +93,13 @@ jobs:
           cache: true
 
       # the suite's images are used with lazy docker pulls; warming the
-      # runner's cache removes pull latency from the first container runs
+      # runner's cache removes pull latency from the first container runs.
+      # Tags are pinned: a floating tag (alpine:latest) can break CI with
+      # no code change.
       - name: Prepare docker images
         run: |
-          docker pull alpine:latest
-          docker pull python:3-alpine
+          docker pull alpine:3.21
+          docker pull python:3.12-alpine
 
       - name: Conformance (${{ matrix.shard.name }})
         run: go test -timeout 45m ./conformance/ -run '${{ matrix.shard.pattern }}'
@@ -101,6 +116,7 @@ jobs:
     # conformance suite is excluded: with -race it exceeds a practical CI
     # budget.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4

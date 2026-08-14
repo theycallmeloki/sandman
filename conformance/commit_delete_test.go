@@ -16,12 +16,12 @@ func TestSB124_DeleteCommitCascadesThroughDAG(t *testing.T) {
 	p0, p1 := uniq(t), uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      p0,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	})
 	mustPipeline(t, client.Pipeline{
 		Name:      p1,
-		Transform: &client.Transform{Image: "alpine"},
+		Transform: &client.Transform{Image: "alpine:3.21"},
 		Input:     &client.Input{Repo: p0, Glob: "/*"},
 	})
 
@@ -103,7 +103,7 @@ func TestSB125_DeleteHeadSupersedesInflightJob(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "sleep $(cat ${" + repo + "}/sleep); cp ${" + repo + "}/file ${OUT}/file"},
 		},
 		Input: &client.Input{Repo: repo, Glob: "/"}, // the whole commit is one datum

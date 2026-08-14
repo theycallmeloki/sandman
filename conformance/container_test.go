@@ -97,7 +97,7 @@ func TestSB067_ResourceRequestsApplied(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: name,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "sleep 15"},
 			ResourceRequests: &client.ResourceRequests{
 				Memory: "100M",
@@ -137,7 +137,7 @@ func TestSB068_ResourceLimitsApplied(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: name,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "sleep 15"},
 			ResourceLimits: &client.ResourceLimits{
 				Memory: "100M",
@@ -164,7 +164,7 @@ func TestSB069_NoLimitsInjected(t *testing.T) {
 	name := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      name,
-		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 15"}},
+		Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 15"}},
 		Input:     &client.Input{Repo: repo, Glob: "/*"},
 	})
 	job := waitJobFor(t, name, 30*time.Second)
@@ -180,11 +180,11 @@ func TestSB070_PartialResourceSpecsAccepted(t *testing.T) {
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
 	specs := []*client.Transform{
-		{Image: "alpine", Cmd: []string{"sh", "-c", "true"},
+		{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "true"},
 			ResourceRequests: &client.ResourceRequests{Memory: "100M", CPU: 0.5}},
-		{Image: "alpine", Cmd: []string{"sh", "-c", "true"},
+		{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "true"},
 			ResourceRequests: &client.ResourceRequests{Memory: "100M"}},
-		{Image: "alpine", Cmd: []string{"sh", "-c", "true"}},
+		{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "true"}},
 	}
 	for i, tr := range specs {
 		name := fmt.Sprintf("%s-%d", uniq(t), i)
@@ -244,7 +244,7 @@ func TestSB128_UserIdentityAndWorkingDir(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd: []string{"sh", "-c",
 				fmt.Sprintf(`whoami > ${OUT}/whoami; pwd > ${OUT}/pwd; cp ${%s}/* ${OUT}/`, repo)},
 			User:    "test",
@@ -283,7 +283,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(100, 8, false)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(100, 8, false)},
 			Spout:     &client.Spout{},
 		})
 		waitSpoutCommits(t, pipe, 2)
@@ -328,7 +328,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(100, 5, false)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(100, 5, false)},
 			Spout:     &client.Spout{},
 		})
 		ch := waitSpoutCommits(t, pipe, 5)
@@ -373,7 +373,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		script := "for i in $(seq 1 5); do yes $i | head -c 100 > ${OUT}/file; sleep 1; done"
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", script}},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", script}},
 			Spout:     &client.Spout{Overwrite: true},
 		})
 		ch := waitSpoutCommits(t, pipe, 5)
@@ -391,7 +391,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(100, 8, false)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(100, 8, false)},
 			Spout:     &client.Spout{},
 		})
 		ch := waitSpoutCommits(t, pipe, 3)
@@ -424,7 +424,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(100, 5, false)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(100, 5, false)},
 			Spout:     &client.Spout{},
 		})
 		waitSpoutCommits(t, pipe, 5)
@@ -440,7 +440,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		down := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      down,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: pipe, Glob: "/*"},
 		})
 		head, err := c.HeadCommit(pipe, "master")
@@ -468,7 +468,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(100, 5, true)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(100, 5, true)},
 			Spout:     &client.Spout{Marker: "markers"},
 		})
 		waitSpoutCommits(t, pipe, 5)
@@ -500,7 +500,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		script := "for i in $(seq 1 10); do echo content-$i > ${OUT}/f$i; sleep 0.1; done; sleep 1"
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", script}},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", script}},
 			Spout:     &client.Spout{},
 		})
 		waitSpoutCommits(t, pipe, 1)
@@ -541,7 +541,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		script := "for i in $(seq 1 40); do echo x >> ${OUT}/file; sleep 0.03; done; sleep 1"
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", script}},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", script}},
 			Spout:     &client.Spout{},
 		})
 		waitSpoutCommits(t, pipe, 2)
@@ -595,7 +595,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		script := "import time\nfor i in range(1, 6):\n    open('/sandman/out/py%d' % i, 'w').write('py%d' % i)\n    time.sleep(0.3)\ntime.sleep(1)\n"
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "python:3-alpine", Cmd: []string{"python3", "-c", script}},
+			Transform: &client.Transform{Image: "python:3.12-alpine", Cmd: []string{"python3", "-c", script}},
 			Spout:     &client.Spout{},
 		})
 		waitSpoutCommits(t, pipe, 3)
@@ -628,7 +628,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		mustRepo(t, repo)
 		bad := client.Pipeline{
 			Name:      uniq(t),
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: repo, Glob: "/*"},
 			Spout:     &client.Spout{},
 		}
@@ -639,7 +639,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		}
 		badMarker := client.Pipeline{
 			Name:      uniq(t),
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Spout:     &client.Spout{Marker: "bad*name"},
 		}
 		if err := c.CreatePipeline(badMarker); err == nil {
@@ -655,7 +655,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(50, 6, false)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(50, 6, false)},
 			Spout:     &client.Spout{},
 		})
 		ch := waitSpoutCommits(t, pipe, 3)
@@ -670,7 +670,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		}
 		// a plain update starts a new epoch: the new spec commit anchors
 		// the new commits' provenance
-		updateSpout(t, pipe, &client.Transform{Image: "alpine", Cmd: spoutCmd(50, 6, false)}, &client.Spout{}, false)
+		updateSpout(t, pipe, &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(50, 6, false)}, &client.Spout{}, false)
 		ch2 := waitSpoutCommits(t, pipe, 6)
 		next := ch2[3:] // the commits after the update
 		if len(next) != 3 {
@@ -692,7 +692,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: markerCmd(2)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: markerCmd(2)},
 			Spout:     &client.Spout{Marker: "markers"},
 		})
 		epoch1 := markerHeadContent(t, pipe, 2)
@@ -701,14 +701,14 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		}
 		// a plain update restarts the spout but keeps the marker state:
 		// the marker continues accumulating from its previous content
-		updateSpout(t, pipe, &client.Transform{Image: "alpine", Cmd: markerCmd(2)}, &client.Spout{Marker: "markers"}, false)
+		updateSpout(t, pipe, &client.Transform{Image: "alpine:3.21", Cmd: markerCmd(2)}, &client.Spout{Marker: "markers"}, false)
 		acc := markerHeadContent(t, pipe, 4)
 		if strings.Count(acc, "\n") != 4 || !strings.HasPrefix(acc, epoch1) {
 			t.Fatalf("marker after plain update = %q, want it to continue from %q", acc, epoch1)
 		}
 		// a reprocess update resets the marker state: the new epoch's
 		// marker no longer reflects the previous content
-		updateSpout(t, pipe, &client.Transform{Image: "alpine", Cmd: markerCmd(2)}, &client.Spout{Marker: "markers"}, true)
+		updateSpout(t, pipe, &client.Transform{Image: "alpine:3.21", Cmd: markerCmd(2)}, &client.Spout{Marker: "markers"}, true)
 		ep2 := markerHeadContent(t, pipe, 6)
 		if strings.Count(ep2, "\n") != 2 || strings.Contains(ep2, epoch1) {
 			t.Fatalf("marker after reprocess update = %q, want fresh state without %q", ep2, epoch1)
@@ -720,7 +720,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: spoutCmd(100, 5, false)},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: spoutCmd(100, 5, false)},
 			Spout:     &client.Spout{},
 		})
 		ch := waitSpoutCommits(t, pipe, 5)
@@ -734,7 +734,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		down := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      down,
-			Transform: &client.Transform{Image: "alpine"},
+			Transform: &client.Transform{Image: "alpine:3.21"},
 			Input:     &client.Input{Repo: pipe, Glob: "/*"},
 		})
 		head, err := c.HeadCommit(pipe, "master")
@@ -822,7 +822,7 @@ func TestSB167_PlacementLabels(t *testing.T) {
 		Input:     &client.Input{Repo: r, Glob: "/*"},
 		Placement: "gpu",
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "cp /sandman/in/" + r + "/file /sandman/out/file && echo $HOSTNAME > /sandman/out/host"},
 		},
 	})
@@ -928,7 +928,7 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 	// full second — a near-instant transform can complete between the
 	// commit and the first docker ps, and the D-01 wake assertion is
 	// about the container existing while the job runs
-	wake := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 2; cp -r ${" + repo + "}/* ${OUT}/"}}
+	wake := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 2; cp -r ${" + repo + "}/* ${OUT}/"}}
 	mustPipeline(t, client.Pipeline{Name: pipe, Standby: true, Transform: wake, Input: &client.Input{Repo: repo, Glob: "/*"}})
 	pollFor(t, "idle in standby", 30*time.Second, func() bool {
 		return standbyState(t, pipe) == "standby"
@@ -963,7 +963,7 @@ func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
 	})
 }
 
-// sandmanContainerCount counts RUNNING sandbox containers (docker ps, not
+// sandmanContainerCount counts RUNNING sandman containers (docker ps, not
 // -a: exited ones are removed by --rm; a standing execution participant
 // is a running container).
 func sandmanContainerCount() int {
@@ -991,7 +991,7 @@ func TestD15_UnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: name,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "true"},
 			ResourceLimits: &client.ResourceLimits{
 				Memory: "1000000000000b", // 1TB: beyond any host's RAM
@@ -1050,7 +1050,7 @@ func TestServiceLocalContainerReachable(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "python:3-alpine",
+			Image: "python:3.12-alpine",
 			Cmd:   []string{"sh", "-c", "cd /sandman/in && exec python3 -m http.server 8001"},
 		},
 		Parallelism: &client.Parallelism{Constant: 1},

@@ -176,7 +176,7 @@ func TestFS5_JobSamePathDatumConcat(t *testing.T) {
 		pipe := uniq(t)
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "for f in ${in}/*; do cat \"$f\" >> ${OUT}/merged; done"}},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "for f in ${in}/*; do cat \"$f\" >> ${OUT}/merged; done"}},
 			Input:     &client.Input{Name: "in", Repo: repo, Glob: "/*"},
 		})
 		head, err := c.HeadCommit(repo, "master")
@@ -204,7 +204,7 @@ func TestFS5_JobSamePathDatumConcat(t *testing.T) {
 		// the job's assembled output has a file and a dir at the same path
 		mustPipeline(t, client.Pipeline{
 			Name:      pipe,
-			Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "case \"$(ls ${in})\" in a) echo a > ${OUT}/x;; b) mkdir -p ${OUT}/x && echo b > ${OUT}/x/y;; esac"}},
+			Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "case \"$(ls ${in})\" in a) echo a > ${OUT}/x;; b) mkdir -p ${OUT}/x && echo b > ${OUT}/x/y;; esac"}},
 			Input:     &client.Input{Name: "in", Repo: repo, Glob: "/*"},
 		})
 		head, err := c.HeadCommit(repo, "master")
@@ -250,7 +250,7 @@ func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
 		in := &client.Input{Name: "in", Repo: repo, Glob: "/*"}
 		// each datum truncate-writes its input's content to one shared
 		// path — the transform's ">" contract at the branch level
-		writeIn := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "cat ${in}/* > ${OUT}/ver.txt"}}
+		writeIn := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "cat ${in}/* > ${OUT}/ver.txt"}}
 		mustPipeline(t, client.Pipeline{Name: pipe, Transform: writeIn, Input: in})
 		cm1 := commitFiles(t, repo, "master", map[string]string{"f1": "v1"})
 		jobs := flushOK(t, cm1.ID)
@@ -262,7 +262,7 @@ func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
 		// new transform — the fresh write must replace the stale carried
 		// content, not append to it (the pre-fix merge concatenated the
 		// old-transform "v1" under the new transform's write: v1 -> v1v3)
-		literal := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "echo v3 > ${OUT}/ver.txt"}}
+		literal := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "echo v3 > ${OUT}/ver.txt"}}
 		mustUpdate(t, pipe, literal, in, false)
 		cm2 := commitFiles(t, repo, "master", map[string]string{"f2": "x"})
 		jobs = flushOK(t, cm2.ID)
@@ -392,7 +392,7 @@ func TestFS9_MidCommitVisibility(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name:      pipe,
-		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", fmt.Sprintf("cp -r ${%s}/* ${OUT}/ && sleep 5", repo2)}},
+		Transform: &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", fmt.Sprintf("cp -r ${%s}/* ${OUT}/ && sleep 5", repo2)}},
 		Input:     &client.Input{Repo: repo2, Glob: "/*"},
 	})
 	head, err := c.HeadCommit(repo2, "master")

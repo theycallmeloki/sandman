@@ -61,7 +61,8 @@ func clientRun(node, state, image string, env, argv []string) {
 	if err != nil {
 		die(fmt.Sprintf("%s: %v", node, err), 1)
 	}
-	defer conn.Close()
+	// every terminal path below exits the process (die/os.Exit), so a
+	// defer would never run; the EXIT path closes the connection itself
 	r := bufio.NewReader(conn)
 	w := bufio.NewWriter(conn)
 
@@ -148,6 +149,7 @@ func clientRun(node, state, image string, env, argv []string) {
 			}
 		case "EXIT":
 			code, _ := strconv.Atoi(payload)
+			conn.Close()
 			os.Exit(code)
 		case "ERR":
 			die(payload, 1)

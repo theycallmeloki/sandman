@@ -26,7 +26,7 @@ func standbyTransform(inputName string) *client.Transform {
 // in a standby chain produces empty views downstream.
 func chainTransform(inputName string) *client.Transform {
 	return &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd:   []string{"sh", "-c", fmt.Sprintf("cp -r ${%s}/. ${OUT}/", inputName)},
 	}
 }

@@ -21,7 +21,7 @@ func TestSB123_QueueSerializes(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "sleep 600"},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
@@ -120,7 +120,7 @@ func TestSB121_BurstManyPipelines(t *testing.T) {
 		names = append(names, name)
 		mustPipeline(t, client.Pipeline{
 			Name:        name,
-			Transform:   &client.Transform{Image: "alpine"}, // default entry point: fast copy
+			Transform:   &client.Transform{Image: "alpine:3.21"}, // default entry point: fast copy
 			Input:       &client.Input{Repo: repo, Glob: "/*"},
 			Parallelism: &client.Parallelism{Constant: 1},
 		})

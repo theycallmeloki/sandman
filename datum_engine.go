@@ -1003,7 +1003,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		req.MemoryReservation = tr.ResourceRequests.Memory
 		if tr.ResourceRequests.CPU > 0 && req.CPU == 0 {
 			// docker expresses a CPU request only as an allocation; a
-			// request without a limit sets it (SB-068, sandbox deviation)
+			// request without a limit sets it (SB-068, sandman deviation)
 			req.CPU = tr.ResourceRequests.CPU
 		}
 	}

@@ -13,7 +13,7 @@ import (
 
 // sleepTransform sleeps for the given seconds (keeps jobs in flight).
 func sleepTransform(secs int) *client.Transform {
-	return &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep " + strconv.Itoa(secs)}}
+	return &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep " + strconv.Itoa(secs)}}
 }
 
 // pipelineGone polls until the pipeline disappears from listing.
@@ -322,7 +322,7 @@ func TestSB146_SurvivesDeletedOutputRepo(t *testing.T) {
 	mustRepo(t, repo)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "1"})
 	name := uniq(t)
-	slow := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 5; cp -r ${" + repo + "}/* ${OUT}/"}}
+	slow := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 5; cp -r ${" + repo + "}/* ${OUT}/"}}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: slow, Input: &client.Input{Repo: repo, Glob: "/*"}})
 	flushOK(t, cm1.ID)
 

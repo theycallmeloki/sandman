@@ -20,7 +20,7 @@ func hist(n int) *int { return &n }
 // echoTransform writes content into the output as file "file".
 func echoTransform(content string) *client.Transform {
 	return &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd:   []string{"sh", "-c", fmt.Sprintf("echo -n %s > ${OUT}/file", shq(content))},
 	}
 }
@@ -78,7 +78,7 @@ func TestSB032_UpdatePipelineWithOnlyFailedJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
-	exit1 := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "exit 1"}}
+	exit1 := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "exit 1"}}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: exit1, Input: &client.Input{Repo: repo, Glob: "/*"}})
 	commitFiles(t, repo, "master", map[string]string{"file": "x"})
 	job := waitJobFor(t, name, 30*time.Second)
@@ -100,7 +100,7 @@ func TestSB033_AcceptReturnCode(t *testing.T) {
 	mustRepo(t, repo)
 	name := uniq(t)
 	tr := &client.Transform{
-		Image:            "alpine",
+		Image:            "alpine:3.21",
 		Cmd:              []string{"sh", "-c", "echo -n ok > ${OUT}/file; exit 1"},
 		AcceptReturnCode: 1,
 	}
@@ -190,7 +190,7 @@ func TestSB041_UpdateFinalizesPendingWork(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
-	slow := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 5"}}
+	slow := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 5"}}
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: slow, Input: in})
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -308,7 +308,7 @@ func TestSB045_UpdateKillsInFlight(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
-	sleep1000 := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 1000"}}
+	sleep1000 := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 1000"}}
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: sleep1000, Input: in})
 	commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -343,7 +343,7 @@ func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
-	exit1 := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "exit 1"}}
+	exit1 := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "exit 1"}}
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: exit1, Input: in})
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -356,7 +356,7 @@ func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
 		t.Fatalf("after settle: got %d jobs, want exactly 1 failed", len(js))
 	}
 
-	fixed := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "echo -n bar > ${OUT}/file"}}
+	fixed := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "echo -n bar > ${OUT}/file"}}
 	mustUpdate(t, name, fixed, in, false) // no reprocess flag
 	if jobs, err := c.Flush(cm.ID, 60*time.Second); err != nil {
 		// diagnostic for the CI-only hang: show every job of the pipeline
@@ -404,7 +404,7 @@ func TestSB136_VersionAncestry(t *testing.T) {
 	name := uniq(t)
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	for i := 0; i < 5; i++ {
-		tr := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", fmt.Sprintf("echo %d > ${OUT}/file", i)}}
+		tr := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", fmt.Sprintf("echo %d > ${OUT}/file", i)}}
 		if i == 0 {
 			mustPipeline(t, client.Pipeline{Name: name, Transform: tr, Input: in, Update: true})
 		} else {

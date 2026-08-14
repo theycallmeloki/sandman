@@ -33,7 +33,7 @@ var (
 )
 
 func defaultAddr() string {
-	if a := os.Getenv("SANDBOX_ADDR"); a != "" {
+	if a := os.Getenv("SANDMAN_ADDR"); a != "" {
 		return a
 	}
 	return "127.0.0.1:" + strconv.Itoa(DefaultPort)
@@ -99,7 +99,7 @@ func usage() {
 usage: sandman [flags] <verb> [flags]
 
 global flags:
-  -addr <host:port>   control-plane address (default $SANDBOX_ADDR or 127.0.0.1:4242)
+  -addr <host:port>   control-plane address (default $SANDMAN_ADDR or 127.0.0.1:4242)
 
 verbs:
   daemon              run the node side (advertises via mDNS, serves jobs)

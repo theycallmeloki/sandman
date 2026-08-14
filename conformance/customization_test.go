@@ -26,22 +26,22 @@ func TestSB072_RejectsMalformedCustomization(t *testing.T) {
 	}{
 		{"bad spec", client.Pipeline{
 			Name:      uniq(t),
-			Transform: &client.Transform{Image: "alpine", PodSpec: "not json"},
+			Transform: &client.Transform{Image: "alpine:3.21", PodSpec: "not json"},
 			Input:     &client.Input{Repo: repo, Glob: "/"},
 		}, "not valid JSON"},
 		{"bad patch", client.Pipeline{
 			Name:      uniq(t),
-			Transform: &client.Transform{Image: "alpine", PodPatch: "{not json"},
+			Transform: &client.Transform{Image: "alpine:3.21", PodPatch: "{not json"},
 			Input:     &client.Input{Repo: repo, Glob: "/"},
 		}, "not valid JSON"},
 		{"unknown key", client.Pipeline{
 			Name:      uniq(t),
-			Transform: &client.Transform{Image: "alpine", PodSpec: `{"bogus": 1}`},
+			Transform: &client.Transform{Image: "alpine:3.21", PodSpec: `{"bogus": 1}`},
 			Input:     &client.Input{Repo: repo, Glob: "/"},
 		}, "unknown customization key"},
 		{"two sources", client.Pipeline{
 			Name: uniq(t),
-			Transform: &client.Transform{Image: "alpine",
+			Transform: &client.Transform{Image: "alpine:3.21",
 				PodPatch: `[{"op":"add","path":"/volumes/v0","value":{"hostPath":"/x","emptyDir":true}}]`},
 			Input: &client.Input{Repo: repo, Glob: "/"},
 		}, "exactly one source kind"},
@@ -68,7 +68,7 @@ func TestSB072_AppliesCustomization(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", "echo ${CUSTOM_SPEC}:${CUSTOM_PATCH} > ${OUT}/envs"},
 			// the full spec sets one env var; the patch adds another
 			PodSpec:  `{"env": {"CUSTOM_SPEC": "specval"}}`,
@@ -100,7 +100,7 @@ func TestSB152_PodPatchVolume(t *testing.T) {
 	p := client.Pipeline{
 		Name: uniq(t),
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd: []string{"sh", "-c",
 				"echo written > /sandman/volumes/vol0/note; cp ${" + repo + "}/file ${OUT}/file"},
 			PodPatch: `[{"op":"add","path":"/volumes/vol0","value":{"hostPath":"` + dst + `"}}]`,

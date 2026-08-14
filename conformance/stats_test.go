@@ -20,7 +20,7 @@ func statsCopy(repo string, sleep string) *client.Transform {
 		return copyTransform(repo)
 	}
 	return &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep %s; cp -r ${%s}/* ${OUT}/", sleep, repo)},
 	}
 }
@@ -199,7 +199,7 @@ func TestSB082_FailedDatumsListedFirst(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("if [ -f ${%s}/file-5 ]; then exit 1; fi; cp -r ${%s}/* ${OUT}/", repo, repo)},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
@@ -247,7 +247,7 @@ func TestSB083_PaginatedDatumListing(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("if [ -f ${%s}/file-5 ]; then exit 1; fi; cp -r ${%s}/* ${OUT}/", repo, repo)},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
@@ -473,7 +473,7 @@ func TestSB113_DatumTimeoutRecorded(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image:        "alpine",
+			Image:        "alpine:3.21",
 			Cmd:          []string{"sh", "-c", "sleep 1000"},
 			DatumTimeout: "20s",
 		},
@@ -527,7 +527,7 @@ func TestSB114_ListDatumDuringJob(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image:        "alpine",
+			Image:        "alpine:3.21",
 			Cmd:          []string{"sh", "-c", "sleep 1000"},
 			DatumTimeout: "20s",
 		},
@@ -567,7 +567,7 @@ func TestSB041_StatsSurviveUpdate(t *testing.T) {
 	mustRepo(t, repo)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "x"})
 	pipe := uniq(t)
-	tr := &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "sleep 1; cp ${" + repo + "}/file ${OUT}/file"}}
+	tr := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "sleep 1; cp ${" + repo + "}/file ${OUT}/file"}}
 	in := &client.Input{Repo: repo, Glob: "/*"}
 	mustPipeline(t, client.Pipeline{Name: pipe, Transform: tr, Input: in, EnableStats: true})
 

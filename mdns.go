@@ -106,6 +106,10 @@ func (r *registry) mergeMdns(e *zeroconf.ServiceEntry) {
 }
 
 // mdnsLookup resolves one instance name to host:port with a short browse.
+// An explicit addr TXT record (a worker's -advertise) wins over the
+// browse's interface address, mirroring mergeMdns: the interface address
+// can be loopback or a docker bridge, which would make the caller dial
+// the wrong host.
 func mdnsLookup(name string, timeout time.Duration) string {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -113,6 +117,9 @@ func mdnsLookup(name string, timeout time.Duration) string {
 	go browse(ctx, ch)
 	for e := range ch {
 		if e.Instance == name {
+			if addr := textValue(e.Text, "addr"); addr != "" {
+				return addr
+			}
 			if ip := firstAddr(e); ip != "" {
 				return net.JoinHostPort(ip, strconv.Itoa(e.Port))
 			}

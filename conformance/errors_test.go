@@ -34,7 +34,7 @@ func TestSB012_ErrorHandlingCommands(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image:  "alpine",
+			Image:  "alpine:3.21",
 			Cmd:    primary(repo),
 			ErrCmd: recoverFile3(repo),
 		},
@@ -61,7 +61,7 @@ func TestSB012_ErrorHandlingCommands(t *testing.T) {
 	// recovered/failed datums under the new definition; file1 (unchanged,
 	// successful) is skipped
 	mustUpdate(t, pipe, &client.Transform{
-		Image:  "alpine",
+		Image:  "alpine:3.21",
 		Cmd:    primary(repo),
 		ErrCmd: []string{"sh", "-c", "true"},
 	}, &client.Input{Repo: repo, Glob: "/*"}, false)
@@ -90,7 +90,7 @@ func TestSB012_ErrorHandlingCommands(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe2,
 		Transform: &client.Transform{
-			Image:  "alpine",
+			Image:  "alpine:3.21",
 			Cmd:    []string{"sh", "-c", "exit 1"},
 			ErrCmd: []string{"sh", "-c", "true"},
 		},
@@ -112,7 +112,7 @@ func TestSB012_ErrorHandlingCommands(t *testing.T) {
 	// previously recovered datum is processed, not skipped, because its
 	// outcome was not a clean success
 	mustUpdate(t, pipe2, &client.Transform{
-		Image: "alpine",
+		Image: "alpine:3.21",
 		Cmd:   []string{"sh", "-c", "true"},
 	}, &client.Input{Repo: repo2, Glob: "/*"}, false)
 	jobs, err = c.Flush(cm2.ID, 60*time.Second)
@@ -139,7 +139,7 @@ func TestSB115_DatumTimeoutControl(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image:        "alpine",
+			Image:        "alpine:3.21",
 			Cmd:          []string{"sh", "-c", fmt.Sprintf("sleep 10; cp -r ${%s}/* ${OUT}/", repo)},
 			DatumTimeout: "20s",
 		},
@@ -167,7 +167,7 @@ func TestSB116_JobTimeout(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image:      "alpine",
+			Image:      "alpine:3.21",
 			Cmd:        []string{"sh", "-c", "sleep 20"},
 			JobTimeout: "20s",
 		},

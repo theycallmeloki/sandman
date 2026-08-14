@@ -88,7 +88,7 @@ func TestSB097_MaxQueueSize(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep 5; cp -r ${%s}/* ${OUT}/", repo)},
 		},
 		Input:        &client.Input{Repo: repo, Glob: "/*"},
@@ -138,7 +138,7 @@ func TestSB165_AutoscalingRampsToDatumCount(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep 5; cp -r ${%s}/* ${OUT}/", repo)},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
@@ -194,7 +194,7 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			// the datums wait on a shared release file (the job's /tmp
 			// mount), so the both-running window is unbounded — a fixed
 			// sleep could be missed under full-suite docker load
@@ -277,7 +277,7 @@ func TestSB065_UseMultipleWorkers(t *testing.T) {
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,
 		Transform: &client.Transform{
-			Image: "alpine",
+			Image: "alpine:3.21",
 			Cmd:   []string{"sh", "-c", fmt.Sprintf("sleep 3; cp -r ${%s}/* ${OUT}/", repo)},
 		},
 		Input:       &client.Input{Repo: repo, Glob: "/*"},
