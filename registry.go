@@ -79,13 +79,17 @@ func (r *registry) loadStatic() error {
 	return nil
 }
 
-// prune drops mdns peers that have gone silent. Static peers never expire.
+// prune drops mdns and gossip (sync) peers that have gone silent. Static
+// peers never expire. Sync peers are as ephemeral as mdns peers — a
+// gossip-merged peer whose registry stops refreshing its row is a ghost
+// (observed: conformance daemons merged via NODES pulls outliving their
+// processes in the fleet view).
 func (r *registry) prune() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
 	for k, p := range r.peers {
-		if p.Source == "mdns" && now.Sub(p.LastSeen) > mdnsStale {
+		if p.Source != "static" && now.Sub(p.LastSeen) > mdnsStale {
 			delete(r.peers, k)
 		}
 	}
