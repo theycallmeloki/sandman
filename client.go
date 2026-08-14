@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"sandman/internal/cli"
 )
 
 // die is the CLI's fatal-error exit: print the message to stderr and
@@ -161,7 +163,7 @@ func clientRun(node, state, image string, env, argv []string) {
 // browse, so it works on any machine, node or not.
 func clientNodes(state string) {
 	nodes := fleet(state, true)
-	fmt.Printf("%-24s %-22s %-8s %-8s %-8s %s\n", "NAME", "ADDR", "DOCKER", "ROLE", "VERSION", "SOURCE")
+	rows := make([][]string, 0, len(nodes))
 	for _, n := range nodes {
 		role := n.Role
 		if role == "" {
@@ -171,6 +173,10 @@ func clientNodes(state string) {
 		if ver == "" {
 			ver = "-"
 		}
-		fmt.Printf("%-24s %-22s %-8s %-8s %-8s %s\n", n.Name, n.Addr, n.Docker, role, ver, n.Source)
+		rows = append(rows, []string{n.Name, n.Addr, n.Docker, role, ver, n.Source})
+	}
+	cli.RenderTable([]string{"NAME", "ADDR", "DOCKER", "ROLE", "VERSION", "SOURCE"}, rows)
+	if len(rows) == 0 {
+		fmt.Println("no nodes")
 	}
 }

@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"sandman/client"
 	"sandman/internal/store"
 )
@@ -90,23 +91,119 @@ func Commands() []*cobra.Command {
 	return cmds
 }
 
-// table prints an aligned table with an uppercase header row via
-// tabwriter (empty row sets print nothing — the caller prints the
-// empty-state message instead).
+// table prints an aligned table with an uppercase header row (empty row sets
+// print nothing — the caller prints the empty-state message instead).
 func table(header []string, rows [][]string) {
+	RenderTable(header, rows)
+}
+
+// RenderTable prints list output with terminal-aware column sizing. Redirected
+// output stays complete for scripts; interactive terminals get columns fitted
+// to the available width.
+func RenderTable(header []string, rows [][]string) {
 	if len(rows) == 0 {
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 4, 8, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, strings.Join(header, "\t")); err != nil {
-		return
-	}
-	for _, r := range rows {
-		if _, err := fmt.Fprintln(w, strings.Join(r, "\t")); err != nil {
-			return
+	widths := tableWidths(header, rows)
+	tty := term.IsTerminal(int(os.Stdout.Fd()))
+	if tty {
+		if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
+			fitWidths(widths, width)
 		}
 	}
-	_ = w.Flush()
+	printTableRow(header, widths, tty)
+	for _, r := range rows {
+		printTableRow(r, widths, tty)
+	}
+}
+
+func tableWidths(header []string, rows [][]string) []int {
+	widths := make([]int, len(header))
+	for i, h := range header {
+		widths[i] = runewidth.StringWidth(h)
+	}
+	for _, row := range rows {
+		for i := range widths {
+			if i < len(row) {
+				widths[i] = max(widths[i], runewidth.StringWidth(row[i]))
+			}
+		}
+	}
+	return widths
+}
+
+func fitWidths(widths []int, termWidth int) {
+	if len(widths) == 0 {
+		return
+	}
+	const gap = 2
+	minWidth := 4
+	if termWidth < 64 {
+		minWidth = 3
+	}
+	for tableWidth(widths, gap) > termWidth {
+		widest := -1
+		for i, w := range widths {
+			if w > minWidth && (widest < 0 || w > widths[widest]) {
+				widest = i
+			}
+		}
+		if widest < 0 {
+			return
+		}
+		widths[widest]--
+	}
+}
+
+func tableWidth(widths []int, gap int) int {
+	total := 0
+	for i, w := range widths {
+		if i > 0 {
+			total += gap
+		}
+		total += w
+	}
+	return total
+}
+
+func printTableRow(row []string, widths []int, truncate bool) {
+	for i, width := range widths {
+		if i > 0 {
+			fmt.Print("  ")
+		}
+		value := ""
+		if i < len(row) {
+			value = row[i]
+		}
+		if truncate {
+			value = fitString(value, width)
+		}
+		fmt.Print(value)
+		if i < len(widths)-1 {
+			fmt.Print(strings.Repeat(" ", max(0, width-runewidth.StringWidth(value))))
+		}
+	}
+	fmt.Println()
+}
+
+func fitString(s string, width int) string {
+	if runewidth.StringWidth(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return strings.Repeat(".", max(0, width))
+	}
+	return runewidth.Truncate(s, width, "...")
+}
+
+func detail(rows ...[2]string) {
+	labelWidth := 0
+	for _, row := range rows {
+		labelWidth = max(labelWidth, runewidth.StringWidth(row[0]))
+	}
+	for _, row := range rows {
+		fmt.Printf("%s%s : %s\n", row[0], strings.Repeat(" ", max(0, labelWidth-runewidth.StringWidth(row[0]))), row[1])
+	}
 }
 
 // humanSize renders a byte count for humans (42 B, 1.5 KB, 3.2 MB).
@@ -286,9 +383,11 @@ func newRepoCmd() *cobra.Command {
 				if err != nil {
 					die("repo inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-10s : %s\n", "name", r.Name)
-				fmt.Printf("%-10s : %s\n", "size", HumanSize(r.SizeBytes))
-				fmt.Printf("%-10s : %s\n", "branches", strings.Join(r.Branches, ", "))
+				detail(
+					[2]string{"name", r.Name},
+					[2]string{"size", HumanSize(r.SizeBytes)},
+					[2]string{"branches", strings.Join(r.Branches, ", ")},
+				)
 			},
 		},
 	)
@@ -380,11 +479,13 @@ func newCommitCmd() *cobra.Command {
 				if err != nil {
 					die("commit inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-10s : %s\n", "id", cm.ID)
-				fmt.Printf("%-10s : %s\n", "repo", cm.Repo)
-				fmt.Printf("%-10s : %s\n", "branch", cm.Branch)
-				fmt.Printf("%-10s : %t\n", "started", cm.Started)
-				fmt.Printf("%-10s : %t\n", "finished", cm.Finished)
+				detail(
+					[2]string{"id", cm.ID},
+					[2]string{"repo", cm.Repo},
+					[2]string{"branch", cm.Branch},
+					[2]string{"started", fmt.Sprintf("%t", cm.Started)},
+					[2]string{"finished", fmt.Sprintf("%t", cm.Finished)},
+				)
 			},
 		},
 		&cobra.Command{
@@ -434,9 +535,11 @@ func newBranchCmd() *cobra.Command {
 				if err != nil {
 					die("branch inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-10s : %s\n", "repo", b.Repo)
-				fmt.Printf("%-10s : %s\n", "branch", b.Branch)
-				fmt.Printf("%-10s : %s\n", "head", b.Head)
+				detail(
+					[2]string{"repo", b.Repo},
+					[2]string{"branch", b.Branch},
+					[2]string{"head", b.Head},
+				)
 			},
 		},
 		&cobra.Command{
@@ -631,8 +734,10 @@ func newFileCmd() *cobra.Command {
 				if err != nil {
 					die("file inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-10s : %s\n", "path", path)
-				fmt.Printf("%-10s : %s\n", "size", HumanSize(uint64(len(data))))
+				detail(
+					[2]string{"path", path},
+					[2]string{"size", HumanSize(uint64(len(data)))},
+				)
 			},
 		},
 		&cobra.Command{
@@ -779,18 +884,21 @@ func newJobCmd() *cobra.Command {
 				if err != nil {
 					die("job inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-13s : %s\n", "id", j.ID)
-				fmt.Printf("%-13s : %s\n", "pipeline", j.Pipeline)
-				fmt.Printf("%-13s : %s\n", "state", j.State)
-				fmt.Printf("%-13s : %s\n", "reason", j.Reason)
-				fmt.Printf("%-13s : %s\n", "outputCommit", j.OutputCommit)
-				fmt.Printf("%-13s : %d\n", "processed", j.Processed)
-				fmt.Printf("%-13s : %d\n", "recovered", j.Recovered)
-				fmt.Printf("%-13s : %d\n", "failed", j.Failed)
-				fmt.Printf("%-13s : %d\n", "skipped", j.Skipped)
-				if j.StatsCommit != "" {
-					fmt.Printf("%-13s : %s\n", "statsCommit", j.StatsCommit)
+				rows := [][2]string{
+					{"id", j.ID},
+					{"pipeline", j.Pipeline},
+					{"state", j.State},
+					{"reason", j.Reason},
+					{"outputCommit", j.OutputCommit},
+					{"processed", fmt.Sprintf("%d", j.Processed)},
+					{"recovered", fmt.Sprintf("%d", j.Recovered)},
+					{"failed", fmt.Sprintf("%d", j.Failed)},
+					{"skipped", fmt.Sprintf("%d", j.Skipped)},
 				}
+				if j.StatsCommit != "" {
+					rows = append(rows, [2]string{"statsCommit", j.StatsCommit})
+				}
+				detail(rows...)
 			},
 		},
 		&cobra.Command{
@@ -856,11 +964,13 @@ func newDatumCmd() *cobra.Command {
 				if err != nil {
 					die("datum inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-10s : %s\n", "id", d.ID)
-				fmt.Printf("%-10s : %s\n", "state", d.State)
-				fmt.Printf("%-10s : %s\n", "reason", d.Reason)
-				fmt.Printf("%-10s : %s\n", "started", d.Started)
-				fmt.Printf("%-10s : %s\n", "finished", d.Finished)
+				detail(
+					[2]string{"id", d.ID},
+					[2]string{"state", d.State},
+					[2]string{"reason", d.Reason},
+					[2]string{"started", d.Started},
+					[2]string{"finished", d.Finished},
+				)
 			},
 		},
 		&cobra.Command{
@@ -969,10 +1079,12 @@ func newPipelineCmd() *cobra.Command {
 				if err != nil {
 					die("pipeline inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-10s : %s\n", "name", p.Name)
-				fmt.Printf("%-10s : %s\n", "state", p.State)
-				fmt.Printf("%-10s : %d\n", "version", p.Version)
-				fmt.Printf("%-10s : %s\n", "reason", p.Reason)
+				detail(
+					[2]string{"name", p.Name},
+					[2]string{"state", p.State},
+					[2]string{"version", fmt.Sprintf("%d", p.Version)},
+					[2]string{"reason", p.Reason},
+				)
 			},
 		},
 		pdel,
@@ -1201,9 +1313,11 @@ func newSecretCmd() *cobra.Command {
 				if err != nil {
 					die("secret inspect: "+err.Error(), 1)
 				}
-				fmt.Printf("%-10s : %s\n", "name", s.Name)
-				fmt.Printf("%-10s : %s\n", "type", s.Type)
-				fmt.Printf("%-10s : %s\n", "created", s.Created)
+				detail(
+					[2]string{"name", s.Name},
+					[2]string{"type", s.Type},
+					[2]string{"created", s.Created},
+				)
 			},
 		},
 		&cobra.Command{
