@@ -12,7 +12,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB089_CronInputs(t *testing.T) {
+func TestCronInputs(t *testing.T) {
 	t.Run("scheduled ticks accumulate", func(t *testing.T) {
 		pipe, down := uniq(t), uniq(t)
 		mustPipeline(t, client.Pipeline{
@@ -269,11 +269,11 @@ func waitCronTicks(t *testing.T, cronRepo string, n int, timeout time.Duration) 
 	return newest
 }
 
-// TestSB133_CronCadenceSurvivesUpdates — a cron pipeline's cadence
+// TestCronCadenceSurvivesUpdates — a cron pipeline's cadence
 // survives rapid spec updates: the ticks keep their interval, with no
 // bursts and no stalls. Scaled from the reference's 5-minute window to
 // three ticks before and three after a burst of 20 updates.
-func TestSB133_CronCadenceSurvivesUpdates(t *testing.T) {
+func TestCronCadenceSurvivesUpdates(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{
 		Name: pipe,

@@ -16,7 +16,7 @@ func spaceBinary(i int) string {
 	return fmt.Sprintf("%4s", fmt.Sprintf("%b", i))
 }
 
-func TestSB074_JoinInputPairsByKey(t *testing.T) {
+func TestJoinInputPairsByKey(t *testing.T) {
 	r0, r1 := uniq(t)+"0", uniq(t)+"1"
 	mustRepo(t, r0)
 	mustRepo(t, r1)
@@ -65,7 +65,7 @@ func TestSB074_JoinInputPairsByKey(t *testing.T) {
 	}
 }
 
-func TestSB075_OuterJoinKeepsUnmatchedOuterOnly(t *testing.T) {
+func TestOuterJoinKeepsUnmatchedOuterOnly(t *testing.T) {
 	r0, r1 := uniq(t)+"0", uniq(t)+"1"
 	mustRepo(t, r0)
 	mustRepo(t, r1)
@@ -119,7 +119,7 @@ func TestSB075_OuterJoinKeepsUnmatchedOuterOnly(t *testing.T) {
 	}
 }
 
-func TestSB076_GroupInputs(t *testing.T) {
+func TestGroupInputs(t *testing.T) {
 	t.Run("single input grouping", func(t *testing.T) {
 		repo := uniq(t)
 		mustRepo(t, repo)

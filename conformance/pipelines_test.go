@@ -8,9 +8,9 @@ import (
 	"sandman/client"
 )
 
-// SB-039 — pipeline names are unique; duplicate creation without update is
+// Pipeline names are unique; duplicate creation without update is
 // rejected at creation time.
-func TestSB039_PipelineNameUniqueness(t *testing.T) {
+func TestPipelineNameUniqueness(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -22,9 +22,9 @@ func TestSB039_PipelineNameUniqueness(t *testing.T) {
 	wantErr(t, err, "already exists")
 }
 
-// SB-090 — a pipeline whose input is its own output repository is rejected
+// A pipeline whose input is its own output repository is rejected
 // at creation.
-func TestSB090_SelfReferentialInputRejected(t *testing.T) {
+func TestSelfReferentialInputRejected(t *testing.T) {
 	name := uniq(t)
 	p := client.Pipeline{
 		Name:      name,
@@ -35,9 +35,9 @@ func TestSB090_SelfReferentialInputRejected(t *testing.T) {
 	wantErr(t, err, "output") // a pipeline must not have its own output repo as an input
 }
 
-// SB-126 — a pipeline created without a command runs a default entry point
+// A pipeline created without a command runs a default entry point
 // that copies inputs to output, preserving path and content.
-func TestSB126_CommandlessPipelineCopies(t *testing.T) {
+func TestCommandlessPipelineCopies(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -63,9 +63,9 @@ func TestSB126_CommandlessPipelineCopies(t *testing.T) {
 	}
 }
 
-// SB-129 — empty commits still trigger jobs (20 consecutive), and a command
+// Empty commits still trigger jobs (20 consecutive), and a command
 // that never reads stdin completes without deadlock.
-func TestSB129_EmptyCommitsTriggerJobsNoStdinDeadlock(t *testing.T) {
+func TestEmptyCommitsTriggerJobsNoStdinDeadlock(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"seed": "x"})
@@ -96,9 +96,9 @@ func TestSB129_EmptyCommitsTriggerJobsNoStdinDeadlock(t *testing.T) {
 	}
 }
 
-// SB-147 — pipeline creation without a name is rejected with an error
+// Pipeline creation without a name is rejected with an error
 // naming the missing field; the service survives.
-func TestSB147_CreateWithoutNameRejected(t *testing.T) {
+func TestCreateWithoutNameRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	p := client.Pipeline{Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}}
@@ -106,9 +106,9 @@ func TestSB147_CreateWithoutNameRejected(t *testing.T) {
 	wantErr(t, err, "pipeline")
 }
 
-// SB-148 — pipeline creation without a transform is rejected with a
+// Pipeline creation without a transform is rejected with a
 // descriptive error.
-func TestSB148_CreateWithoutTransformRejected(t *testing.T) {
+func TestCreateWithoutTransformRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	p := client.Pipeline{Name: uniq(t), Input: &client.Input{Repo: repo, Glob: "/*"}}
@@ -116,9 +116,9 @@ func TestSB148_CreateWithoutTransformRejected(t *testing.T) {
 	wantErr(t, err, "transform")
 }
 
-// SB-149 — a pipeline whose transform has no command but specifies stdin is
+// A pipeline whose transform has no command but specifies stdin is
 // accepted at creation, then transitions to FAILURE within 30s.
-func TestSB149_NoCommandAcceptedButFailsAtStart(t *testing.T) {
+func TestNoCommandAcceptedButFailsAtStart(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
@@ -159,12 +159,12 @@ func TestSB149_NoCommandAcceptedButFailsAtStart(t *testing.T) {
 	}
 }
 
-// SB-159 — pipeline creation validates the request shape and rejects every
+// Pipeline creation validates the request shape and rejects every
 // malformed file-input variant cleanly, with the documented signals. (Cases
 // for aggregate inputs and services are deferred to the batches that
 // introduce those input types; git-input signals (clause 12) are asserted
-// by TestSB104_GitURLValidation.)
-func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
+// by TestGitURLValidation.)
+func TestMalformedPipelineRequestsRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -197,9 +197,9 @@ func TestSB159_MalformedPipelineRequestsRejected(t *testing.T) {
 	}
 }
 
-// SB-170 — pipeline validation rejects inputs named "out" and file inputs
+// Pipeline validation rejects inputs named "out" and file inputs
 // without a glob.
-func TestSB170_InputNamedOutAndMissingGlobRejected(t *testing.T) {
+func TestInputNamedOutAndMissingGlobRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -216,9 +216,9 @@ func TestSB170_InputNamedOutAndMissingGlobRejected(t *testing.T) {
 	wantErr(t, err, "glob")
 }
 
-// SB-171 — pipeline creation fails when a declared input repository does
+// Pipeline creation fails when a declared input repository does
 // not exist.
-func TestSB171_NonexistentInputRepoRejected(t *testing.T) {
+func TestNonexistentInputRepoRejected(t *testing.T) {
 	err := c.CreatePipeline(client.Pipeline{
 		Name:      uniq(t),
 		Transform: copyTransform("in"),
@@ -227,8 +227,8 @@ func TestSB171_NonexistentInputRepoRejected(t *testing.T) {
 	wantErr(t, err, "not found")
 }
 
-// SB-172 — pipeline names may contain hyphens and underscores.
-func TestSB172_NamesWithHyphensAndUnderscores(t *testing.T) {
+// Pipeline names may contain hyphens and underscores.
+func TestNamesWithHyphensAndUnderscores(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := "my-pipeline_01"
@@ -239,9 +239,9 @@ func TestSB172_NamesWithHyphensAndUnderscores(t *testing.T) {
 	}
 }
 
-// SB-173 — a parallelism specification must not combine a constant count
+// A parallelism specification must not combine a constant count
 // with a coefficient.
-func TestSB173_MixedParallelismRejected(t *testing.T) {
+func TestMixedParallelismRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	err := c.CreatePipeline(client.Pipeline{
@@ -256,12 +256,12 @@ func TestSB173_MixedParallelismRejected(t *testing.T) {
 	wantErr(t, err, "parallelism")
 }
 
-// SB-159 clause 10 — a plain cross (not cross-of-union) whose members
+// A plain cross (not cross-of-union) whose members
 // expose the same name is rejected: two branches sharing a namespace are
 // ambiguous, and the record demands the rejection (its message is
 // "name was used more than once"; Sandman's signal is the cross
 // namespace check).
-func TestSB159_CrossDuplicateNamesRejected(t *testing.T) {
+func TestCrossDuplicateNamesRejected(t *testing.T) {
 	ra := uniq(t) + "a"
 	rb := uniq(t) + "b"
 	mustRepo(t, ra)
@@ -281,7 +281,7 @@ func TestSB159_CrossDuplicateNamesRejected(t *testing.T) {
 // repo's name: names that could escape the pipelines directory ("..",
 // separators, leading dots) are rejected at creation, not silently
 // written outside the state dir.
-func TestD03_PipelineNamePathEscapeRejected(t *testing.T) {
+func TestPipelineNamePathEscapeRejected(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	for _, name := range []string{"..", ".", "../x", "a/b", "a\\b", ".hidden"} {

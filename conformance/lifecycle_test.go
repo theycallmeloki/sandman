@@ -8,10 +8,10 @@ import (
 	"sandman/client"
 )
 
-// SB-023 — a pipeline created after its input history exists processes the
+// A pipeline created after its input history exists processes the
 // current branch head: the head job sees the full accumulated content and
 // flush of the head completes.
-func TestSB023_PipelineAfterHistoryProcessesHead(t *testing.T) {
+func TestPipelineAfterHistoryProcessesHead(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -40,9 +40,9 @@ func TestSB023_PipelineAfterHistoryProcessesHead(t *testing.T) {
 	}
 }
 
-// SB-053 — a pipeline created over existing history processes only the
+// A pipeline created over existing history processes only the
 // current head, in one output commit, with the full accumulated content.
-func TestSB053_HeadOnlyOneOutputCommit(t *testing.T) {
+func TestHeadOnlyOneOutputCommit(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})
@@ -72,10 +72,10 @@ func TestSB053_HeadOnlyOneOutputCommit(t *testing.T) {
 	}
 }
 
-// SB-024 — deleting and recreating a pipeline reprocesses its input,
+// Deleting and recreating a pipeline reprocesses its input,
 // producing fresh output and jobs; recreation is not blocked by the old
 // incarnation.
-func TestSB024_DeleteAndRecreateReprocesses(t *testing.T) {
+func TestDeleteAndRecreateReprocesses(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
@@ -110,9 +110,9 @@ func TestSB024_DeleteAndRecreateReprocesses(t *testing.T) {
 	}
 }
 
-// SB-028 — pipeline lifecycle: running after creation, stopped/paused after
+// Pipeline lifecycle: running after creation, stopped/paused after
 // stop (persistent Stopped flag), running again after start.
-func TestSB028_LifecycleStates(t *testing.T) {
+func TestLifecycleStates(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -144,9 +144,9 @@ func TestSB028_LifecycleStates(t *testing.T) {
 	})
 }
 
-// SB-048 — a stopped pipeline ignores new commits; restarting it processes
+// A stopped pipeline ignores new commits; restarting it processes
 // the backlog of commits finished while it was stopped.
-func TestSB048_StoppedIgnoresRestartBacklog(t *testing.T) {
+func TestStoppedIgnoresRestartBacklog(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -183,9 +183,9 @@ func TestSB048_StoppedIgnoresRestartBacklog(t *testing.T) {
 	}
 }
 
-// SB-020 — stopping an intermediate pipeline of a chain does not create a
+// Stopping an intermediate pipeline of a chain does not create a
 // spurious commit downstream; downstream commit counts are unaffected.
-func TestSB020_StopMidChainNoSpuriousDownstreamCommit(t *testing.T) {
+func TestStopMidChainNoSpuriousDownstreamCommit(t *testing.T) {
 	repoA := uniq(t)
 	mustRepo(t, repoA)
 	cm1 := commitFiles(t, repoA, "master", map[string]string{"file": "foo"})
@@ -225,9 +225,9 @@ func TestSB020_StopMidChainNoSpuriousDownstreamCommit(t *testing.T) {
 	_ = cm2
 }
 
-// SB-034/SB-035 — restarting the daemon loses no pipelines, repos, or
+// Restarting the daemon loses no pipelines, repos, or
 // commits: the pipeline returns to running and everything inspects cleanly.
-func TestSB034_RestartKeepsDataAndPipelines(t *testing.T) {
+func TestRestartKeepsDataAndPipelines(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -258,7 +258,7 @@ func TestSB034_RestartKeepsDataAndPipelines(t *testing.T) {
 	}
 }
 
-func TestSB035_RestartSingleInstance(t *testing.T) {
+func TestRestartSingleInstance(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -280,12 +280,12 @@ func TestSB035_RestartSingleInstance(t *testing.T) {
 	}
 }
 
-// SB-031 — a job in flight when the control plane restarts is recorded as
+// A job in flight when the control plane restarts is recorded as
 // failed with a restart reason; committed data stays intact; a standby
 // pipeline whose in-flight work was lost returns to standby and wakes on
-// new input (D-06 overrides the reference's resume-and-complete intent:
+// new input (overrides the reference's resume-and-complete intent:
 // only committed state survives a restart).
-func TestSB031_MidFlightJobRecordedFailedOnRestart(t *testing.T) {
+func TestMidFlightJobRecordedFailedOnRestart(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)

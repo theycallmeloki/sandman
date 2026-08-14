@@ -24,9 +24,9 @@ func setupJob(t *testing.T) (repo, pipe string, job client.Job) {
 	return repo, pipe, jobs[0]
 }
 
-// SB-093 — jobs can be listed filtered by the commit they produced, and by
+// Jobs can be listed filtered by the commit they produced, and by
 // a branch reference resolving to that commit.
-func TestSB093_ListJobsFilteredByOutputCommit(t *testing.T) {
+func TestListJobsFilteredByOutputCommit(t *testing.T) {
 	_, pipe, job := setupJob(t)
 
 	byCommit, err := c.ListJobsFiltered(client.JobFilter{OutputCommit: job.OutputCommit})
@@ -51,9 +51,9 @@ func TestSB093_ListJobsFilteredByOutputCommit(t *testing.T) {
 	}
 }
 
-// SB-094 — job listing offers a lightweight mode that omits the pipeline
+// Job listing offers a lightweight mode that omits the pipeline
 // spec fields, and a full mode that includes them.
-func TestSB094_TruncatedAndFullListing(t *testing.T) {
+func TestTruncatedAndFullListing(t *testing.T) {
 	repo, pipe, job := setupJob(t)
 
 	light, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
@@ -85,8 +85,8 @@ func TestSB094_TruncatedAndFullListing(t *testing.T) {
 	}
 }
 
-// SB-095 — job listing can be filtered by an inclusive set of job states.
-func TestSB095_ListJobsFilteredByStates(t *testing.T) {
+// Job listing can be filtered by an inclusive set of job states.
+func TestListJobsFilteredByStates(t *testing.T) {
 	_, pipe, _ := setupJob(t)
 
 	all, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
@@ -114,9 +114,9 @@ func TestSB095_ListJobsFilteredByStates(t *testing.T) {
 	}
 }
 
-// SB-135 — job inspection accepts a job id or an output commit id; an
+// Job inspection accepts a job id or an output commit id; an
 // unknown output commit is not found.
-func TestSB135_InspectJobByJobOrOutputCommit(t *testing.T) {
+func TestInspectJobByJobOrOutputCommit(t *testing.T) {
 	_, _, job := setupJob(t)
 
 	byID, err := c.InspectJob(job.ID)
@@ -148,8 +148,8 @@ func TestSB135_InspectJobByJobOrOutputCommit(t *testing.T) {
 	wantErr(t, err, "specify a Job or an OutputCommit")
 }
 
-// SB-057 — deleting a running job still finalizes its output revision.
-func TestSB057_DeleteJobFinalizesOutput(t *testing.T) {
+// Deleting a running job still finalizes its output revision.
+func TestDeleteJobFinalizesOutput(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -190,9 +190,9 @@ func TestSB057_DeleteJobFinalizesOutput(t *testing.T) {
 	}
 }
 
-// SB-122 — cancelling a running job kills its in-flight work, marks the job
+// Cancelling a running job kills its in-flight work, marks the job
 // killed, and leaves the pipeline fully operational for later input.
-func TestSB122_CancelRunningJob(t *testing.T) {
+func TestCancelRunningJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -239,12 +239,12 @@ func TestSB122_CancelRunningJob(t *testing.T) {
 	}
 }
 
-// TestSB058_StopJob — stopping a running job kills it without blocking the
+// Stopping a running job kills it without blocking the
 // job for a later commit. The job gate serializes execution per pipeline,
 // so the second commit's job starts only after the first is killed; the
 // contract asserted — the stopped job is killed, the later job succeeds,
 // listing is newest-first — holds in that model.
-func TestSB058_StopJob(t *testing.T) {
+func TestStopJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)

@@ -75,13 +75,13 @@ func waitHostRegistered(t *testing.T, name string) {
 	})
 }
 
-// TestSB167_PlacementLabels: a pipeline requiring a placement label runs
+// TestPlacementLabels: a pipeline requiring a placement label runs
 // its job on the registered host bearing that label — the definition
 // names no host address, and the output provably came from the host's
 // execution: only the worker sets the HOSTNAME environment, which the
 // transform echoes into the output next to the copied input content.
 
-// TestSB169_UnplaceableRecovery: a pipeline whose placement label no host
+// TestUnplaceableRecovery: a pipeline whose placement label no host
 // bears must surface the outage as the crashed pipeline state instead of
 // hanging; when a host bearing the label registers, the pending job
 // re-places on its own and completes — exactly one output commit for the

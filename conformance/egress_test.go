@@ -13,11 +13,11 @@ import (
 	"sandman/client"
 )
 
-// TestSB013_EgressFailure — a pipeline with an invalid egress URL runs its
+// TestEgressFailure — a pipeline with an invalid egress URL runs its
 // execution (the output commit succeeds), then the egress write fails and
 // the job settles as failure with an egress-related reason. Exactly one
 // job is created (the reference's TestEgressFailure shape).
-func TestSB013_EgressFailure(t *testing.T) {
+func TestEgressFailure(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})

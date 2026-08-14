@@ -14,7 +14,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB162_TransactionAtomicApply(t *testing.T) {
+func TestTransactionAtomicApply(t *testing.T) {
 	repo := uniq(t) + "r"
 	pa := uniq(t) + "a"
 	pb := uniq(t) + "b"
@@ -120,7 +120,7 @@ func TestSB162_TransactionAtomicApply(t *testing.T) {
 	}
 }
 
-func TestSB163_TransactionInvalidatedByExternalUpdate(t *testing.T) {
+func TestTransactionInvalidatedByExternalUpdate(t *testing.T) {
 	ra := uniq(t) + "a"
 	rb := uniq(t) + "b"
 	rc := uniq(t) + "c"
@@ -164,12 +164,12 @@ func TestSB163_TransactionInvalidatedByExternalUpdate(t *testing.T) {
 	}
 }
 
-// TestSB164_TxAbortLeavesNoSpecCommits — an aborted transaction cleans up
+// TestTxAbortLeavesNoSpecCommits — an aborted transaction cleans up
 // the spec commits its applied operations wrote: no orphaned entries on
 // the failure path (the literal 0-spec-commits-on-abort clause). The
 // update's statistics one-way check fails only at apply time, forcing a
 // real mid-apply rollback after the create already wrote its spec commit.
-func TestSB164_TxAbortLeavesNoSpecCommits(t *testing.T) {
+func TestTxAbortLeavesNoSpecCommits(t *testing.T) {
 	repo := uniq(t) + "r"
 	mustRepo(t, repo)
 	// the spec repository is shared across the daemon's lifetime (and may

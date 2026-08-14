@@ -18,13 +18,13 @@ import (
 	"sandman/client"
 )
 
-// TestSB100_ServicePipeline serves the input over HTTP — the long-running
+// TestServicePipeline serves the input over HTTP — the long-running
 // process (clause 1), the external endpoint (clause 2), the control-plane
 // proxy (clause 3), the annotation passthrough (clause 4), and the live
 // refresh when a new revision lands (clause 5). The external port is
 // allocated per run: a hardcoded port collides with a stale
 // leftover service from a previous run.
-func TestSB100_ServicePipeline(t *testing.T) {
+func TestServicePipeline(t *testing.T) {
 	port := freePort()
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -123,10 +123,10 @@ func getUntil(t *testing.T, url, want string) string {
 	return last
 }
 
-// TestSB100_RejectsBadServiceSpecs — the declaration rules: ports are
+// TestRejectsBadServiceSpecs — the declaration rules: ports are
 // required, one process only, and the external port is exclusive to one
 // service.
-func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
+func TestRejectsBadServiceSpecs(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	mk := func(svc *client.Service) client.Pipeline {
@@ -179,18 +179,19 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 	}
 }
 
-// TestSB168_RemoteServiceReachable — a placed service is reachable at the
+// TestRemoteServiceReachable — a placed service is reachable at the
 // control-plane host's external port even though the process runs on the
 // execution host: the control plane forwards the external port to the
 // worker's internal port. The worker is a sandman worker
 // process bearing the placement label; docker runs the service container.
-func TestSB168_RemoteServiceReachable(t *testing.T) {
+func TestRemoteServiceReachable(t *testing.T) {
 	// FIXED (api batch 60): the hang was a missing half-close propagation
 	// in proxyListener (service.go) — the relay's wg.Wait() coupled both
 	// copy directions, so a close-delimited (HTTP/1.0) service response
 	// never propagated its close to the keep-alive client and Go's
-	// transport blocked forever. See
-	// implementation-review/SB168_D22_ISSUE.md (reviewer verdict).
+	// transport blocked forever (reviewer verdict: the relay half-close
+	// fix removed the hang; the harness's PPID-scoped orphan pre-kill
+	// handles the leak class).
 	if !dockerAvailable() {
 		t.Skip("docker not available")
 	}

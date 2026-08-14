@@ -13,10 +13,10 @@ import (
 	"sandman/client"
 )
 
-// TestSB021_FlushChainRepeated — a 5-stage linear chain produces exactly
+// TestFlushChainRepeated — a 5-stage linear chain produces exactly
 // one commit and one job per stage for each of 10 successive source
 // commits.
-func TestSB021_FlushChainRepeated(t *testing.T) {
+func TestFlushChainRepeated(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	var names []string
@@ -58,10 +58,10 @@ func TestSB021_FlushChainRepeated(t *testing.T) {
 	}
 }
 
-// TestSB022_FailedJobFailsDownstream — a failing stage fails every
+// TestFailedJobFailsDownstream — a failing stage fails every
 // downstream stage, and the flush reports all three jobs with their
 // terminal states instead of erroring.
-func TestSB022_FailedJobFailsDownstream(t *testing.T) {
+func TestFailedJobFailsDownstream(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pa, pb, pc := uniq(t), uniq(t), uniq(t)
@@ -108,11 +108,11 @@ func TestSB022_FailedJobFailsDownstream(t *testing.T) {
 	}
 }
 
-// TestSB056_MidDAGCommitOneWavePerStage — in a DAG (A → B, cross(B × E)
+// TestMidDAGCommitOneWavePerStage — in a DAG (A → B, cross(B × E)
 // → C, C → D), the initial wave and each subsequent mid-DAG commit
 // produce exactly one commit and one job per downstream stage, and
 // unrelated stages are never re-triggered.
-func TestSB056_MidDAGCommitOneWavePerStage(t *testing.T) {
+func TestMidDAGCommitOneWavePerStage(t *testing.T) {
 	// RUN_BAD_TESTS gate: the pairing race has a residual settle-time
 	// window (record/growth interleavings; parked after the flush,
 	// atomic-write, and resolve/revert fixes). Upstream gates its

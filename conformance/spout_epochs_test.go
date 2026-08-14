@@ -49,7 +49,7 @@ func markerHeadContent(t *testing.T, pipe string, n int) string {
 	return string(b)
 }
 
-// TestSB140_SpoutEpochsAndMarker covers the spout contracts that the pipe
+// TestSpoutEpochsAndMarker covers the spout contracts that the pipe
 // suite does not: each spout commit carries its pipeline's specification
 // commit as provenance, an update starts a new epoch shared by every
 // commit after it; the marker state persists across a plain update and

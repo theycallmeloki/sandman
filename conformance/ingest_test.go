@@ -13,7 +13,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB137_DelimitedUploadsReplicateHeader(t *testing.T) {
+func TestDelimitedUploadsReplicateHeader(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -79,7 +79,7 @@ func TestSB137_DelimitedUploadsReplicateHeader(t *testing.T) {
 	}
 }
 
-func TestSB138_ChangedHeaderReprocessesAll(t *testing.T) {
+func TestChangedHeaderReprocessesAll(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -115,7 +115,7 @@ func TestSB138_ChangedHeaderReprocessesAll(t *testing.T) {
 	}
 }
 
-func TestSB088_UrlIngestionJsonSpecPipelines(t *testing.T) {
+func TestUrlIngestionJsonSpecPipelines(t *testing.T) {
 	// a local HTTP server serves the "remote" image
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("image-bytes"))

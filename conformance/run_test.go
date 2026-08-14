@@ -1,4 +1,4 @@
-// SB-010 — manual pipeline runs: a new job on demand, explicit provenance
+// Manual pipeline runs: a new job on demand, explicit provenance
 // selects exact revisions, runs never propagate downstream, provenance
 // validation, and reruns of failing pipelines.
 package conformance
@@ -10,7 +10,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB010_RunPipeline(t *testing.T) {
+func TestRunPipeline(t *testing.T) {
 	t.Run("cross run with provenance", func(t *testing.T) {
 		repo := uniq(t)
 		mustRepo(t, repo)

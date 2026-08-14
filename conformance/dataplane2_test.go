@@ -37,9 +37,9 @@ func TestFetch_RejectsLinkLocal(t *testing.T) {
 	}
 }
 
-// SB-038 — a job that recursively copies whole input directories completes
+// A job that recursively copies whole input directories completes
 // and yields one output commit.
-func TestSB038_RecursiveDirectoryCopy(t *testing.T) {
+func TestRecursiveDirectoryCopy(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{
@@ -61,9 +61,9 @@ func TestSB038_RecursiveDirectoryCopy(t *testing.T) {
 	}
 }
 
-// SB-052 — a job processing the head commit sees and copies the full
+// A job processing the head commit sees and copies the full
 // accumulated file content.
-func TestSB052_HeadJobSeesAccumulatedContent(t *testing.T) {
+func TestHeadJobSeesAccumulatedContent(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -102,9 +102,9 @@ func TestSB052_HeadJobSeesAccumulatedContent(t *testing.T) {
 	}
 }
 
-// SB-087 — each new input commit triggers a successful job whose output is
+// Each new input commit triggers a successful job whose output is
 // cumulative across the branch.
-func TestSB087_EachCommitCumulativeJob(t *testing.T) {
+func TestEachCommitCumulativeJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -141,9 +141,9 @@ func TestSB087_EachCommitCumulativeJob(t *testing.T) {
 	}
 }
 
-// SB-099 — files are fetchable with raw bytes, an attachment disposition on
+// Files are fetchable with raw bytes, an attachment disposition on
 // request, and a content type detected from the bytes.
-func TestSB099_FileFetchHeaders(t *testing.T) {
+func TestFileFetchHeaders(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	// a minimal 1x1 transparent GIF (GIF89a)
@@ -184,10 +184,10 @@ func TestSB099_FileFetchHeaders(t *testing.T) {
 	}
 }
 
-// SB-150 — tags are durable named references to data objects: 1000 tags
+// Tags are durable named references to data objects: 1000 tags
 // listable, every one with a non-empty reference, and retrievable by name
 // byte-for-byte.
-func TestSB150_TagsListAndRetrieve(t *testing.T) {
+func TestTagsListAndRetrieve(t *testing.T) {
 	for i := range 1000 {
 		if err := c.PutTag(fmt.Sprintf("tag%d", i), []byte(fmt.Sprintf("Object %d", i))); err != nil {
 			t.Fatalf("put tag%d: %v", i, err)
@@ -236,10 +236,10 @@ func TestSB150_TagsListAndRetrieve(t *testing.T) {
 	}
 }
 
-// SB-155 — every data-plane API endpoint validates its request and never
+// Every data-plane API endpoint validates its request and never
 // panics on missing fields: each malformed call yields a well-formed HTTP
 // response (never a dropped connection), and the service survives.
-func TestSB155_NoPanicOnEmptyRequests(t *testing.T) {
+func TestNoPanicOnEmptyRequests(t *testing.T) {
 	check := func(vals ...any) {
 		if len(vals) > 0 {
 			if err, ok := vals[len(vals)-1].(error); ok {
@@ -288,10 +288,10 @@ func TestSB155_NoPanicOnEmptyRequests(t *testing.T) {
 	}
 }
 
-// SB-156 — files and directories can be copied from a pipeline's output
+// Files and directories can be copied from a pipeline's output
 // into an input repo; existing destination paths are protected on both copy
 // and put.
-func TestSB156_CopyOutToInWithOverwriteProtection(t *testing.T) {
+func TestCopyOutToInWithOverwriteProtection(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)

@@ -177,7 +177,7 @@ func waitFollow(t *testing.T, ch chan []string, want int, timeout time.Duration)
 	}
 }
 
-func TestSB059_LogsWithoutStats(t *testing.T) {
+func TestLogsWithoutStats(t *testing.T) {
 	repo := uniq(t) + "r"
 	pipe := uniq(t) + "p"
 	mustRepo(t, repo)
@@ -187,7 +187,7 @@ func TestSB059_LogsWithoutStats(t *testing.T) {
 	assertLogCore(t, pipe, cm, jobs[0])
 }
 
-func TestSB060_LogQueries(t *testing.T) {
+func TestLogQueries(t *testing.T) {
 	repo := uniq(t) + "r"
 	pipe := uniq(t) + "p"
 	mustRepo(t, repo)
@@ -228,7 +228,7 @@ func TestSB060_LogQueries(t *testing.T) {
 	}
 }
 
-func TestSB061_ManyLogs(t *testing.T) {
+func TestManyLogs(t *testing.T) {
 	repo := uniq(t) + "r"
 	pipe := uniq(t) + "p"
 	mustRepo(t, repo)
@@ -260,7 +260,7 @@ func TestSB061_ManyLogs(t *testing.T) {
 	}
 }
 
-func TestSB062_GlobalLogStore(t *testing.T) {
+func TestGlobalLogStore(t *testing.T) {
 	// a global aggregated log store is required; the contract is
 	// mechanism-free — a job's logs are complete (one line per datum) and
 	// streamable in follow mode, and logs from all jobs are searchable

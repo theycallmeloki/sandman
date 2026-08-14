@@ -15,7 +15,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB160_SizeTriggers(t *testing.T) {
+func TestSizeTriggers(t *testing.T) {
 	data := uniq(t)
 	mustRepo(t, data)
 	p1 := uniq(t) // 1K trigger watching data@master
@@ -174,11 +174,11 @@ func TestSB160_SizeTriggers(t *testing.T) {
 	}
 }
 
-// SB-160 — the trigger accumulation ledger is durable across a control-
+// The trigger accumulation ledger is durable across a control-
 // plane restart: 500B before the restart plus 500B after crosses the 1K
 // threshold exactly once. A lost ledger would leave the second batch at
 // 500B and never fire.
-func TestSB160_SizeTriggerLedgerSurvivesRestart(t *testing.T) {
+func TestSizeTriggerLedgerSurvivesRestart(t *testing.T) {
 	data := uniq(t)
 	mustRepo(t, data)
 	p1 := uniq(t)

@@ -54,7 +54,7 @@ func withContainerDaemon(t *testing.T) {
 	})
 }
 
-func TestSB043_CrashThenUpdate(t *testing.T) {
+func TestCrashThenUpdate(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -88,7 +88,7 @@ func TestSB043_CrashThenUpdate(t *testing.T) {
 		t.Fatalf("output = %q (err %v), want y", got, err)
 	}
 }
-func TestSB067_ResourceRequestsApplied(t *testing.T) {
+func TestResourceRequestsApplied(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -128,7 +128,7 @@ func TestSB067_ResourceRequestsApplied(t *testing.T) {
 	}
 	flushSetOK(t, []string{cm.ID})
 }
-func TestSB068_ResourceLimitsApplied(t *testing.T) {
+func TestResourceLimitsApplied(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -156,7 +156,7 @@ func TestSB068_ResourceLimitsApplied(t *testing.T) {
 	}
 	flushSetOK(t, []string{cm.ID})
 }
-func TestSB069_NoLimitsInjected(t *testing.T) {
+func TestNoLimitsInjected(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -174,7 +174,7 @@ func TestSB069_NoLimitsInjected(t *testing.T) {
 	}
 	flushSetOK(t, []string{cm.ID})
 }
-func TestSB070_PartialResourceSpecsAccepted(t *testing.T) {
+func TestPartialResourceSpecsAccepted(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -197,7 +197,7 @@ func TestSB070_PartialResourceSpecsAccepted(t *testing.T) {
 	}
 	flushSetOK(t, []string{cm.ID})
 }
-func TestSB091_UnprovisionableEnvironmentCrashes(t *testing.T) {
+func TestUnprovisionableEnvironmentCrashes(t *testing.T) {
 	withContainerDaemon(t)
 	images := []string{
 		"sandman-no-such-image-xyz",
@@ -236,7 +236,7 @@ func TestSB091_UnprovisionableEnvironmentCrashes(t *testing.T) {
 		}
 	}
 }
-func TestSB128_UserIdentityAndWorkingDir(t *testing.T) {
+func TestUserIdentityAndWorkingDir(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -277,7 +277,7 @@ func TestSB128_UserIdentityAndWorkingDir(t *testing.T) {
 		t.Fatalf("file = %q, want foo", got)
 	}
 }
-func TestSB139_SpoutPipelines(t *testing.T) {
+func TestSpoutPipelines(t *testing.T) {
 	withContainerDaemon(t)
 	t.Run("stop and start a spout", func(t *testing.T) {
 		pipe := uniq(t)
@@ -649,7 +649,7 @@ func TestSB139_SpoutPipelines(t *testing.T) {
 		}
 	})
 }
-func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
+func TestSpoutEpochsAndMarker(t *testing.T) {
 	withContainerDaemon(t)
 	t.Run("provenance epochs across updates", func(t *testing.T) {
 		pipe := uniq(t)
@@ -770,7 +770,7 @@ func TestSB140_SpoutEpochsAndMarker(t *testing.T) {
 		pollSpoutJobSettled(t, pipe)
 	})
 }
-func TestSB158_StandbyLifecycle(t *testing.T) {
+func TestStandbyLifecycle(t *testing.T) {
 	withContainerDaemon(t)
 	// no degraded/crashing standby state in Sandman — partial capacity
 	// surfaces as failure or crashed; the extracted contract is
@@ -806,7 +806,7 @@ func TestSB158_StandbyLifecycle(t *testing.T) {
 		return err == nil && p.State == "crashed"
 	})
 }
-func TestSB167_PlacementLabels(t *testing.T) {
+func TestPlacementLabels(t *testing.T) {
 	withContainerDaemon(t)
 	r := uniq(t)
 	mustRepo(t, r)
@@ -856,7 +856,7 @@ func TestSB167_PlacementLabels(t *testing.T) {
 		t.Fatalf("want exactly one successful job, got %d (state %q)", len(js), js[0].State)
 	}
 }
-func TestSB169_UnplaceableRecovery(t *testing.T) {
+func TestUnplaceableRecovery(t *testing.T) {
 	withContainerDaemon(t)
 	r := uniq(t)
 	mustRepo(t, r)
@@ -910,12 +910,12 @@ func TestSB169_UnplaceableRecovery(t *testing.T) {
 	}
 }
 
-// TestD01_StandbyIdlesWithZeroContainers — the scale-to-zero
+// TestStandbyIdlesWithZeroContainers — the scale-to-zero
 // assertion: a standby pipeline with no pending work holds NO standing
 // execution participants (docker ps shows zero sandman-* containers).
 // The standby family asserts state transitions only; this pins the
 // container count, the observable side of scale-to-zero.
-func TestD01_StandbyIdlesWithZeroContainers(t *testing.T) {
+func TestStandbyIdlesWithZeroContainers(t *testing.T) {
 	withContainerDaemon(t)
 	// a fresh container daemon must start with a clean slate
 	if n := sandmanContainerCount(); n != 0 {
@@ -974,7 +974,7 @@ func sandmanContainerCount() int {
 	return len(strings.Fields(string(out)))
 }
 
-// TestD15_UnsatisfiableResourcesAcceptedAndRecorded — the accept-and-record
+// TestUnsatisfiableResourcesAcceptedAndRecorded — the accept-and-record
 // contract: a provably-unsatisfiable declaration
 // (memory beyond any host's RAM) is NOT a creation gate — the spec is
 // accepted, the declared values are recorded, and the pipeline is not
@@ -982,7 +982,7 @@ func sandmanContainerCount() int {
 // refuses to provision the over-large container, and the failure
 // converges on the crashed state with a reason (the provisioning path)
 // rather than a rejection or a hang.
-func TestD15_UnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
+func TestUnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)

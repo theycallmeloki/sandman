@@ -1,4 +1,4 @@
-// SB-142 — pipelines trigger on watched branch heads; output lands on the
+// Pipelines trigger on watched branch heads; output lands on the
 // configured output branch; a downstream stage does not run until its
 // watched branch is pointed at the output (branch promotion).
 package conformance
@@ -10,7 +10,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB142_DeferredProcessingAcrossBranches(t *testing.T) {
+func TestDeferredProcessingAcrossBranches(t *testing.T) {
 	data := uniq(t)
 	mustRepo(t, data)
 	// pipeline1 watches the default branch of data, but writes to "staging"

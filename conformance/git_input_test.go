@@ -66,7 +66,7 @@ func headContentOf(t *testing.T, commitID, p string) string {
 	return string(b)
 }
 
-func TestSB104_GitURLValidation(t *testing.T) {
+func TestGitURLValidation(t *testing.T) {
 	// each unsupported URL form is rejected at creation, and no pipeline
 	// is created
 	cases := []struct {
@@ -92,7 +92,7 @@ func TestSB104_GitURLValidation(t *testing.T) {
 	}
 }
 
-func TestSB105_GitCloneFailure(t *testing.T) {
+func TestGitCloneFailure(t *testing.T) {
 	name := uniq(t)
 	url := gitURL(t)
 	gitPipeline(t, name, "", &client.GitInput{URL: url})
@@ -135,7 +135,7 @@ func TestSB105_GitCloneFailure(t *testing.T) {
 	})
 }
 
-func TestSB106_GitDuplicateNamesAndURLs(t *testing.T) {
+func TestGitDuplicateNamesAndURLs(t *testing.T) {
 	url := gitURL(t)
 	// (a) two git inputs sharing a custom name are rejected
 	err := c.CreatePipeline(client.Pipeline{
@@ -176,7 +176,7 @@ func TestSB106_GitDuplicateNamesAndURLs(t *testing.T) {
 	}
 }
 
-func TestSB107_GitPushCommitsAndTriggers(t *testing.T) {
+func TestGitPushCommitsAndTriggers(t *testing.T) {
 	name := uniq(t)
 	url := gitURL(t)
 	gitPipeline(t, name, "", &client.GitInput{URL: url})
@@ -217,7 +217,7 @@ func TestSB107_GitPushCommitsAndTriggers(t *testing.T) {
 	}
 }
 
-func TestSB108_SequentialPushes(t *testing.T) {
+func TestSequentialPushes(t *testing.T) {
 	name := uniq(t)
 	url := gitURL(t)
 	gitPipeline(t, name, "", &client.GitInput{URL: url})
@@ -257,7 +257,7 @@ func TestSB108_SequentialPushes(t *testing.T) {
 	}
 }
 
-func TestSB109_GitCustomName(t *testing.T) {
+func TestGitCustomName(t *testing.T) {
 	name := uniq(t)
 	url := gitURL(t)
 	derived := gitSideName(url)
@@ -285,7 +285,7 @@ func TestSB109_GitCustomName(t *testing.T) {
 	}
 }
 
-func TestSB110_FanOutDistinctNames(t *testing.T) {
+func TestFanOutDistinctNames(t *testing.T) {
 	// two pipelines, same URL, distinct custom names: each gets its own
 	// repository, and one push triggers both
 	n1, n2 := uniq(t)+"a", uniq(t)+"b"
@@ -314,7 +314,7 @@ func TestSB110_FanOutDistinctNames(t *testing.T) {
 	}
 }
 
-func TestSB111_FanOutSharedRepo(t *testing.T) {
+func TestFanOutSharedRepo(t *testing.T) {
 	// two pipelines, same URL, no custom names: they share the single
 	// URL-derived repository, and one push creates one commit that
 	// triggers both
@@ -346,7 +346,7 @@ func TestSB111_FanOutSharedRepo(t *testing.T) {
 	}
 }
 
-func TestSB112_GitBranchFilter(t *testing.T) {
+func TestGitBranchFilter(t *testing.T) {
 	name := uniq(t)
 	url := gitURL(t)
 	gitPipeline(t, name, "", &client.GitInput{URL: url, Branch: "foo"})

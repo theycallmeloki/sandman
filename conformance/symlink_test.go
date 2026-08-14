@@ -11,7 +11,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB054_SymlinkOutputs(t *testing.T) {
+func TestSymlinkOutputs(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)

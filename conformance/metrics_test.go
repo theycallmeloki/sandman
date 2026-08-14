@@ -15,7 +15,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB132_MetricsEndpoint(t *testing.T) {
+func TestMetricsEndpoint(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"f": "x"})
@@ -90,7 +90,7 @@ func TestSB132_MetricsEndpoint(t *testing.T) {
 	}
 }
 
-func TestSB079_GarbageCollection(t *testing.T) {
+func TestGarbageCollection(t *testing.T) {
 	withIsolatedDaemon(t) // the tail resets the daemon; never the shared one
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -271,7 +271,7 @@ func objectCount(t *testing.T) int {
 	return n
 }
 
-func TestSB130_ResetRemovesStatsState(t *testing.T) {
+func TestResetRemovesStatsState(t *testing.T) {
 	withIsolatedDaemon(t) // resets the daemon twice; never the shared one
 	repo := uniq(t)
 	mustRepo(t, repo)

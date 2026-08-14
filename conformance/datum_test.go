@@ -12,11 +12,11 @@ import (
 	"sandman/client"
 )
 
-// TestSB004_ParallelPipelineProducesAllPerDatumOutputs — a pipeline with
+// TestParallelPipelineProducesAllPerDatumOutputs — a pipeline with
 // parallelism 4 processes 1000 per-datum inputs concurrently and produces
 // exactly one output commit containing every file with correct content.
 // The default entry point (no command) keeps this a pure scheduler test.
-func TestSB004_ParallelPipelineProducesAllPerDatumOutputs(t *testing.T) {
+func TestParallelPipelineProducesAllPerDatumOutputs(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -48,11 +48,11 @@ func TestSB004_ParallelPipelineProducesAllPerDatumOutputs(t *testing.T) {
 	}
 }
 
-// TestSB006_UnchangedDatumsNotReprocessed — a datum processed once is not
+// TestUnchangedDatumsNotReprocessed — a datum processed once is not
 // re-executed for an unchanged input revision: an empty commit flushes far
 // faster than the 10s per-datum sleep, and the job records the datum as
 // skipped.
-func TestSB006_UnchangedDatumsNotReprocessed(t *testing.T) {
+func TestUnchangedDatumsNotReprocessed(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
@@ -93,10 +93,10 @@ func TestSB006_UnchangedDatumsNotReprocessed(t *testing.T) {
 	}
 }
 
-// TestSB007_InputDataModifications — replace, delete, and add propagate to
+// TestInputDataModifications — replace, delete, and add propagate to
 // the pipeline output: one output commit per input commit, a deleted file
 // genuinely absent, a replacement carried.
-func TestSB007_InputDataModifications(t *testing.T) {
+func TestInputDataModifications(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -163,9 +163,9 @@ func TestSB007_InputDataModifications(t *testing.T) {
 	}
 }
 
-// TestSB011_PipelineFailureMentionsDatum — a failing execution surfaces as
+// TestPipelineFailureMentionsDatum — a failing execution surfaces as
 // a failed job whose reason names the datum that failed.
-func TestSB011_PipelineFailureMentionsDatum(t *testing.T) {
+func TestPipelineFailureMentionsDatum(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
@@ -195,10 +195,10 @@ func TestSB011_PipelineFailureMentionsDatum(t *testing.T) {
 	}
 }
 
-// TestSB073_LargeOutputAcrossParallelWorkers — 100 datums each producing
+// TestLargeOutputAcrossParallelWorkers — 100 datums each producing
 // 100 output files (10,000 total) at parallelism 4 complete in one output
 // commit without loss.
-func TestSB073_LargeOutputAcrossParallelWorkers(t *testing.T) {
+func TestLargeOutputAcrossParallelWorkers(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -234,9 +234,9 @@ func TestSB073_LargeOutputAcrossParallelWorkers(t *testing.T) {
 	}
 }
 
-// TestSB103_SlowDatumsParallelCompleteness — slow datums at parallelism 4
+// TestSlowDatumsParallelCompleteness — slow datums at parallelism 4
 // all complete; every input file appears in the single output commit.
-func TestSB103_SlowDatumsParallelCompleteness(t *testing.T) {
+func TestSlowDatumsParallelCompleteness(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -268,9 +268,9 @@ func TestSB103_SlowDatumsParallelCompleteness(t *testing.T) {
 	}
 }
 
-// TestSB134_DatumTries — a failing datum is retried exactly the configured
+// TestDatumTries — a failing datum is retried exactly the configured
 // number of times, one log entry per attempt.
-func TestSB134_DatumTries(t *testing.T) {
+func TestDatumTries(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -310,11 +310,11 @@ func TestSB134_DatumTries(t *testing.T) {
 	}
 }
 
-// TestSB166_ReprocessEveryJob — a pipeline configured to reprocess all of
+// TestReprocessEveryJob — a pipeline configured to reprocess all of
 // its datums re-executes every datum on every job: unchanged declared
 // inputs do not skip, and each job's output reflects the data current at
 // processing time.
-func TestSB166_ReprocessEveryJob(t *testing.T) {
+func TestReprocessEveryJob(t *testing.T) {
 	trigger := uniq(t) + "t"
 	mustRepo(t, trigger)
 	// The declared input's glob selects only the trigger-N datum paths; the
@@ -373,13 +373,13 @@ func TestSB166_ReprocessEveryJob(t *testing.T) {
 	}
 }
 
-// TestD13_ChangedTransformDoesNotReprocessUnchangedDatums — the dedup
+// TestChangedTransformDoesNotReprocessUnchangedDatums — the dedup
 // cache is keyed per pipeline by the datum's content hash, independent of
 // the transform: changing the transform does NOT
 // reprocess unchanged datums. A same-content commit after an update is
 // skipped — the wave settles with no output commit. Reprocess is the
 // explicit override.
-func TestD13_ChangedTransformDoesNotReprocessUnchangedDatums(t *testing.T) {
+func TestChangedTransformDoesNotReprocessUnchangedDatums(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)

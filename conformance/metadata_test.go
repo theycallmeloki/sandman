@@ -9,9 +9,9 @@ import (
 	"sandman/client"
 )
 
-// SB-119 — a pipeline carries an optional user description that inspection
+// A pipeline carries an optional user description that inspection
 // returns unchanged.
-func TestSB119_PipelineDescriptionRoundTrips(t *testing.T) {
+func TestPipelineDescriptionRoundTrips(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -32,9 +32,9 @@ func TestSB119_PipelineDescriptionRoundTrips(t *testing.T) {
 	}
 }
 
-// SB-029 — pipeline metadata counts jobs per terminal state: one commit,
+// Pipeline metadata counts jobs per terminal state: one commit,
 // one successful job, success count exactly 1.
-func TestSB029_PipelineJobCounts(t *testing.T) {
+func TestPipelineJobCounts(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -90,9 +90,9 @@ func TestSB029_PipelineJobCounts(t *testing.T) {
 	}
 }
 
-// SB-036 — metadata for repos, commits, files, pipelines, and jobs renders
+// Metadata for repos, commits, files, pipelines, and jobs renders
 // in detailed human-readable form without error after a real end-to-end run.
-func TestSB036_DetailedRendering(t *testing.T) {
+func TestDetailedRendering(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -119,9 +119,9 @@ func TestSB036_DetailedRendering(t *testing.T) {
 	_ = cm
 }
 
-// SB-047 — a single job produces 20,000 output files in one commit, with
+// A single job produces 20,000 output files in one commit, with
 // correct prefix-glob counts.
-func TestSB047_TwentyThousandOutputFiles(t *testing.T) {
+func TestTwentyThousandOutputFiles(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)

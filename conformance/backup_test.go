@@ -1,6 +1,6 @@
 package conformance
 
-// TestSB174_BackupRestoreRoundTrip — the full backup/restore cycle end to
+// TestBackupRestoreRoundTrip — the full backup/restore cycle end to
 // end (previously only the store level was covered). Create data,
 // stream the backup, stop the daemon, wipe the state dir, extract the
 // archive into it, restart, and verify repos, pipelines, job records, and
@@ -25,7 +25,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB174_BackupRestoreRoundTrip(t *testing.T) {
+func TestBackupRestoreRoundTrip(t *testing.T) {
 	state := filepath.Join(os.TempDir(), "sandman-backup-"+uniq(t))
 	os.MkdirAll(state, 0o755)
 	port := freePort()

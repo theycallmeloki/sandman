@@ -40,7 +40,7 @@ func standbyState(t *testing.T, name string) string {
 	return p.State
 }
 
-func TestSB025_DeleteStandbyPipeline(t *testing.T) {
+func TestDeleteStandbyPipeline(t *testing.T) {
 	repo := uniq(t) + "r"
 	pipe := uniq(t) + "p"
 	mustRepo(t, repo)
@@ -70,7 +70,7 @@ func TestSB025_DeleteStandbyPipeline(t *testing.T) {
 	flushOK(t, cm.ID) // the replacement pipeline still works end to end
 }
 
-func TestSB049_StandbyChainAndManyCommits(t *testing.T) {
+func TestStandbyChainAndManyCommits(t *testing.T) {
 	repo := uniq(t) + "r"
 	mustRepo(t, repo)
 
@@ -166,7 +166,7 @@ func emptyCommit(t *testing.T, repo string) client.Commit {
 	return fin
 }
 
-func TestSB050_StopStandbyPipeline(t *testing.T) {
+func TestStopStandbyPipeline(t *testing.T) {
 	repo := uniq(t) + "r"
 	pipe := uniq(t) + "p"
 	mustRepo(t, repo)

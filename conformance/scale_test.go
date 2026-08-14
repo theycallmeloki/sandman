@@ -15,10 +15,10 @@ import (
 	"sandman/client"
 )
 
-// TestSB102_ChunkSpecOutputComplete — chunking configures only scheduling
+// Chunking configures only scheduling
 // granularity: whatever the chunk target, the output commit contains every
 // input file with identical content.
-func TestSB102_ChunkSpecOutputComplete(t *testing.T) {
+func TestChunkSpecOutputComplete(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -73,10 +73,10 @@ func TestSB102_ChunkSpecOutputComplete(t *testing.T) {
 	}
 }
 
-// TestSB097_MaxQueueSize — no worker's pending-datum queue exceeds the
+// No worker's pending-datum queue exceeds the
 // configured bound, even while workers are busy with slow datums; the job
 // still completes.
-func TestSB097_MaxQueueSize(t *testing.T) {
+func TestMaxQueueSize(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -127,11 +127,11 @@ func TestSB097_MaxQueueSize(t *testing.T) {
 	flushOK(t, cm.ID)
 }
 
-// TestSB165_AutoscalingRampsToDatumCount — the execution scale ramps to
+// The execution scale ramps to
 // the number of datums, capped at the configured parallelism, and never
 // exceeds the datum count (the ramp is instant — workers are
 // sized upfront — so a short transform suffices to observe it).
-func TestSB165_AutoscalingRampsToDatumCount(t *testing.T) {
+func TestAutoscalingRampsToDatumCount(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -183,10 +183,10 @@ func TestSB165_AutoscalingRampsToDatumCount(t *testing.T) {
 	}
 }
 
-// TestSB064_DatumStatusRestart — restarting a datum aborts its current
+// Restarting a datum aborts its current
 // processing and starts it over with a fresh, later start time; the job
 // still completes with exactly one output commit.
-func TestSB064_DatumStatusRestart(t *testing.T) {
+func TestDatumStatusRestart(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file1": "a", "file2": "b"})
@@ -263,9 +263,9 @@ func TestSB064_DatumStatusRestart(t *testing.T) {
 	}
 }
 
-// TestSB065_UseMultipleWorkers — a parallelism-2 job reports exactly two
+// A parallelism-2 job reports exactly two
 // worker status entries while it runs.
-func TestSB065_UseMultipleWorkers(t *testing.T) {
+func TestUseMultipleWorkers(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}

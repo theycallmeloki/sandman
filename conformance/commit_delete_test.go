@@ -10,7 +10,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB124_DeleteCommitCascadesThroughDAG(t *testing.T) {
+func TestDeleteCommitCascadesThroughDAG(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	p0, p1 := uniq(t), uniq(t)
@@ -96,7 +96,7 @@ func TestSB124_DeleteCommitCascadesThroughDAG(t *testing.T) {
 	}
 }
 
-func TestSB125_DeleteHeadSupersedesInflightJob(t *testing.T) {
+func TestDeleteHeadSupersedesInflightJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)

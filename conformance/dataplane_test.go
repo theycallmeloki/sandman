@@ -8,10 +8,10 @@ import (
 	"sandman/client"
 )
 
-// SB-001 — a single input pipeline copies input files into its output
+// A single input pipeline copies input files into its output
 // repository: one output commit per input commit; file name and content
 // preserved end to end.
-func TestSB001_SingleInputPipelineCopiesInputFiles(t *testing.T) {
+func TestSingleInputPipelineCopiesInputFiles(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -41,9 +41,9 @@ func TestSB001_SingleInputPipelineCopiesInputFiles(t *testing.T) {
 	}
 }
 
-// SB-002 — a repository's reported size equals the total size of the files
+// A repository's reported size equals the total size of the files
 // in its main branch head revision.
-func TestSB002_RepoSizeEqualsHeadFileBytes(t *testing.T) {
+func TestRepoSizeEqualsHeadFileBytes(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"a": "aaa", "b": "bbbbb"})
@@ -57,9 +57,9 @@ func TestSB002_RepoSizeEqualsHeadFileBytes(t *testing.T) {
 	}
 }
 
-// SB-003 — a pipeline with a single named input processes and preserves the
+// A pipeline with a single named input processes and preserves the
 // input file; the input's name (not the repo name) addresses its data.
-func TestSB003_NamedInputPreservesFile(t *testing.T) {
+func TestNamedInputPreservesFile(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -83,9 +83,9 @@ func TestSB003_NamedInputPreservesFile(t *testing.T) {
 	}
 }
 
-// SB-005 — large input files pass through the pipeline byte-for-byte with
+// Large input files pass through the pipeline byte-for-byte with
 // correct size metadata.
-func TestSB005_LargeFilesPassThroughByteForByte(t *testing.T) {
+func TestLargeFilesPassThroughByteForByte(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -129,9 +129,9 @@ func TestSB005_LargeFilesPassThroughByteForByte(t *testing.T) {
 	}
 }
 
-// SB-016 — empty files are real, zero-length inputs that reach execution
+// Empty files are real, zero-length inputs that reach execution
 // intact.
-func TestSB016_EmptyFilesReachExecution(t *testing.T) {
+func TestEmptyFilesReachExecution(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -155,8 +155,8 @@ func TestSB016_EmptyFilesReachExecution(t *testing.T) {
 	}
 }
 
-// SB-046 — a single commit can hold thousands of files and list them all.
-func TestSB046_ThousandsOfFilesInOneCommit(t *testing.T) {
+// A single commit can hold thousands of files and list them all.
+func TestThousandsOfFilesInOneCommit(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -194,9 +194,9 @@ func TestSB046_ThousandsOfFilesInOneCommit(t *testing.T) {
 	}
 }
 
-// SB-117 — commits carry an optional description settable at start and
+// Commits carry an optional description settable at start and
 // finish; a finish-time description overrides the start-time one.
-func TestSB117_CommitDescriptionStartFinishOverride(t *testing.T) {
+func TestCommitDescriptionStartFinishOverride(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -240,10 +240,10 @@ func TestSB117_CommitDescriptionStartFinishOverride(t *testing.T) {
 	}
 }
 
-// SB-118 — a commit finished as explicitly empty carries no file content:
+// A commit finished as explicitly empty carries no file content:
 // files from its parent revision are not readable through it, even at the
 // branch head.
-func TestSB118_EmptyCommitBlocksParentReads(t *testing.T) {
+func TestEmptyCommitBlocksParentReads(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"file": "data contents"})

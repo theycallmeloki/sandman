@@ -10,7 +10,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB077_UnionReprocessesRemovedIdenticalDatums(t *testing.T) {
+func TestUnionReprocessesRemovedIdenticalDatums(t *testing.T) {
 	repoA, repoB := uniq(t)+"a", uniq(t)+"b"
 	mustRepo(t, repoA)
 	mustRepo(t, repoB)
@@ -87,13 +87,13 @@ func TestSB077_UnionReprocessesRemovedIdenticalDatums(t *testing.T) {
 	}
 }
 
-// TestSB078_UnionComposition covers the union semantics whose size
+// TestUnionComposition covers the union semantics whose size
 // arithmetic is exact and clean-room derivable,
 // plus the alias-validation rejections of clauses 5 and 6. The reference's
 // deep compositions (cross-of-unions sizes, aliased union-of-crosses
 // sizes) depend on its internal accumulation; sandman's coherent model is
 // asserted on the same shapes in the clauses below.
-func TestSB078_UnionComposition(t *testing.T) {
+func TestUnionComposition(t *testing.T) {
 	// four repositories, each with file-0 ("0") and file-1 ("1")
 	var repos []string
 	for i := 1; i <= 4; i++ {

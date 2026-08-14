@@ -72,9 +72,9 @@ func containerNames(t *testing.T) []string {
 	return names
 }
 
-// TestSB032_UpdatePipelineWithOnlyFailedJob — updating a pipeline whose only
+// TestUpdatePipelineWithOnlyFailedJob — updating a pipeline whose only
 // history is a failed job with no output commit must succeed.
-func TestSB032_UpdatePipelineWithOnlyFailedJob(t *testing.T) {
+func TestUpdatePipelineWithOnlyFailedJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -93,9 +93,9 @@ func TestSB032_UpdatePipelineWithOnlyFailedJob(t *testing.T) {
 	mustUpdate(t, name, exit1, &client.Input{Repo: repo, Glob: "/*"}, false)
 }
 
-// TestSB033_AcceptReturnCode — a declared acceptable exit code turns a
+// TestAcceptReturnCode — a declared acceptable exit code turns a
 // non-zero job exit into a success that still produces its output.
-func TestSB033_AcceptReturnCode(t *testing.T) {
+func TestAcceptReturnCode(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -122,10 +122,10 @@ func TestSB033_AcceptReturnCode(t *testing.T) {
 	}
 }
 
-// TestSB040_UpdateChangesTransform — an update swaps the transform for new
+// TestUpdateChangesTransform — an update swaps the transform for new
 // jobs, preserves old jobs' transform in history, and provisions fresh
 // participants.
-func TestSB040_UpdateChangesTransform(t *testing.T) {
+func TestUpdateChangesTransform(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -183,10 +183,10 @@ func TestSB040_UpdateChangesTransform(t *testing.T) {
 	}
 }
 
-// TestSB041_UpdateFinalizesPendingWork — updating while work is pending
+// TestUpdateFinalizesPendingWork — updating while work is pending
 // must not wedge later processing (the stats-commit half is N/A
 // until the stats branch exists).
-func TestSB041_UpdateFinalizesPendingWork(t *testing.T) {
+func TestUpdateFinalizesPendingWork(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -212,10 +212,10 @@ func TestSB041_UpdateFinalizesPendingWork(t *testing.T) {
 	}
 }
 
-// TestSB042_ManyUpdates — a pipeline updated many times in a row produces a
+// TestManyUpdates — a pipeline updated many times in a row produces a
 // new job and output commit per update, with monotonically growing history
 // (upstream runs this manually only).
-func TestSB042_ManyUpdates(t *testing.T) {
+func TestManyUpdates(t *testing.T) {
 	for _, reprocess := range []bool{true, false} {
 		t.Run(fmt.Sprintf("reprocess=%v", reprocess), func(t *testing.T) {
 			repo := uniq(t)
@@ -245,14 +245,14 @@ func TestSB042_ManyUpdates(t *testing.T) {
 	}
 }
 
-// TestSB043_CrashThenUpdate — a pipeline whose execution environment cannot
+// TestCrashThenUpdate — a pipeline whose execution environment cannot
 // be provisioned enters the crashed state with a reason; updating it to a
 // working configuration returns it to running.
 
-// TestSB044_UpdateStoppedPipeline — updating a stopped pipeline applies the
+// TestUpdateStoppedPipeline — updating a stopped pipeline applies the
 // new version without restarting it; the paused backlog is processed on
 // start.
-func TestSB044_UpdateStoppedPipeline(t *testing.T) {
+func TestUpdateStoppedPipeline(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -301,10 +301,10 @@ func TestSB044_UpdateStoppedPipeline(t *testing.T) {
 	}
 }
 
-// TestSB045_UpdateKillsInFlight — updating a pipeline with in-flight jobs
+// TestUpdateKillsInFlight — updating a pipeline with in-flight jobs
 // terminates them as killed and completes the head commit under the new
 // transform.
-func TestSB045_UpdateKillsInFlight(t *testing.T) {
+func TestUpdateKillsInFlight(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -336,10 +336,10 @@ func TestSB045_UpdateKillsInFlight(t *testing.T) {
 	}
 }
 
-// TestSB092_UpdateFixesFailingPipeline — updating a failing pipeline's
+// TestUpdateFixesFailingPipeline — updating a failing pipeline's
 // command produces a new, successful job for the same input without
 // creating a duplicate pipeline identity.
-func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
+func TestUpdateFixesFailingPipeline(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -396,9 +396,9 @@ func TestSB092_UpdateFixesFailingPipeline(t *testing.T) {
 	}
 }
 
-// TestSB136_VersionAncestry — every update preserves a version addressable
+// TestVersionAncestry — every update preserves a version addressable
 // by ancestry depth; the current version is the most recent.
-func TestSB136_VersionAncestry(t *testing.T) {
+func TestVersionAncestry(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo) // no commits: the pipeline never runs
 	name := uniq(t)
@@ -434,14 +434,14 @@ func TestSB136_VersionAncestry(t *testing.T) {
 	}
 }
 
-// TestSB143_VersionedHistory — updates create versioned history; job and
+// TestVersionedHistory — updates create versioned history; job and
 // pipeline listings honor history depth with exact boundaries, and one
 // pipeline's activity leaves another's counts untouched. The
 // upstream counts differ in the middle stages because their scheduler
 // re-attributes some jobs; the contract asserted here — one new job and one
 // new output commit per version transition, monotonic accumulation, and
 // exact depth boundaries — matches the record's stated invariants.
-func TestSB143_VersionedHistory(t *testing.T) {
+func TestVersionedHistory(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)
@@ -528,10 +528,10 @@ func TestSB143_VersionedHistory(t *testing.T) {
 	}
 }
 
-// TestSB164_SpecCommitCleanup — pipeline definitions live in the spec
+// TestSpecCommitCleanup — pipeline definitions live in the spec
 // repository, one commit per definition; a failed duplicate create leaves
 // no extra spec commit.
-func TestSB164_SpecCommitCleanup(t *testing.T) {
+func TestSpecCommitCleanup(t *testing.T) {
 	withIsolatedDaemon(t) // the reset wipes spec state; never the shared daemon's
 	noPanic(t, c.Reset()) // fresh spec repository
 	if got := commitCount(t, "spec", "master"); got != 0 {
@@ -563,9 +563,9 @@ func TestSB164_SpecCommitCleanup(t *testing.T) {
 // A changed transform does NOT invalidate datums whose inputs are
 // unchanged: updating ONLY the transform keeps the dedup ledger, so the
 // head job re-runs with the datum skipped; the new transform applies to
-// changed input. (TestSB040 changes the input with the update and
-// TestSB042 keeps the transform identical — this isolates the clause.)
-func TestD13_UpdateWithUnchangedInputKeepsDedup(t *testing.T) {
+// changed input. (TestUpdateChangesTransform changes the input with the update and
+// TestManyUpdates keeps the transform identical — this isolates the clause.)
+func TestUpdateWithUnchangedInputKeepsDedup(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	name := uniq(t)

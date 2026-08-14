@@ -143,7 +143,7 @@ func stopDaemon() {
 func startDaemon(state string) {
 	// the matrix runs on the process backend: deterministic,
 	// no container runtime required; the container-facing subset spins
-	// its own container daemon (container_test.go)
+	// its own container daemon (TestStandbyIdlesWithZeroContainers TestStandbyIdlesWithZeroContainers)
 	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(daemonPort), "-state", state, "-runner", "process")
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr

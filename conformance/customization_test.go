@@ -14,9 +14,9 @@ import (
 	"sandman/client"
 )
 
-// TestSB072_RejectsMalformedCustomization — malformed spec/patch JSON
+// TestRejectsMalformedCustomization — malformed spec/patch JSON
 // fails pipeline creation before any execution.
-func TestSB072_RejectsMalformedCustomization(t *testing.T) {
+func TestRejectsMalformedCustomization(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cases := []struct {
@@ -56,11 +56,11 @@ func TestSB072_RejectsMalformedCustomization(t *testing.T) {
 	}
 }
 
-// TestSB072_AppliesCustomization — a well-formed spec and a well-formed
+// TestAppliesCustomization — a well-formed spec and a well-formed
 // patch both reach the execution environment: the
 // document's env vars are visible to the job. The scheduling constraint
 // alongside customization is the placement mechanism.
-func TestSB072_AppliesCustomization(t *testing.T) {
+func TestAppliesCustomization(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})
@@ -88,10 +88,10 @@ func TestSB072_AppliesCustomization(t *testing.T) {
 	}
 }
 
-// TestSB152_PodPatchVolume — a patch adding a volume reaches the
+// TestPodPatchVolume — a patch adding a volume reaches the
 // execution participant (its host path is observable from user code) and
 // does not disturb data processing.
-func TestSB152_PodPatchVolume(t *testing.T) {
+func TestPodPatchVolume(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})

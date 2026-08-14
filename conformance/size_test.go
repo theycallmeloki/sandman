@@ -6,11 +6,11 @@ import (
 	"sandman/client"
 )
 
-// TestSB002_RepoSize — a repository's reported size is the total bytes of
+// TestRepoSize — a repository's reported size is the total bytes of
 // its primary branch's head revision, for data repos and pipeline output
 // repos alike, and stays in sync across commit deletion (the
 // upstream #3330 regression: output repos reporting 0B).
-func TestSB002_RepoSize(t *testing.T) {
+func TestRepoSize(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 

@@ -1,4 +1,4 @@
-// SB-067/068/069/070 — resource requests and limits declared on a
+// Resource requests and limits declared on a
 // pipeline are applied to the environment that executes its jobs (docker
 // inspect of the live execution participant); a pipeline with no declared
 // resources runs with none injected; partial or empty specifications are

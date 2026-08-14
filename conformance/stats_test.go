@@ -24,10 +24,10 @@ func statsCopy(repo string, sleep string) *client.Transform {
 	}
 }
 
-// TestSB080_PerDatumStatistics — a stats-enabled pipeline records one
+// TestPerDatumStatistics — a stats-enabled pipeline records one
 // datum per glob match; datums are listable during execution and after,
 // with pagination metadata.
-func TestSB080_PerDatumStatistics(t *testing.T) {
+func TestPerDatumStatistics(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -104,10 +104,10 @@ func TestSB080_PerDatumStatistics(t *testing.T) {
 	}
 }
 
-// TestSB081_StatsCanBeEnabledNotDisabled — statistics can be toggled on by
+// TestStatsCanBeEnabledNotDisabled — statistics can be toggled on by
 // an update, never off; a no-stats job's datums list by identity but do
 // not inspect.
-func TestSB081_StatsCanBeEnabledNotDisabled(t *testing.T) {
+func TestStatsCanBeEnabledNotDisabled(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -184,9 +184,9 @@ func TestSB081_StatsCanBeEnabledNotDisabled(t *testing.T) {
 	}
 }
 
-// TestSB082_FailedDatumsListedFirst — a failed datum is recorded FAILED and
+// TestFailedDatumsListedFirst — a failed datum is recorded FAILED and
 // leads the state-ordered listing.
-func TestSB082_FailedDatumsListedFirst(t *testing.T) {
+func TestFailedDatumsListedFirst(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -232,9 +232,9 @@ func TestSB082_FailedDatumsListedFirst(t *testing.T) {
 	}
 }
 
-// TestSB083_PaginatedDatumListing — page boundaries, page metadata, and
+// TestPaginatedDatumListing — page boundaries, page metadata, and
 // out-of-range rejection.
-func TestSB083_PaginatedDatumListing(t *testing.T) {
+func TestPaginatedDatumListing(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -287,10 +287,10 @@ func TestSB083_PaginatedDatumListing(t *testing.T) {
 	}
 }
 
-// TestSB084_DatumStatsAcrossJobs — a job's listing includes the datums
+// TestDatumStatsAcrossJobs — a job's listing includes the datums
 // carried from the previous job as skipped, ordered processed before
 // skipped.
-func TestSB084_DatumStatsAcrossJobs(t *testing.T) {
+func TestDatumStatsAcrossJobs(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -353,10 +353,10 @@ func TestSB084_DatumStatsAcrossJobs(t *testing.T) {
 	}
 }
 
-// TestSB085_SkippedEdgeCase — a file deleted and re-added with identical
+// TestSkippedEdgeCase — a file deleted and re-added with identical
 // content is skipped, not reprocessed: skip detection compares the final
 // content against the last successful processing.
-func TestSB085_SkippedEdgeCase(t *testing.T) {
+func TestSkippedEdgeCase(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -416,10 +416,10 @@ func TestSB085_SkippedEdgeCase(t *testing.T) {
 	}
 }
 
-// TestSB086_PipelineOnStatsBranch — a stats-enabled pipeline maintains a
+// TestPipelineOnStatsBranch — a stats-enabled pipeline maintains a
 // "stats" branch on its output repo that downstream pipelines can consume;
 // the change propagates through both stages.
-func TestSB086_PipelineOnStatsBranch(t *testing.T) {
+func TestPipelineOnStatsBranch(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
@@ -461,10 +461,10 @@ func TestSB086_PipelineOnStatsBranch(t *testing.T) {
 	}
 }
 
-// TestSB113_DatumTimeoutRecorded — a datum exceeding its per-datum timeout
+// TestDatumTimeoutRecorded — a datum exceeding its per-datum timeout
 // is terminated at the boundary: failed datum, failed job, process time
 // equal to the timeout, and output plus statistics commits.
-func TestSB113_DatumTimeoutRecorded(t *testing.T) {
+func TestDatumTimeoutRecorded(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -516,9 +516,9 @@ func TestSB113_DatumTimeoutRecorded(t *testing.T) {
 	}
 }
 
-// TestSB114_ListDatumDuringJob — datums are listable while the job is
+// TestListDatumDuringJob — datums are listable while the job is
 // still running; the datum in progress appears before completion.
-func TestSB114_ListDatumDuringJob(t *testing.T) {
+func TestListDatumDuringJob(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
@@ -556,12 +556,12 @@ func TestSB114_ListDatumDuringJob(t *testing.T) {
 	}
 }
 
-// TestSB041_StatsSurviveUpdate — the stats+update variant: a
+// TestStatsSurviveUpdate — the stats+update variant: a
 // stats-enabled pipeline's flush reports the output and stats commits,
 // and after an update the pipeline is not blocked by a stats commit a
 // previous version left unfinished — a new commit's flush still reports
 // both commits, and the job is not held by the stats step.
-func TestSB041_StatsSurviveUpdate(t *testing.T) {
+func TestStatsSurviveUpdate(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "x"})

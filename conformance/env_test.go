@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// SB-096 — each input repository is exposed to the pipeline command as an
+// Each input repository is exposed to the pipeline command as an
 // environment variable named after the repository; the command can copy all
 // 10 input files through that variable, byte-for-byte.
-func TestSB096_InputRepoEnvVar(t *testing.T) {
+func TestInputRepoEnvVar(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	files := map[string]string{}
@@ -42,9 +42,9 @@ func TestSB096_InputRepoEnvVar(t *testing.T) {
 	}
 }
 
-// SB-101 — custom environment variables declared in a pipeline's execution
+// Custom environment variables declared in a pipeline's execution
 // configuration are visible inside the execution environment, unmodified.
-func TestSB101_CustomEnvVarsVisible(t *testing.T) {
+func TestCustomEnvVarsVisible(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -71,10 +71,10 @@ func TestSB101_CustomEnvVarsVisible(t *testing.T) {
 	}
 }
 
-// SB-051 — jobs receive metadata through the environment: job id, output
+// Jobs receive metadata through the environment: job id, output
 // commit id, per-input commit id, and the input path, alongside custom
 // variables. (Secret store values are deferred to the secrets batch.)
-func TestSB051_JobMetadataEnvVars(t *testing.T) {
+func TestJobMetadataEnvVars(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 
@@ -124,5 +124,5 @@ func TestSB051_JobMetadataEnvVars(t *testing.T) {
 	}
 }
 
-// SB-128 — execution participants run user code under a configured user
+// Execution participants run user code under a configured user
 // identity and working directory, observable through whoami and pwd.

@@ -15,7 +15,7 @@ import (
 	"sandman/client"
 )
 
-func TestFS1_AppendWithinCommit(t *testing.T) {
+func TestAppendWithinCommit(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm, err := c.StartCommit(repo, "master", "")
@@ -52,7 +52,7 @@ func TestFS1_AppendWithinCommit(t *testing.T) {
 	}
 }
 
-func TestFS2_AccumulateAcrossCommits(t *testing.T) {
+func TestAccumulateAcrossCommits(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
@@ -83,7 +83,7 @@ func TestFS2_AccumulateAcrossCommits(t *testing.T) {
 	}
 }
 
-func TestFS3_OverwriteReplaces(t *testing.T) {
+func TestOverwriteReplaces(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
@@ -111,7 +111,7 @@ func TestFS3_OverwriteReplaces(t *testing.T) {
 	}
 }
 
-func TestFS4_DeleteSemantics(t *testing.T) {
+func TestDeleteSemantics(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"x": "foo", "y": "a"})
@@ -167,7 +167,7 @@ func TestFS4_DeleteSemantics(t *testing.T) {
 	}
 }
 
-func TestFS5_JobSamePathDatumConcat(t *testing.T) {
+func TestJobSamePathDatumConcat(t *testing.T) {
 	t.Run("concatenates in datum order", func(t *testing.T) {
 		repo := uniq(t)
 		mustRepo(t, repo)
@@ -223,7 +223,7 @@ func TestFS5_JobSamePathDatumConcat(t *testing.T) {
 	})
 }
 
-func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
+func TestReprocessReplacesPriorOutput(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -280,7 +280,7 @@ func TestFS6_ReprocessReplacesPriorOutput(t *testing.T) {
 	})
 }
 
-func TestFS7_SplitNumberingAcrossCommits(t *testing.T) {
+func TestSplitNumberingAcrossCommits(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	upload := func(header string, rows ...string) client.Commit {
@@ -328,7 +328,7 @@ func TestFS7_SplitNumberingAcrossCommits(t *testing.T) {
 	}
 }
 
-func TestFS8_EmptyFilesAreReal(t *testing.T) {
+func TestEmptyFilesAreReal(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm, err := c.StartCommit(repo, "master", "")
@@ -359,7 +359,7 @@ func TestFS8_EmptyFilesAreReal(t *testing.T) {
 	}
 }
 
-func TestFS9_MidCommitVisibility(t *testing.T) {
+func TestMidCommitVisibility(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm, err := c.StartCommit(repo, "master", "")

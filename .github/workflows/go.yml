@@ -72,16 +72,13 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # SB-001..059 plus the non-SB docker-heavy tests
-          - name: sb001-059
-            pattern: 'TestSB(00[1-9]|0[1-5][0-9])|TestD[0-9]+|TestEgress|TestFS|TestService'
-          # SB-060..119
-          - name: sb060-119
-            pattern: 'TestSB(0[6-9][0-9]|1[01][0-9])'
-          # SB-120..173 plus the fast non-SB tests, the cli smoke, and the
-          # root unit tests (the lightest shard carries the extra suites)
-          - name: sb120-rest
-            pattern: 'TestSB1[2-9][0-9]|TestBranch|TestFetch|TestHyphenated|TestSecrets|TestTagDelete|TestTx|TestMain'
+          # three balanced thirds of the descriptive-name conformance suite
+          - name: shard-1
+            pattern: 'Test(AcceptReturnCode|AccumulateAcrossCommits|AppendWithinCommit|AppliesCustomization|AutoscalingRampsToDatumCount|BackupRestoreRoundTrip|BranchInspectListDelete|BurstManyPipelines|CancelRunningJob|ChangedHeaderReprocessesAll|ChangedTransformDoesNotReprocessUnchangedDatums|ChunkSpecOutputComplete|CommandlessPipelineCopies|CommitDescriptionStartFinishOverride|ConfigExtractionRoundTrip|CopyOutToInWithOverwriteProtection|CrashThenUpdate|CreateWithoutNameRejected|CreateWithoutTransformRejected|CronCadenceSurvivesUpdates|CronInputs|CrossDuplicateNamesRejected|CrossInputProcessesEveryCombination|CrossInputsTwoBranchesSameRepo|CrossUnionHeadResolution|CustomEnvVarsVisible|DatumStatsAcrossJobs|DatumStatusRestart|DatumTimeoutControl|DatumTimeoutRecorded|DatumTries|DeferredProcessingAcrossBranches|DeleteAndRecreateReprocesses|DeleteCommitCascadesThroughDAG|DeleteHeadSupersedesInflightJob|DeleteJobFinalizesOutput|DeleteMidDAGGuard|DeleteRepoAfterMembershipChange|DeleteSemantics|DeleteStandbyPipeline|DelimitedUploadsReplicateHeader|DetailedRendering|DiamondProvenanceOneCommitPerStage|EachCommitCumulativeJob|EgressFailure|EgressFileDestination|EmptyCommitBlocksParentReads|EmptyCommitsTriggerJobsNoStdinDeadlock|EmptyFilesAreReal|EmptyFilesReachExecution|ErrorHandlingCommands|FailedDatumsListedFirst|FailedJobFailsDownstream|FanOutDistinctNames|FanOutSharedRepo|Fetch_RejectsLinkLocal|FileFetchHeaders|FileRevisionHistory|FlushChainRepeated|FullReset|GarbageCollection|GitBranchFilter|GitCloneFailure|GitCustomName|GitDuplicateNamesAndURLs|GitPushCommitsAndTriggers|GitURLValidation|GlobalLogStore)'
+          - name: shard-2
+            pattern: 'Test(GroupInputs|HeadJobSeesAccumulatedContent|HeadOnlyOneOutputCommit|HyphenatedRepoName|IncompletePipeline|InputDataModifications|InputDefaultsMaterialized|InputNamedOutAndMissingGlobRejected|InputRepoEnvVar|InspectJobByJobOrOutputCommit|JobMetadataEnvVars|JobSamePathDatumConcat|JobTimeout|JoinInputPairsByKey|KeepRepoOnDelete|LargeFilesPassThroughByteForByte|LargeOutputAcrossParallelWorkers|LazyPropagatesThroughChain|LazyUnreadFilesDoNotBlock|LifecycleStates|ListDatum|ListDatumDuringJob|ListJobInputCommits|ListJobsFilteredByOutputCommit|ListJobsFilteredByStates|LogQueries|LogsWithoutStats|Main|MalformedPipelineRequestsRejected|ManyLogs|ManyUpdates|MaxQueueSize|MetricsEndpoint|MidCommitVisibility|MidDAGCommitOneWavePerStage|MidFlightJobRecordedFailedOnRestart|MixedParallelismRejected|MultipleInputsFromTheSameBranch|NamedInputPreservesFile|NamesWithHyphensAndUnderscores|NoCommandAcceptedButFailsAtStart|NoLimitsInjected|NoPanicOnEmptyRequests|NonReducedProvenanceOneCommitPerPath|NonexistentInputRepoRejected|OuterJoinKeepsUnmatchedOuterOnly|OverwriteReplaces|PaginatedDatumListing|ParallelPipelineProducesAllPerDatumOutputs|PartialResourceSpecsAccepted|PerDatumStatistics|PipelineAfterHistoryProcessesHead|PipelineDescriptionRoundTrips|PipelineFailureMentionsDatum|PipelineJobCounts|PipelineNamePathEscapeRejected|PipelineNameUniqueness|PipelineOnStatsBranch|PlacementLabels|PodPatchVolume|QueueSerializes|RecursiveDirectoryCopy|RejectsBadServiceSpecs|RejectsMalformedCustomization|RemoteServiceReachable|RepoSize|RepoSizeEqualsHeadFileBytes|ReprocessEveryJob)'
+          - name: shard-3
+            pattern: 'Test(ReprocessReplacesPriorOutput|ResetRemovesStatsState|ResetRobustness|ResourceLimitsApplied|ResourceRequestsApplied|RestartKeepsDataAndPipelines|RestartSingleInstance|RunPipeline|SameMountPathMerges|SecretBinding|SecretBindingRejectsMissing|SecretBindingSurvivesRestart|SecretsCRUD|Secrets_NameValidation|SelfReferentialInputRejected|SequentialPushes|ServiceLocalContainerReachable|ServicePipeline|SingleInputPipelineCopiesInputFiles|SizeTriggerLedgerSurvivesRestart|SizeTriggers|SkippedEdgeCase|SlowDatumsParallelCompleteness|SpecCommitCleanup|SpecRepoProtected|SpecialOutputFileFails|SplitNumberingAcrossCommits|SplitTransactionDelete|SpoutEpochsAndMarker|SpoutPipelines|StandbyChainAndManyCommits|StandbyIdlesWithZeroContainers|StandbyLifecycle|StatsCanBeEnabledNotDisabled|StatsSurviveUpdate|StopJob|StopMidChainNoSpuriousDownstreamCommit|StopStandbyPipeline|StoppedIgnoresRestartBacklog|SurvivesDeletedOutputRepo|SymlinkOutputs|TagDelete|TagsListAndRetrieve|ThousandsOfFilesInOneCommit|TransactionAtomicApply|TransactionInvalidatedByExternalUpdate|TruncatedAndFullListing|TwentyThousandOutputFiles|TxAbortLeavesNoSpecCommits|TxInspectList|UnchangedDatumsNotReprocessed|UnionComposition|UnionReprocessesRemovedIdenticalDatums|UnplaceableRecovery|UnprovisionableEnvironmentCrashes|UnsatisfiableResourcesAcceptedAndRecorded|UpdateChangesTransform|UpdateFinalizesPendingWork|UpdateFixesFailingPipeline|UpdateKillsInFlight|UpdatePipelineWithOnlyFailedJob|UpdateStoppedPipeline|UpdateWithUnchangedInputKeepsDedup|UpstreamOutputInsideCross|UrlIngestionJsonSpecPipelines|UseMultipleWorkers|UserIdentityAndWorkingDir|VersionAncestry|VersionedHistory)'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,7 +102,7 @@ jobs:
         run: go test -timeout 45m ./conformance/ -run '${{ matrix.shard.pattern }}'
 
       - name: CLI smoke + root unit tests
-        if: matrix.shard.name == 'sb120-rest'
+        if: matrix.shard.name == 'shard-3'
         run: |
           go test -timeout 15m ./cli/...
           go test -timeout 15m .

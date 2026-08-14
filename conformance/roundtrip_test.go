@@ -1,4 +1,4 @@
-// SB-151 — extracting a pipeline's configuration returns a creation
+// Extracting a pipeline's configuration returns a creation
 // request deep-equal to the one used to create it: every user-settable
 // field round-trips, the input's name/branch defaults are materialized,
 // and an unsupported execution framework is rejected at creation with an
@@ -13,7 +13,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB151_ConfigExtractionRoundTrip(t *testing.T) {
+func TestConfigExtractionRoundTrip(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -89,7 +89,7 @@ func TestSB151_ConfigExtractionRoundTrip(t *testing.T) {
 
 // the input's implicit name and branch defaults are materialized into the
 // stored spec and echoed by extraction
-func TestSB151_InputDefaultsMaterialized(t *testing.T) {
+func TestInputDefaultsMaterialized(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)

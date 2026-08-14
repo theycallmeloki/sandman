@@ -11,10 +11,10 @@ import (
 	"sandman/client"
 )
 
-// TestSB014_LazyPropagatesThroughChain — the lazy flag is part of the
+// The lazy flag is part of the
 // input spec and is recorded on every job's input snapshot, through the
 // output-repo hop of a chain.
-func TestSB014_LazyPropagatesThroughChain(t *testing.T) {
+func TestLazyPropagatesThroughChain(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pa, pb := uniq(t), uniq(t)
@@ -47,10 +47,10 @@ func TestSB014_LazyPropagatesThroughChain(t *testing.T) {
 	}
 }
 
-// TestSB015_LazyUnreadFilesDoNotBlock — with the whole commit as one lazy
+// With the whole commit as one lazy
 // datum, a transform that reads only one file still completes; the unread
 // file blocks nothing.
-func TestSB015_LazyUnreadFilesDoNotBlock(t *testing.T) {
+func TestLazyUnreadFilesDoNotBlock(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -77,14 +77,14 @@ func TestSB015_LazyUnreadFilesDoNotBlock(t *testing.T) {
 	}
 }
 
-// TestSB017_SpecialOutputFileFailsNotHangs — a transform that produces a
+// A transform that produces a
 // special (pipe-like) file in its output makes the job fail promptly; the
 // upload path rejects non-regular files instead of blocking forever or
 // storing garbage. Clean-room note: the reference's special files
 // come from its lazy-file mechanism; sandman materializes lazy inputs as
 // regular files, so the equivalent corruption vector is a transform-created
 // FIFO — the contract under test is the upload's special-file rejection.
-func TestSB017_SpecialOutputFileFails(t *testing.T) {
+func TestSpecialOutputFileFails(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -120,10 +120,10 @@ func TestSB017_SpecialOutputFileFails(t *testing.T) {
 	}
 }
 
-// TestSB018_NonReducedProvenance — a DAG with two provenance routes into
+// A DAG with two provenance routes into
 // one pipeline (A→B→C and A→C) yields one C commit per source commit, not
 // one per path; the diff sees the coherent revision pair.
-func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
+func TestNonReducedProvenanceOneCommitPerPath(t *testing.T) {
 	// RUN_BAD_TESTS gate: the pairing race has a residual settle-time
 	// window (record/growth interleavings; parked after the flush,
 	// atomic-write, and resolve/revert fixes). Upstream gates its
@@ -207,10 +207,10 @@ func TestSB018_NonReducedProvenanceOneCommitPerPath(t *testing.T) {
 	_ = jobs
 }
 
-// TestSB019_DiamondProvenance — a diamond (A→B, A→C, D crosses B and C)
+// A diamond (A→B, A→C, D crosses B and C)
 // yields exactly one commit per repository per source commit, and D's diff
 // is empty for every commit (matched pairs).
-func TestSB019_DiamondProvenanceOneCommitPerStage(t *testing.T) {
+func TestDiamondProvenanceOneCommitPerStage(t *testing.T) {
 	// RUN_BAD_TESTS gate: the pairing race has a residual settle-time
 	// window (record/growth interleavings; parked after the flush,
 	// atomic-write, and resolve/revert fixes). Upstream gates its
@@ -294,10 +294,10 @@ func TestSB019_DiamondProvenanceOneCommitPerStage(t *testing.T) {
 	}
 }
 
-// TestSB055_DownstreamConsumesUpstreamOutputInCross — a cross input may
+// A cross input may
 // combine a pipeline's output repository with a plain repository; the
 // downstream output combines both sides' content.
-func TestSB055_UpstreamOutputInsideCross(t *testing.T) {
+func TestUpstreamOutputInsideCross(t *testing.T) {
 	repoA, repoD := uniq(t)+"a", uniq(t)+"d"
 	mustRepo(t, repoA)
 	mustRepo(t, repoD)
@@ -351,10 +351,10 @@ func TestSB055_UpstreamOutputInsideCross(t *testing.T) {
 	}
 }
 
-// TestSB145_FileRevisionHistory — file revision history is listable with
+// File revision history is listable with
 // full depth on outputs produced from multi-commit cross inputs, and the
 // history reflects the successive revisions.
-func TestSB145_FileRevisionHistory(t *testing.T) {
+func TestFileRevisionHistory(t *testing.T) {
 	repoA, repoB := uniq(t)+"a", uniq(t)+"b"
 	mustRepo(t, repoA)
 	mustRepo(t, repoB)

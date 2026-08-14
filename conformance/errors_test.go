@@ -13,11 +13,11 @@ import (
 	"sandman/client"
 )
 
-// TestSB012_ErrorHandlingCommands — a secondary command runs when the
+// TestErrorHandlingCommands — a secondary command runs when the
 // primary fails for a datum: recovered datums count toward success,
 // failed datums fail the job, and updating the pipeline re-runs recovered
 // and failed datums while unchanged successful ones are skipped.
-func TestSB012_ErrorHandlingCommands(t *testing.T) {
+func TestErrorHandlingCommands(t *testing.T) {
 	// ---- (ErrCmd) three files, primary succeeds only for file1, error
 	// handler succeeds only for file3 ----
 	repo := uniq(t)
@@ -128,9 +128,9 @@ func TestSB012_ErrorHandlingCommands(t *testing.T) {
 	}
 }
 
-// TestSB115_DatumTimeoutControl — a datum that finishes inside its
+// TestDatumTimeoutControl — a datum that finishes inside its
 // configured per-datum timeout is unaffected and the job succeeds.
-func TestSB115_DatumTimeoutControl(t *testing.T) {
+func TestDatumTimeoutControl(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "foo"})
@@ -155,10 +155,10 @@ func TestSB115_DatumTimeoutControl(t *testing.T) {
 	}
 }
 
-// TestSB116_JobTimeout — a whole-job timeout kills the job at the
+// TestJobTimeout — a whole-job timeout kills the job at the
 // boundary: state KILLED (not FAILED), duration equal to the timeout
 // within tolerance, and the job is observable while running.
-func TestSB116_JobTimeout(t *testing.T) {
+func TestJobTimeout(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file1": "a", "file2": "b"})

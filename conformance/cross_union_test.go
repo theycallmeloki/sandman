@@ -1,4 +1,4 @@
-// SB-141 — a cross input whose member is a union of two branches of one
+// A cross input whose member is a union of two branches of one
 // repository resolves the other cross leg to the current branch head at
 // job-creation time and creates exactly one job (reference issue #5172).
 package conformance
@@ -9,7 +9,7 @@ import (
 	"sandman/client"
 )
 
-func TestSB141_CrossUnionHeadResolution(t *testing.T) {
+func TestCrossUnionHeadResolution(t *testing.T) {
 	ds := uniq(t)
 	mustRepo(t, ds)
 	cm := commitFiles(t, ds, "master", map[string]string{"a": "1", "b": "2", "c": "3"})

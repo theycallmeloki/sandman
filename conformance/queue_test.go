@@ -10,10 +10,10 @@ import (
 	"sandman/client"
 )
 
-// TestSB123_QueueSerializes — with parallelism 1, jobs run strictly one at
+// TestQueueSerializes — with parallelism 1, jobs run strictly one at
 // a time; cancelling the running job lets the next queued job start, and
 // cancelling one job never cancels the queued others.
-func TestSB123_QueueSerializes(t *testing.T) {
+func TestQueueSerializes(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -103,12 +103,12 @@ func TestSB123_QueueSerializes(t *testing.T) {
 	})
 }
 
-// TestSB121_BurstManyPipelines — a burst of rapid revisions across many
+// TestBurstManyPipelines — a burst of rapid revisions across many
 // pipelines is fully consumed: every revision gets a job, the final
 // revision converges, and the job index stays queryable. Scaled
 // from the reference's 5000 commits × 10 pipelines — skipped upstream as
 // too long for CI — to 120 × 3, exercising the same queue mechanics.
-func TestSB121_BurstManyPipelines(t *testing.T) {
+func TestBurstManyPipelines(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	const pipes = 3

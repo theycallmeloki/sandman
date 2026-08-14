@@ -46,7 +46,7 @@ func TestSecrets_NameValidation(t *testing.T) {
 	}
 }
 
-func TestSB153_SecretsCRUD(t *testing.T) {
+func TestSecretsCRUD(t *testing.T) {
 	// baseline listing
 	base, err := c.ListSecrets()
 	if err != nil {
@@ -102,7 +102,7 @@ func TestSB153_SecretsCRUD(t *testing.T) {
 		t.Fatalf("inspect-after-delete error = %q", err.Error())
 	}
 }
-func TestSB051_SecretBinding(t *testing.T) {
+func TestSecretBinding(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"file": "x\n"})
@@ -144,9 +144,9 @@ func TestSB051_SecretBinding(t *testing.T) {
 	}
 }
 
-// TestSB051_SecretBindingRejectsMissing — a pipeline may reference a
+// A pipeline may reference a
 // secret only through an explicit binding to an existing secret.
-func TestSB051_SecretBindingRejectsMissing(t *testing.T) {
+func TestSecretBindingRejectsMissing(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	p := client.Pipeline{
@@ -166,11 +166,11 @@ func TestSB051_SecretBindingRejectsMissing(t *testing.T) {
 	}
 }
 
-// TestSB051_SecretBindingSurvivesRestart — the binding is durable state,
+// The binding is durable state,
 // not memory: after the daemon restarts, the pipeline still
 // carries its secret mount and a new commit is processed with the secret
 // available exactly as before.
-func TestSB051_SecretBindingSurvivesRestart(t *testing.T) {
+func TestSecretBindingSurvivesRestart(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	commitFiles(t, repo, "master", map[string]string{"file": "x\n"})
@@ -217,12 +217,12 @@ func TestSB051_SecretBindingSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestSB051_SameMountPathMerges — references to several keys at one
+// References to several keys at one
 // MountPath merge into a single bind mount: the pachyderm-style
 // {name, mountPath} pattern declares multiple keys at one path, and
 // docker rejects duplicate mount points for the same container path
 // (the pre-fix behavior failed the job with exit 125).
-func TestSB051_SameMountPathMerges(t *testing.T) {
+func TestSameMountPathMerges(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
 	mustRepo(t, repo)

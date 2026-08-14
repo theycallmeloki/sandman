@@ -13,7 +13,7 @@ import (
 	"sandman/client"
 )
 
-// TestSB008_MultipleInputsFromTheSameBranch — a cross of two directory
+// A cross of two directory
 // globs over one branch: every revision re-reads both sides' latest state
 // (no stale pairing), one output commit per input commit, contributions in
 // declaration order.
@@ -24,7 +24,7 @@ import (
 // summary — the full latest-state cross product per revision, one output
 // commit per input commit, declaration-order concatenation. Our commit 2
 // datum runs fresh against (dirA@bar, dirB@foo) and emits "bar\nfoo\n".
-func TestSB008_MultipleInputsFromTheSameBranch(t *testing.T) {
+func TestMultipleInputsFromTheSameBranch(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -84,11 +84,11 @@ func TestSB008_MultipleInputsFromTheSameBranch(t *testing.T) {
 	}
 }
 
-// TestSB009_CrossInputsTwoBranchesSameRepo — a cross of two named inputs
+// A cross of two named inputs
 // on two branches of the same repository combines into one output commit
 // once both branches have revisions, each side's data addressed by its own
 // input name.
-func TestSB009_CrossInputsTwoBranchesSameRepo(t *testing.T) {
+func TestCrossInputsTwoBranchesSameRepo(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	pipe := uniq(t)
@@ -125,11 +125,11 @@ func TestSB009_CrossInputsTwoBranchesSameRepo(t *testing.T) {
 	}
 }
 
-// TestSB063_CrossInputProcessesEveryCombination — a cross over two
+// A cross over two
 // repositories processes every combination of per-side datums: 2 files × 2
 // files = 4 datums, each emitting both sides' files, concatenated in the
 // single output file (8 lines).
-func TestSB063_CrossInputProcessesEveryCombination(t *testing.T) {
+func TestCrossInputProcessesEveryCombination(t *testing.T) {
 	r1, r2 := uniq(t)+"1", uniq(t)+"2"
 	mustRepo(t, r1)
 	mustRepo(t, r2)
@@ -180,10 +180,10 @@ func TestSB063_CrossInputProcessesEveryCombination(t *testing.T) {
 	}
 }
 
-// TestSB120_ListJobInputCommits — a cross pipeline creates a job on every
+// A cross pipeline creates a job on every
 // input commit, pairing it with the other sides' current heads; job
 // listing filters by the exact input commits a job consumed.
-func TestSB120_ListJobInputCommits(t *testing.T) {
+func TestListJobInputCommits(t *testing.T) {
 	repoA, repoB := uniq(t)+"a", uniq(t)+"b"
 	mustRepo(t, repoA)
 	mustRepo(t, repoB)
@@ -267,9 +267,9 @@ func TestSB120_ListJobInputCommits(t *testing.T) {
 	}
 }
 
-// TestSB161_ListDatum — datum enumeration of a cross input yields the full
+// Datum enumeration of a cross input yields the full
 // cartesian product, standalone (no pipeline).
-func TestSB161_ListDatum(t *testing.T) {
+func TestListDatum(t *testing.T) {
 	r1, r2 := uniq(t)+"1", uniq(t)+"2"
 	mustRepo(t, r1)
 	mustRepo(t, r2)
