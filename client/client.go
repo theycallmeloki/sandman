@@ -1596,7 +1596,9 @@ func (c *Client) Backup(w io.Writer) error {
 		validated <- err
 	}()
 	_, copyErr := io.Copy(io.MultiWriter(w, pw), resp.Body)
-	pw.Close()
+	if err := pw.Close(); err != nil {
+		return fmt.Errorf("backup: close validation pipe: %w", err)
+	}
 	gzErr := <-validated
 	if copyErr != nil {
 		return fmt.Errorf("backup: %w", copyErr)

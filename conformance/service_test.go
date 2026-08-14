@@ -21,9 +21,11 @@ import (
 // TestSB100_ServicePipeline serves the input over HTTP — the long-running
 // process (clause 1), the external endpoint (clause 2), the control-plane
 // proxy (clause 3), the annotation passthrough (clause 4), and the live
-// refresh when a new revision lands (clause 5). Port 31800 is the
-// external port of the reference test's service declaration.
+// refresh when a new revision lands (clause 5). The external port is
+// allocated per run (M10): a hardcoded port collides with a stale
+// leftover service from a previous run.
 func TestSB100_ServicePipeline(t *testing.T) {
+	port := freePort()
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file1": "foo"})
@@ -38,7 +40,7 @@ func TestSB100_ServicePipeline(t *testing.T) {
 		Input:       &client.Input{Repo: repo, Glob: "/"},
 		Service: &client.Service{
 			InternalPort: 8000,
-			ExternalPort: 31800,
+			ExternalPort: port,
 			Annotations:  map[string]string{"foo": "bar"},
 		},
 	}
@@ -47,7 +49,7 @@ func TestSB100_ServicePipeline(t *testing.T) {
 
 	// the external endpoint converges as the process comes up — the
 	// contract is eventual reachability, so probe until it serves
-	svcURL := "http://127.0.0.1:31800/" + repo + "/file1"
+	svcURL := "http://127.0.0.1:" + strconv.Itoa(port) + "/" + repo + "/file1"
 	if b := getUntil(t, svcURL, "foo"); b != "foo" {
 		t.Fatalf("direct endpoint = %q, want %q", b, "foo")
 	}
@@ -68,8 +70,8 @@ func TestSB100_ServicePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect service: %v", err)
 	}
-	if info.Internal != 8000 || info.External != 31800 {
-		t.Fatalf("service ports = %d/%d, want 8000/31800", info.Internal, info.External)
+	if info.Internal != 8000 || info.External != port {
+		t.Fatalf("service ports = %d/%d, want 8000/%d", info.Internal, info.External, port)
 	}
 	actual := map[string]string{}
 	for k, v := range info.Annotations {
@@ -84,7 +86,7 @@ func TestSB100_ServicePipeline(t *testing.T) {
 	// a new revision is served through the same endpoint with no restart
 	// (clause 5); the file2 lookup retries while the refresh lands
 	commitFiles(t, repo, "master", map[string]string{"file2": "bar"})
-	svcURL2 := "http://127.0.0.1:31800/" + repo + "/file2"
+	svcURL2 := "http://127.0.0.1:" + strconv.Itoa(port) + "/" + repo + "/file2"
 	getUntil(t, svcURL2, "bar")
 
 	// and the first file still serves the new revision's state (the view
@@ -142,14 +144,14 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 		p       client.Pipeline
 		wantErr string
 	}{
-		{"no ports", mk(&client.Service{InternalPort: 0, ExternalPort: 31810}), "internal and external ports"},
+		{"no ports", mk(&client.Service{InternalPort: 0, ExternalPort: freePort()}), "internal and external ports"},
 		{"too parallel", func() client.Pipeline {
-			p := mk(&client.Service{InternalPort: 8000, ExternalPort: 31811})
+			p := mk(&client.Service{InternalPort: 8000, ExternalPort: freePort()})
 			p.Parallelism = &client.Parallelism{Constant: 2}
 			return p
 		}(), "parallelism 1"},
 		{"spout conflict", func() client.Pipeline {
-			p := mk(&client.Service{InternalPort: 8000, ExternalPort: 31812})
+			p := mk(&client.Service{InternalPort: 8000, ExternalPort: freePort()})
 			p.Spout = &client.Spout{}
 			return p
 		}(), "both a service and a spout"},
@@ -164,12 +166,13 @@ func TestSB100_RejectsBadServiceSpecs(t *testing.T) {
 	}
 
 	// a second service may not claim the same external port
-	p1 := mk(&client.Service{InternalPort: 8000, ExternalPort: 31813})
+	dup := freePort()
+	p1 := mk(&client.Service{InternalPort: 8000, ExternalPort: dup})
 	if err := c.CreatePipeline(p1); err != nil {
 		t.Fatalf("create first service: %v", err)
 	}
 	t.Cleanup(func() { _ = c.DeletePipeline(p1.Name, false, false) })
-	p2 := mk(&client.Service{InternalPort: 8001, ExternalPort: 31813})
+	p2 := mk(&client.Service{InternalPort: 8001, ExternalPort: dup})
 	err := c.CreatePipeline(p2)
 	if err == nil || !strings.Contains(err.Error(), "already declared") {
 		t.Fatalf("second service err = %v, want external-port conflict", err)

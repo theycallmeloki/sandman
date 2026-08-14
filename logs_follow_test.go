@@ -51,7 +51,9 @@ func TestFollowLogsLongLine(t *testing.T) {
 	rec := &lockedRecorder{}
 	done := make(chan struct{})
 	go func() {
-		d.followLogs(rec, req, &logFilter{jobID: "j1", follow: true})
+		if err := d.followLogs(rec, req, &logFilter{jobID: "j1", follow: true}); err != nil {
+			t.Errorf("followLogs: %v", err)
+		}
 		close(done)
 	}()
 

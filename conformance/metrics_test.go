@@ -92,6 +92,7 @@ func TestSB132_MetricsEndpoint(t *testing.T) {
 }
 
 func TestSB079_GarbageCollection(t *testing.T) {
+	withIsolatedDaemon(t) // the tail resets the daemon; never the shared one (M10)
 	repo := uniq(t)
 	mustRepo(t, repo)
 	// the working pipeline appends to bar, so its output bar is a distinct
@@ -272,6 +273,7 @@ func objectCount(t *testing.T) int {
 }
 
 func TestSB130_ResetRemovesStatsState(t *testing.T) {
+	withIsolatedDaemon(t) // resets the daemon twice; never the shared one (M10)
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})

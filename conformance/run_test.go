@@ -294,6 +294,8 @@ func TestSB010_RunPipeline(t *testing.T) {
 				{Name: "c", Cron: "@every 1h"},
 			}},
 		})
+		cleanupPipeline(t, up)
+		cleanupPipeline(t, pipe)
 
 		cm := commitFiles(t, repo, "master", map[string]string{"file": "x"})
 		flushOK(t, cm.ID)

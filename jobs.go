@@ -667,8 +667,10 @@ func (d *daemon) setJobExec(id string, jx *jobExec) {
 	d.jobsMu.Unlock()
 }
 
-// cancelPipelineJobs cancels every in-flight job of the pipeline and waits
-// for each to settle (used by update and delete).
+// cancelPipelineJobs cancels every in-flight job of the pipeline and
+// waits for them to settle under one shared deadline (used by update and
+// delete). Per-job sequential waits wedged the API handler when several
+// jobs were in flight (M10).
 func (d *daemon) cancelPipelineJobs(pipeline string) {
 	d.jobsMu.Lock()
 	var ids []string
@@ -678,9 +680,13 @@ func (d *daemon) cancelPipelineJobs(pipeline string) {
 		}
 	}
 	d.jobsMu.Unlock()
+	var rjs []*runningJob
 	for _, id := range ids {
-		d.cancelJob(id)
+		if rj, err := d.cancelJobNoWait(id); err == nil && rj != nil {
+			rjs = append(rjs, rj)
+		}
 	}
+	waitJobsSettled(rjs, cancelSettleBudget)
 }
 
 // markPipelineFailed records a pipeline-level failure with a reason; the
@@ -959,9 +965,13 @@ func (d *daemon) cancelAllRunningJobs() {
 		ids = append(ids, id)
 	}
 	d.jobsMu.Unlock()
+	var rjs []*runningJob
 	for _, id := range ids {
-		d.cancelJob(id)
+		if rj, err := d.cancelJobNoWait(id); err == nil && rj != nil {
+			rjs = append(rjs, rj)
+		}
 	}
+	waitJobsSettled(rjs, cancelSettleBudget)
 }
 
 // countRunningJobs reports the number of in-flight jobs (shutdown drain).
@@ -976,6 +986,28 @@ func (d *daemon) countRunningJobs() int {
 // the instant it appears, before its container exists (docker run still
 // starting), and a single kill would be silently lost.
 func (d *daemon) cancelJob(id string) error {
+	rj, err := d.cancelJobNoWait(id)
+	if err != nil {
+		return err
+	}
+	if rj == nil {
+		return nil // already terminal, or queued (settles as killed at the gate)
+	}
+	select {
+	case <-rj.done:
+		return nil
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("job %q did not settle after cancel", id)
+	}
+}
+
+// cancelJobNoWait marks the job cancelled and starts its kill loop, then
+// returns the running handle (nil when the job is already terminal or
+// queued). Callers that cancel several jobs together use this and wait
+// once with a shared deadline (deleteCommit, cancelPipelineJobs): the
+// per-job sequential 30s waits in cancelJob wedged the API handler past
+// the client timeout whenever a handful of jobs were in flight (M10).
+func (d *daemon) cancelJobNoWait(id string) (*runningJob, error) {
 	// the live running handle is the authority — a cancel must not abort
 	// on a transiently unreadable job record (a concurrent save can race
 	// the read; the job then escapes the cancel and runs the old version
@@ -985,9 +1017,9 @@ func (d *daemon) cancelJob(id string) error {
 	d.jobsMu.Unlock()
 	if !ok {
 		if _, err := d.inspectJob(id); err != nil {
-			return err
+			return nil, err
 		}
-		return nil // already terminal
+		return nil, nil // already terminal
 	}
 	rj.cancelled.Store(true)
 	rj.cancelOnce.Do(func() { close(rj.cancelCh) })
@@ -996,7 +1028,7 @@ func (d *daemon) cancelJob(id string) error {
 		// kill, and it will settle as killed when it reaches the slot's
 		// front (SB-123). Returning now lets a later job start as soon as
 		// the running one settles — a queued cancel never blocks on it.
-		return nil
+		return nil, nil
 	}
 	go func() {
 		for i := 0; i < 120; i++ { // ~30s of retries, or until the job settles
@@ -1025,13 +1057,29 @@ func (d *daemon) cancelJob(id string) error {
 			time.Sleep(250 * time.Millisecond)
 		}
 	}()
-	select {
-	case <-rj.done:
-		return nil
-	case <-time.After(30 * time.Second):
-		return fmt.Errorf("job %q did not settle after cancel", id)
+	return rj, nil
+}
+
+// waitJobsSettled waits for the handles to close their done channels,
+// bounded by one shared deadline: the cancels run concurrently, so a
+// batch of in-flight jobs settles in the slowest job's time, never the
+// sum of per-job waits.
+func waitJobsSettled(rjs []*runningJob, budget time.Duration) {
+	deadline := time.Now().Add(budget)
+	for _, rj := range rjs {
+		select {
+		case <-rj.done:
+		case <-time.After(time.Until(deadline)):
+			return
+		}
 	}
 }
+
+// cancelSettleBudget is the shared settle deadline for batched cancels
+// (deleteCommit, cancelPipelineJobs, shutdown): a wedged job can hold the
+// API handler for the budget, never for the sum of per-job waits.
+// Overridable for tests.
+var cancelSettleBudget = 30 * time.Second
 
 // deleteJob removes a job's record. A running job is first cancelled, which
 // finalizes its output revision (SB-057).
@@ -1246,29 +1294,37 @@ func (d *daemon) deleteCommit(ref string) error {
 	if err != nil {
 		return err
 	}
-	// the deletion set: the commit and every commit derived from it
-	deleted := map[string]bool{rec.ID: true}
-	for {
-		grown := false
-		for _, cm := range d.allCommitRecs() {
-			if deleted[cm.ID] {
-				continue
-			}
-			for _, leaf := range d.provenanceOf(cm.ID, map[string]bool{}) {
-				if deleted[leaf] {
-					deleted[cm.ID] = true
-					grown = true
-					break
-				}
-			}
+	// the deletion set: the commit and every commit derived from it.
+	// The derived relation is indexed once (input commit -> the outputs
+	// of jobs consuming it) and closed by BFS: the historical repeated
+	// full scans with a per-hop job-record scan were quadratic — a
+	// mid-suite deleteCommit (every job record re-read per hop) wedged
+	// the API handler past the client timeout (M10).
+	byInput := map[string][]string{}
+	for _, j := range d.mustListJobs() {
+		for _, ic := range j.InputCommits {
+			byInput[ic] = append(byInput[ic], j.OutputCommit)
 		}
-		if !grown {
-			break
+	}
+	deleted := map[string]bool{rec.ID: true}
+	for queue := []string{rec.ID}; len(queue) > 0; {
+		cur := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		for _, out := range byInput[cur] {
+			if !deleted[out] {
+				deleted[out] = true
+				queue = append(queue, out)
+			}
 		}
 	}
 	// cancel in-flight jobs that consumed a deleted commit, then remove
 	// every affected job record (SB-124: job history reflects the removal;
-	// SB-125: the in-flight job is superseded, not left running)
+	// SB-125: the in-flight job is superseded, not left running). The
+	// cancels run concurrently under one shared deadline — sequential
+	// per-job 30s waits wedged the handler past the client timeout when
+	// several jobs were in flight (M10); the records are removed only
+	// after the settle wait so a settling run cannot resurrect one.
+	var rjs []*runningJob
 	for _, j := range d.mustListJobs() {
 		hit := false
 		for _, ic := range j.InputCommits {
@@ -1280,7 +1336,22 @@ func (d *daemon) deleteCommit(ref string) error {
 		if !hit {
 			continue
 		}
-		d.cancelJob(j.ID) // a no-op for terminal jobs
+		if rj, err := d.cancelJobNoWait(j.ID); err == nil && rj != nil {
+			rjs = append(rjs, rj)
+		}
+	}
+	waitJobsSettled(rjs, cancelSettleBudget)
+	for _, j := range d.mustListJobs() {
+		hit := false
+		for _, ic := range j.InputCommits {
+			if deleted[ic] {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			continue
+		}
 		os.RemoveAll(d.jobDir(j.ID))
 		os.Remove(d.logPath(j.ID))
 	}

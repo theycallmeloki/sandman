@@ -54,7 +54,7 @@ func TestSB093_ListJobsFilteredByOutputCommit(t *testing.T) {
 // SB-094 — job listing offers a lightweight mode that omits the pipeline
 // spec fields, and a full mode that includes them.
 func TestSB094_TruncatedAndFullListing(t *testing.T) {
-	_, pipe, job := setupJob(t)
+	repo, pipe, job := setupJob(t)
 
 	light, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
 	if err != nil {
@@ -80,17 +80,9 @@ func TestSB094_TruncatedAndFullListing(t *testing.T) {
 	if full[0].Transform == nil || full[0].Input == nil {
 		t.Fatalf("full listing missing spec fields: %+v", full[0])
 	}
-	if full[0].Input.Repo != repoOf(full[0].Input) {
-		t.Fatalf("full listing input repo mismatch")
+	if full[0].Input.Repo != repo {
+		t.Fatalf("full listing input repo = %q, want the pipeline's input %q", full[0].Input.Repo, repo)
 	}
-}
-
-// repoOf is a tiny helper so the assertion above reads clearly.
-func repoOf(in *client.Input) string {
-	if in == nil {
-		return ""
-	}
-	return in.Repo
 }
 
 // SB-095 — job listing can be filtered by an inclusive set of job states.

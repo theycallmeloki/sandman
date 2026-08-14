@@ -29,6 +29,8 @@ func TestSB089_CronInputs(t *testing.T) {
 			Transform: &client.Transform{Image: "alpine"},
 			Input:     &client.Input{Repo: pipe, Glob: "/*"},
 		})
+		cleanupPipeline(t, pipe)
+		cleanupPipeline(t, down)
 		cronRepo := pipe + "-cron"
 		// wait for two ticks, then flush each through both stages
 		first := waitCronTicks(t, cronRepo, 2, 60*time.Second)
@@ -83,6 +85,7 @@ func TestSB089_CronInputs(t *testing.T) {
 			},
 			Input: &client.Input{Name: "cron", Cron: "@every 2s", Overwrite: true},
 		})
+		cleanupPipeline(t, pipe)
 		first := waitCronTicks(t, pipe+"-cron", 3, 90*time.Second)
 		// the overwrite tick deletes the prior tick's file: every cron
 		// commit holds exactly one file, the latest tick (SB-089 edge
@@ -126,6 +129,7 @@ func TestSB089_CronInputs(t *testing.T) {
 				{Name: "data", Repo: repo, Glob: "/*"},
 			}},
 		})
+		cleanupPipeline(t, pipe)
 		first := waitCronTicks(t, pipe+"-cron", 1, 60*time.Second)
 		jobs := flushSetOK(t, []string{first.ID, cm.ID})
 		if len(jobs) != 1 {
@@ -153,6 +157,7 @@ func TestSB089_CronInputs(t *testing.T) {
 			},
 			Input: &client.Input{Name: "cron", Cron: "@every 1m", Overwrite: true},
 		})
+		cleanupPipeline(t, pipe)
 		// the first scheduled tick (per-minute schedule fires within the
 		// wait window)
 		waitCronTicks(t, pipe+"-cron", 1, 90*time.Second)
@@ -193,11 +198,13 @@ func TestSB089_CronInputs(t *testing.T) {
 			},
 			Input: &client.Input{Name: "cron", Cron: "@every 1h"},
 		})
+		cleanupPipeline(t, pipe)
 		mustPipeline(t, client.Pipeline{
 			Name:      down,
 			Transform: &client.Transform{Image: "alpine"},
 			Input:     &client.Input{Repo: pipe, Glob: "/*"},
 		})
+		cleanupPipeline(t, down)
 		for i := 0; i < 3; i++ {
 			if err := c.TriggerCron(pipe); err != nil {
 				t.Fatalf("trigger %d: %v", i, err)
@@ -224,6 +231,7 @@ func TestSB089_CronInputs(t *testing.T) {
 				{Name: "c2", Cron: "@every 1h"},
 			}},
 		})
+		cleanupPipeline(t, pipe)
 		for i := 0; i < 3; i++ {
 			if err := c.TriggerCron(pipe); err != nil {
 				t.Fatalf("trigger %d: %v", i, err)
@@ -276,6 +284,7 @@ func TestSB133_CronCadenceSurvivesUpdates(t *testing.T) {
 		},
 		Input: &client.Input{Name: "cron", Cron: "@every 30s", Overwrite: true},
 	})
+	cleanupPipeline(t, pipe)
 
 	cronTicks := func() []time.Time {
 		ch, err := c.CommitHistory(pipe+"-cron", "master")

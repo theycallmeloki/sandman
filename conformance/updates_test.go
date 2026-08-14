@@ -532,6 +532,7 @@ func TestSB143_VersionedHistory(t *testing.T) {
 // repository, one commit per definition; a failed duplicate create leaves
 // no extra spec commit (SB-164).
 func TestSB164_SpecCommitCleanup(t *testing.T) {
+	withIsolatedDaemon(t) // the reset wipes spec state; never the shared daemon's (M10)
 	noPanic(t, c.Reset()) // fresh spec repository
 	if got := commitCount(t, "spec", "master"); got != 0 {
 		t.Fatalf("spec commits before any pipeline: %d, want 0", got)

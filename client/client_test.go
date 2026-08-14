@@ -24,8 +24,14 @@ func TestBackupRejectsTruncatedGzip(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		tw.Write([]byte("hello"))
-		gz.Flush() // push the partial stream out, then die without a trailer
+		if _, err := tw.Write([]byte("hello")); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := gz.Flush(); err != nil { // push the partial stream out, then die without a trailer
+			t.Error(err)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -47,9 +53,18 @@ func TestBackupSucceedsOnCompleteGzip(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		tw.Write([]byte("hello"))
-		tw.Close()
-		gz.Close()
+		if _, err := tw.Write([]byte("hello")); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := tw.Close(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := gz.Close(); err != nil {
+			t.Error(err)
+			return
+		}
 	}))
 	defer srv.Close()
 

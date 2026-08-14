@@ -24,6 +24,10 @@ import (
 	"sandman/client"
 )
 
+// The full suite runs ~16 minutes (cron cadence waits, container daemons,
+// spout cycles): go test's default 10m package timeout kills it mid-run
+// (a panic with no failing test). Run locally with -timeout 40m, matching
+// the CI workflow's conformance shard budget.
 var (
 	c          *client.Client
 	daemonCmd  *exec.Cmd
@@ -396,6 +400,54 @@ func waitJobFor(t *testing.T, pipeline string, timeout time.Duration) client.Job
 		return true
 	})
 	return found
+}
+
+// withIsolatedDaemon swaps the harness client for a fresh process-backed
+// daemon on its own state dir, restored to the shared daemon on cleanup.
+// Tests that reset the daemon (or corrupt its state) run under it: a
+// mid-suite Reset on the shared daemon wipes every test's state and
+// makes correctness depend on alphabetical execution order (M10). The
+// shared daemon keeps running untouched on its own port.
+func withIsolatedDaemon(t *testing.T) {
+	t.Helper()
+	state := filepath.Join(os.TempDir(), "sandman-isolated-"+uniq(t))
+	os.MkdirAll(state, 0o755)
+	port := freePort()
+	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(port), "-state", state, "-runner", "process")
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start isolated daemon: %v", err)
+	}
+	if !waitPort(port, 15*time.Second) {
+		t.Fatalf("isolated daemon did not come up")
+	}
+	oldC, oldPort, oldState := c, daemonPort, daemonStateDir
+	c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
+	daemonPort = port
+	daemonStateDir = state
+	t.Cleanup(func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+		}
+		os.RemoveAll(state)
+		c, daemonPort, daemonStateDir = oldC, oldPort, oldState
+	})
+}
+
+// cleanupPipeline registers deletion of the pipeline when the test ends.
+// A cron pipeline left on the shared daemon ticks for the whole suite,
+// spawning background jobs that pollute GC, metrics, and job-count
+// assertions (M10); force covers a downstream consuming the output repo.
+func cleanupPipeline(t *testing.T, name string) {
+	t.Helper()
+	t.Cleanup(func() { noPanic(t, c.DeletePipeline(name, true, false)) })
 }
 
 // copyTransform is the standard pipeline transform: copy every input file

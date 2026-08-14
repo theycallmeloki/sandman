@@ -178,6 +178,7 @@ func TestSB030_DeleteRepoAfterMembershipChange(t *testing.T) {
 // TestSB037_FullReset — a reset removes every repository, pipeline, and
 // job, and is idempotent (SB-037).
 func TestSB037_FullReset(t *testing.T) {
+	withIsolatedDaemon(t) // resetting the shared daemon would wipe every test's state (M10)
 	noPanic(t, c.Reset()) // the test itself begins with a reset
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -235,6 +236,7 @@ func TestSB127_SpecRepoProtected(t *testing.T) {
 // the reset error rather than being silently ignored, and removing the
 // corrupted record restores the reset path.
 func TestSB131_ResetRobustness(t *testing.T) {
+	withIsolatedDaemon(t) // corrupts daemon state; never the shared one (M10)
 	for i := 0; i < 3; i++ {
 		repo := uniq(t)
 		mustRepo(t, repo)
