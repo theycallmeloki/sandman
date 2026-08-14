@@ -1180,54 +1180,61 @@ func DownstreamJobsSet(jobs []Job, commitIDs []string) []Job {
 	// contain every commit is wrong when the set spans a DAG: the pairing
 	// job's inputs reference the upstream OUTPUT commit (B-out), not A's
 	// raw commit, so no direct match exists to seed the walk.
+	//
+	// The walk is indexed: a commit→consuming-jobs adjacency map is built
+	// once, and each queue head follows it directly instead of scanning
+	// every job (the previous walk was O(J²·I) per commit — a full job
+	// scan per queued head plus queue-slice shifts; with the index it is
+	// O(J·I + closure size) per commit, which is what a flush's signal
+	// loop pays on every state-change broadcast, M6).
 	type closure struct {
 		set map[string]bool
 		ord []string
 	}
 	byID := map[string]Job{}
+	byCommit := map[string][]string{}
 	for _, j := range jobs {
 		byID[j.ID] = j
+		for _, ic := range j.InputCommits {
+			byCommit[ic] = append(byCommit[ic], j.ID)
+		}
 	}
 	cl := make([]closure, len(commitIDs))
 	for i, id := range commitIDs {
 		c := closure{set: map[string]bool{}}
 		seen := map[string]bool{}
+		queued := map[string]bool{} // a produced commit is walked once
 		var queue []string
-		for _, j := range jobs {
-			for _, ic := range j.InputCommits {
-				if ic == id {
-					seen[j.ID] = true
-					c.set[j.ID] = true
-					c.ord = append(c.ord, j.ID)
-					if j.OutputCommit != "" {
-						queue = append(queue, j.OutputCommit)
-					}
-					if j.StatsCommit != "" {
-						queue = append(queue, j.StatsCommit)
-					}
-					break
-				}
+		enqueue := func(j Job) {
+			if seen[j.ID] {
+				return
+			}
+			seen[j.ID] = true
+			c.set[j.ID] = true
+			c.ord = append(c.ord, j.ID)
+			if j.OutputCommit != "" && !queued[j.OutputCommit] {
+				queued[j.OutputCommit] = true
+				queue = append(queue, j.OutputCommit)
+			}
+			if j.StatsCommit != "" && !queued[j.StatsCommit] {
+				queued[j.StatsCommit] = true
+				queue = append(queue, j.StatsCommit)
 			}
 		}
-		for len(queue) > 0 {
-			head := queue[0]
-			queue = queue[1:]
-			for _, j := range jobs {
-				if seen[j.ID] || j.OutputCommit == "" {
+		for _, jid := range byCommit[id] {
+			enqueue(byID[jid])
+		}
+		// an index cursor instead of queue[1:] slicing (a slice shift per
+		// pop is quadratic in the queue length)
+		for qpos := 0; qpos < len(queue); qpos++ {
+			for _, jid := range byCommit[queue[qpos]] {
+				j := byID[jid]
+				// mirrors the original walk: a job producing no output
+				// commit is not a downstream consumer
+				if j.OutputCommit == "" {
 					continue
 				}
-				for _, ic := range j.InputCommits {
-					if ic == head {
-						seen[j.ID] = true
-						c.set[j.ID] = true
-						c.ord = append(c.ord, j.ID)
-						queue = append(queue, j.OutputCommit)
-						if j.StatsCommit != "" {
-							queue = append(queue, j.StatsCommit)
-						}
-						break
-					}
-				}
+				enqueue(j)
 			}
 		}
 		cl[i] = c
