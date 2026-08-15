@@ -1,5 +1,8 @@
 # sandman
 
+<img width="1402" height="1122" alt="ChatGPT Image Aug 15, 2026, 01_20_39 PM" src="https://github.com/user-attachments/assets/e20a907a-7f79-4923-8638-ecd4c34214a3" />
+
+
 *"Exit light, enter night."* — Metallica, "Enter Sandman"
 
 sandman is a peer-to-peer data and compute fabric for a trusted LAN. Nodes
