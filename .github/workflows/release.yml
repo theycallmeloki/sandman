@@ -49,6 +49,18 @@ jobs:
           done
           ls -la dist/
 
+      # the Debian packages declare Depends: containerd, runc — the
+      # distro container runtime, no docker. Build one per arch from the
+      # freshly built binaries so the tag's version is baked in.
+      - name: Build Debian packages
+        run: |
+          for arch in amd64 arm64; do
+            GOARCH=$arch ./packaging/make-deb.sh "$GITHUB_REF_NAME"
+            mv build/*.deb dist/
+            (cd dist && sha256sum sandman_${GITHUB_REF_NAME}_${arch}.deb > sandman_${GITHUB_REF_NAME}_${arch}.deb.sha256)
+          done
+          ls -la dist/
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -22,7 +22,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -384,7 +383,7 @@ func runExec(nodeName string, req execRequest) execResult {
 		if dur, err := time.ParseDuration(req.DatumTimeout); err == nil {
 			timeoutTimer = time.AfterFunc(dur, func() {
 				timedOut.Store(true)
-				exec.Command("docker", "kill", cname).Run()
+				killExecution(cname)
 			})
 		}
 	}
@@ -505,6 +504,13 @@ func (d *daemon) execOnHost(ctx context.Context, h *execHost, req execRequest) (
 	return res.PrimaryCode, res.ErrCode, res.Tail, res.TimedOut, res.Outputs, nil
 }
 
+// killExecution is the worker's container-kill hook (the containerd
+// backend: SIGKILL the named execution's task). A package-level variable
+// so tests can observe timeout-timer firings without a container runtime.
+var killExecution = func(name string) {
+	containerRunner{}.Kill(name)
+}
+
 // ---- remote services ----
 
 // serviceStartRequest asks a worker to keep one service container alive
@@ -542,8 +548,8 @@ var (
 
 // runRemoteService starts a detached service container: the input files
 // are materialized into a host directory mounted at /sandman/in, and the
-// internal port is published on the worker's host address so the control
-// plane can proxy to it.
+// container runs in the host network namespace so its internal port binds
+// the worker host directly — the control plane proxies to host:internal.
 func runRemoteService(req serviceStartRequest) error {
 	dir, err := os.MkdirTemp("", "sandman-svc-*")
 	if err != nil {
@@ -562,25 +568,25 @@ func runRemoteService(req serviceStartRequest) error {
 	if image == "" {
 		image = "alpine"
 	}
-	args := []string{"run", "-d", "--name", req.Name,
-		"-p", fmt.Sprintf("%d:%d", req.InternalPort, req.InternalPort),
-		"-v", dir + ":/sandman/in",
-		"-v", outDir + ":/sandman/out",
+	// the "-p" entry selects the host network namespace (see rtMounts):
+	// the service process binds the worker host's ports directly, so no
+	// CNI port mapping is involved
+	spec := JobSpec{
+		Image: image,
+		Name:  req.Name,
+		Cmd:   req.Cmd,
+		Stdin: req.Stdin,
+		Env:   req.Env,
+		Mounts: []string{"-v", dir + ":/sandman/in", "-v", outDir + ":/sandman/out",
+			"-p", fmt.Sprintf("%d:%d", req.InternalPort, req.InternalPort)},
+		Workdir: "/sandman/out",
 	}
-	for _, e := range req.Env {
-		args = append(args, "-e", e)
-	}
-	if len(req.Stdin) > 0 {
-		args = append(args, "-i")
-	}
-	args = append(args, "-w", "/sandman/out", image)
-	args = append(args, req.Cmd...)
-	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+	if err := rtStartDetached(spec); err != nil {
 		os.RemoveAll(dir)
-		if isProvisioningError(string(out)) {
-			return fmt.Errorf("provisioning failed: %s", strings.TrimSpace(string(out)))
+		if isProvisioningError(err.Error()) {
+			return fmt.Errorf("provisioning failed: %s", err)
 		}
-		return fmt.Errorf("docker run: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("containerd run: %s", err)
 	}
 	workerServicesMu.Lock()
 	workerServices[req.Name] = &workerService{dir: dir}
@@ -625,7 +631,7 @@ func stopRemoteService(name string) {
 	if !ok {
 		return
 	}
-	exec.Command("docker", "rm", "-f", name).Run()
+	rtRemove(name)
 	os.RemoveAll(svc.dir)
 }
 

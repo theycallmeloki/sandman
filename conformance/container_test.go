@@ -7,6 +7,7 @@ package conformance
 // the process backend (no runtime required).
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	containerd "github.com/containerd/containerd/v2/client"
 
 	"sandman/client"
 )
@@ -25,8 +28,8 @@ import (
 // swap is safe; the matrix daemon keeps running untouched on its own
 // port.
 func withContainerDaemon(t *testing.T) {
-	if !dockerAvailable() {
-		t.Skip("container runtime unavailable (docker version failed): this test needs the container backend")
+	if !runtimeAvailable() {
+		t.Skip("container runtime unavailable (containerd version failed): this test needs the container backend")
 	}
 	state := daemonStateDir + "-container"
 	os.RemoveAll(state)
@@ -918,7 +921,7 @@ func TestUnplaceableRecovery(t *testing.T) {
 func TestStandbyIdlesWithZeroContainers(t *testing.T) {
 	withContainerDaemon(t)
 	// a fresh container daemon must start with a clean slate
-	if n := sandmanContainerCount(); n != 0 {
+	if n := sandmanContainerCount(t); n != 0 {
 		t.Fatalf("%d sandman-* containers before any work, want 0", n)
 	}
 	repo := uniq(t) + "r"
@@ -933,22 +936,30 @@ func TestStandbyIdlesWithZeroContainers(t *testing.T) {
 	pollFor(t, "idle in standby", 30*time.Second, func() bool {
 		return standbyState(t, pipe) == "standby"
 	})
-	if n := sandmanContainerCount(); n != 0 {
+	if n := sandmanContainerCount(t); n != 0 {
 		t.Fatalf("%d standing containers while idle in standby, want 0", n)
 	}
 	// a commit wakes it: a container exists while the job runs. The
-	// container must start within the poll; a slow runner's docker
+	// container must start within the poll; a slow runner's containerd
 	// overhead has blown 30s, so the poll is generous.
 	cm := commitFiles(t, repo, "", map[string]string{"file": "foo\n"})
 	deadline := time.Now().Add(60 * time.Second)
-	for sandmanContainerCount() == 0 {
+	for sandmanContainerCount(t) == 0 {
 		if time.Now().After(deadline) {
 			// diagnostic for the CI-only hang: dump every sandman-*
-			// container (including created/exited ones — docker ps
-			// without -a hides them) and the pipeline's job records, so
-			// the next failure shows where the launch stopped
-			out, _ := exec.Command("docker", "ps", "-a", "--filter", "name=sandman-", "--format", "{{.ID}} {{.State}} {{.Names}}").Output()
-			t.Logf("container poll timed out; docker ps -a:\n%s", strings.TrimSpace(string(out)))
+			// container (including created/exited ones) and the
+			// pipeline's job records, so the next failure shows where
+			// the launch stopped
+			cli := rtClient(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if conts, err := cli.Containers(ctx); err == nil {
+				for _, c := range conts {
+					if strings.HasPrefix(c.ID(), "sandman-") {
+						t.Logf("container %s", c.ID())
+					}
+				}
+			}
 			js, _ := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe})
 			for _, j := range js {
 				t.Logf("job %s: state=%s outputCommit=%q", j.ID, j.State, j.OutputCommit)
@@ -959,19 +970,40 @@ func TestStandbyIdlesWithZeroContainers(t *testing.T) {
 	}
 	flushOK(t, cm.ID)
 	pollFor(t, "resting in standby with zero containers", 30*time.Second, func() bool {
-		return standbyState(t, pipe) == "standby" && sandmanContainerCount() == 0
+		return standbyState(t, pipe) == "standby" && sandmanContainerCount(t) == 0
 	})
 }
 
-// sandmanContainerCount counts RUNNING sandman containers (docker ps, not
-// -a: exited ones are removed by --rm; a standing execution participant
-// is a running container).
-func sandmanContainerCount() int {
-	out, err := exec.Command("docker", "ps", "-q", "--filter", "name=sandman-").Output()
+// sandmanContainerCount counts RUNNING sandman execution participants
+// (containerd tasks in the sandman namespace whose containers are named
+// sandman-*; exited tasks are removed by the runner's cleanup, so a
+// standing execution participant is a running task).
+func sandmanContainerCount(t *testing.T) int {
+	if !runtimeAvailable() {
+		return -1
+	}
+	cli := rtClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conts, err := cli.Containers(ctx)
 	if err != nil {
 		return -1
 	}
-	return len(strings.Fields(string(out)))
+	n := 0
+	for _, c := range conts {
+		if !strings.HasPrefix(c.ID(), "sandman-") {
+			continue
+		}
+		task, err := c.Task(ctx, nil)
+		if err != nil {
+			continue
+		}
+		status, err := task.Status(ctx)
+		if err == nil && status.Status == containerd.Running {
+			n++
+		}
+	}
+	return n
 }
 
 // TestUnsatisfiableResourcesAcceptedAndRecorded — the accept-and-record
@@ -979,9 +1011,11 @@ func sandmanContainerCount() int {
 // (memory beyond any host's RAM) is NOT a creation gate — the spec is
 // accepted, the declared values are recorded, and the pipeline is not
 // prevented from running. Enforcement is the worker runtime's: docker
-// refuses to provision the over-large container, and the failure
-// converges on the crashed state with a reason (the provisioning path)
-// rather than a rejection or a hang.
+// refused to provision the over-large container, while containerd/runc
+// accept the cgroup values as written (the cgroupfs driver has no
+// core-count or RAM validation) — so the job runs to completion and the
+// pipeline stays operational either way; the declaration is never a
+// rejection or a hang.
 func TestUnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
 	withContainerDaemon(t)
 	repo := uniq(t)
@@ -1009,9 +1043,9 @@ func TestUnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
 		t.Fatalf("declared limits = %+v, want 1TB/9999 recorded", p.Transform.ResourceLimits)
 	}
 	// the pipeline is not prevented from running: the job attempt reaches
-	// the runtime, docker refuses the over-large CPU range at exec (exit
-	// 125), and the datum fails with the RUNTIME's reason — never a
-	// create-time rejection. The pipeline stays operational.
+	// the runtime, the cgroup accepts the declared values, and the job
+	// completes — the declaration is never a create-time rejection or a
+	// hang. The pipeline stays operational.
 	jobs, err := c.Flush(cm.ID, 60*time.Second)
 	if err != nil {
 		t.Fatalf("flush of the unsatisfiable-resource job: %v", err)
@@ -1019,11 +1053,8 @@ func TestUnsatisfiableResourcesAcceptedAndRecorded(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("unsatisfiable-resource flush = %d jobs, want 1", len(jobs))
 	}
-	if jobs[0].State != "failure" {
-		t.Fatalf("job state = %s, want failure (runtime rejected the CPU range)", jobs[0].State)
-	}
-	if jobs[0].Reason == "" || !strings.Contains(jobs[0].Reason, "docker") {
-		t.Fatalf("job reason = %q, want the docker runtime's rejection named", jobs[0].Reason)
+	if jobs[0].State != "success" {
+		t.Fatalf("job state = %s, want success (containerd accepts the declared cgroup values)", jobs[0].State)
 	}
 	pi, err := c.InspectPipeline(name)
 	if err != nil {

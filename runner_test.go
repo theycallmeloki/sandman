@@ -21,6 +21,11 @@ func TestIsProvisioningError(t *testing.T) {
 		"failed to resolve reference \"nope/nope:latest\": not found",
 		"manifest unknown: manifest unknown",
 		"No such image: nope:latest",
+		// the containerd backend's errors
+		"invalid image reference \"INVALID_IMAGE_REF\": invalid reference format",
+		"pull image \"docker.io/library/sandman-no-such-image-xyz:latest\": failed to resolve reference \"docker.io/library/sandman-no-such-image-xyz:latest\": pull access denied, repository does not exist or may require authorization",
+		"pull image \"docker.io/library/nope:latest\": failed to resolve reference: manifest unknown: manifest unknown",
+		"containerd unavailable: connection error: desc = \"transport: Error while dialing: dial unix /run/containerd/containerd.sock: connect: permission denied\"",
 	}
 	for _, s := range provisioning {
 		if !isProvisioningError(s) {

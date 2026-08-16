@@ -192,8 +192,8 @@ func TestRemoteServiceReachable(t *testing.T) {
 	// transport blocked forever (reviewer verdict: the relay half-close
 	// fix removed the hang; the harness's PPID-scoped orphan pre-kill
 	// handles the leak class).
-	if !dockerAvailable() {
-		t.Skip("docker not available")
+	if !runtimeAvailable() {
+		t.Skip("container runtime not available")
 	}
 	repo := uniq(t)
 	mustRepo(t, repo)

@@ -287,34 +287,3 @@ func clientStats(state string) {
 		fmt.Println(string(b))
 	}
 }
-
-// parseMemUsage turns docker's "1.2MiB / 15.6GiB" into (used, limit) bytes.
-func parseMemUsage(s string) (used, limit uint64) {
-	f := strings.Fields(s)
-	if len(f) >= 1 {
-		used, _ = parseMemUnit(f[0])
-	}
-	if len(f) >= 3 {
-		limit, _ = parseMemUnit(f[2])
-	}
-	return
-}
-
-func parseMemUnit(s string) (uint64, error) {
-	i := 0
-	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.' || s[i] == ',') {
-		i++
-	}
-	num, err := strconv.ParseFloat(strings.ReplaceAll(s[:i], ",", "."), 64)
-	if err != nil {
-		return 0, err
-	}
-	mult := map[string]float64{
-		"B": 1, "kB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
-		"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40,
-	}[s[i:]]
-	if mult == 0 {
-		return 0, fmt.Errorf("unknown unit %q", s[i:])
-	}
-	return uint64(num * mult), nil
-}

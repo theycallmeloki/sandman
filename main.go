@@ -44,7 +44,7 @@ func defaultAddr() string {
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:          "sandman",
-		Short:        "sandman — a naive peer-to-peer docker fabric",
+		Short:        "sandman — a naive peer-to-peer container fabric",
 		SilenceUsage: true,
 	}
 	for _, f := range []struct {
@@ -94,7 +94,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `sandman — a naive peer-to-peer docker fabric
+	fmt.Fprint(os.Stderr, `sandman — a naive peer-to-peer container fabric
 
 usage: sandman [flags] <verb> [flags]
 

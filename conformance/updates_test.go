@@ -1,8 +1,8 @@
 package conformance
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
 	"sandman/client"
 	"strings"
 	"testing"
@@ -54,19 +54,24 @@ func containerNames(t *testing.T) []string {
 	// no container runtime, no containers: the versioned-participant
 	// assertion is trivially satisfied by the process
 	// backend
-	if !dockerAvailable() {
+	if !runtimeAvailable() {
 		return nil
 	}
-	out, err := exec.Command("docker", "ps", "-a",
-		"--filter", "label=sandman.node="+daemonName,
-		"--format", "{{.Names}}").Output()
+	cli := rtClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conts, err := cli.Containers(ctx)
 	if err != nil {
-		t.Fatalf("docker ps: %v", err)
+		t.Fatalf("containerd list: %v", err)
 	}
 	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			names = append(names, line)
+	for _, c := range conts {
+		labels, err := c.Labels(ctx)
+		if err != nil {
+			continue
+		}
+		if labels["sandman.node"] == daemonName {
+			names = append(names, c.ID())
 		}
 	}
 	return names
