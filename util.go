@@ -24,6 +24,7 @@ const (
 	stateRunning   = "running"
 	stateStandby   = "standby"
 	statePaused    = "paused"
+	stateQueued    = "queued"
 	stateFailure   = "failure"
 	stateCrashed   = "crashed"
 	stateStopped   = "stopped"

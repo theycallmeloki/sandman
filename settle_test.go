@@ -54,6 +54,21 @@ func TestSettlePanicJob(t *testing.T) {
 		t.Fatalf("terminal record disturbed: %+v", got)
 	}
 
+	// a queued record (waiting at the gate when the panic struck) is
+	// not terminal either: it must settle failed, never dangle "queued"
+	recQ := jobRec{ID: "j5", Pipeline: "p5", State: stateQueued}
+	if err := d.saveJob(&recQ); err != nil {
+		t.Fatalf("saveJob j5: %v", err)
+	}
+	d.settlePanicJob("j5")
+	b, _ = os.ReadFile(filepath.Join(dir, "jobs", "j5", "job.json"))
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("decode j5: %v", err)
+	}
+	if got.State != stateFailure {
+		t.Fatalf("j5 settled state = %q, want failure", got.State)
+	}
+
 	// a missing record is a no-op (the panic struck before saveJob)
 	d.settlePanicJob("j3")
 

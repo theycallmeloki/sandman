@@ -143,6 +143,10 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 	defer gate.release()
 
+	// the slot is ours: the queued record becomes running
+	rec.State = stateRunning
+	d.saveJob(rec)
+
 	if propagated != "" {
 		// an upstream stage failed, so this stage fails too — recorded,
 		// never executed. The empty output commit keeps the DAG's

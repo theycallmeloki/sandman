@@ -274,7 +274,7 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 // re-triggered by fresh input.
 func (d *daemon) markStaleJobsFailed() {
 	for _, j := range d.mustListJobs() {
-		if j.State == stateRunning {
+		if j.State == stateRunning || j.State == stateQueued {
 			rec := jobRec{ID: j.ID, Pipeline: j.Pipeline, State: stateFailure,
 				Reason: reasonDaemonRestarted, InputCommits: j.InputCommits,
 				OutputCommit: j.OutputCommit, Started: j.Started, Finished: now()}
@@ -307,13 +307,16 @@ func (d *daemon) jobByOutput(commitID string) (client.Job, bool) {
 // to the historical format).
 func newJobID(node string) string { return newID(node, "") }
 
-// newJobRec builds a job's initial record: the running state, the input
+// newJobRec builds a job's initial record: the queued state, the input
 // pairing it consumed, and the pipeline-version snapshots. The input
 // snapshot is copied verbatim — including the lazy-input flag — so a
 // downstream job records the same lazy semantics its pipeline declared,
-// surviving the output-repo hop of a pipeline chain.
+// surviving the output-repo hop of a pipeline chain. The record flips to
+// running when the per-pipeline gate hands the job its slot (runJob and
+// the service/spout runners); until then the job is queued, visible, and
+// cancellable.
 func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
-	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: stateRunning,
+	rec := &jobRec{ID: id, Pipeline: pl.Pipeline.Name, State: stateQueued,
 		Started: now(),
 		Version: pl.Version, Transform: pl.Pipeline.Transform, Input: pl.Pipeline.Input}
 	seen := map[string]bool{}
@@ -525,7 +528,7 @@ func (d *daemon) hasRunningJobWithInputs(pipeline string, heads []client.Commit)
 		}
 	}
 	for _, j := range d.mustListJobs() {
-		if j.Pipeline != pipeline || j.State != stateRunning {
+		if j.Pipeline != pipeline || (j.State != stateRunning && j.State != stateQueued) {
 			continue
 		}
 		if len(j.InputCommits) != len(set) {
@@ -1533,7 +1536,7 @@ func (d *daemon) settlePanicJob(id string) {
 		return // the panic struck before the record existed
 	}
 	var rec jobRec
-	if json.Unmarshal(b, &rec) != nil || rec.State != stateRunning {
+	if json.Unmarshal(b, &rec) != nil || (rec.State != stateRunning && rec.State != stateQueued) {
 		return // already terminal: nothing to settle
 	}
 	rec.State = stateFailure

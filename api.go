@@ -591,7 +591,7 @@ func (d *daemon) collectGarbageH(w http.ResponseWriter, r *http.Request) error {
 // correct data — no stale cache may resurface collected storage.
 func (d *daemon) collectGarbage() error {
 	for _, j := range d.mustListJobs() {
-		if j.State == stateRunning {
+		if j.State == stateRunning || j.State == stateQueued {
 			// name the offender: a GC refusal on a stale "running" record
 			// from a dead/cancelled job is a bug in whoever left it, and
 			// the job id + pipeline make the culprit identifiable in one

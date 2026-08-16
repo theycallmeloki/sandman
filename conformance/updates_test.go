@@ -315,7 +315,10 @@ func TestUpdateKillsInFlight(t *testing.T) {
 	cm2 := replaceCommit(t, repo, "master", map[string]string{"file": "y"})
 	pollFor(t, "two jobs in flight", 30*time.Second, func() bool {
 		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
-		return err == nil && len(js) == 2 && js[0].State == "running" && js[1].State == "running"
+		// both jobs are in flight: the first runs, the second waits at
+		// the per-pipeline gate (queued) — neither is terminal
+		inflight := func(s string) bool { return s == "running" || s == "queued" }
+		return err == nil && len(js) == 2 && inflight(js[0].State) && inflight(js[1].State)
 	})
 
 	mustUpdate(t, name, copyTransform(repo), in, false)

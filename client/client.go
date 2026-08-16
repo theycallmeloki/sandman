@@ -1222,7 +1222,7 @@ func AllTerminal(jobs []Job) bool {
 		return false
 	}
 	for _, j := range jobs {
-		if j.State == "running" {
+		if j.State == "running" || j.State == "queued" {
 			return false
 		}
 	}

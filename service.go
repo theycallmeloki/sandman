@@ -129,6 +129,10 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 	}
 	defer gate.release()
 
+	// the slot is ours: the queued record becomes running
+	rec.State = stateRunning
+	d.saveJob(rec)
+
 	// the served input side: the pipeline's first repo side, at its
 	// declared name (defaulting to the repo)
 	var side client.Input

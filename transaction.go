@@ -460,7 +460,7 @@ func (d *daemon) waitJobSettled(id string) {
 			}
 		} else {
 			missingSince = time.Time{}
-			if rec.State != stateRunning {
+			if rec.State != stateRunning && rec.State != stateQueued {
 				return
 			}
 		}

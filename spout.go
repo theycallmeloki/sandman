@@ -95,6 +95,10 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 	}
 	defer gate.release()
 
+	// the slot is ours: the queued record becomes running
+	rec.State = stateRunning
+	d.saveJob(rec)
+
 	cname := fmt.Sprintf("sandman-%s-spout", id)
 	rj.registerContainer(cname)
 	defer rj.unregisterContainer(cname)

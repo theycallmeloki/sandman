@@ -103,7 +103,7 @@ func (d *daemon) jobWaitH(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return false
 		}
-		terminal = j.State != stateRunning
+		terminal = j.State != stateRunning && j.State != stateQueued
 		return terminal
 	})
 	j, err := d.inspectJob(id)
