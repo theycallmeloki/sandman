@@ -250,6 +250,31 @@ func TestCronInputs(t *testing.T) {
 	})
 }
 
+// TestCronTickerSurvivesRestart — a daemon restart must re-arm persisted
+// cron schedules. Tickers are in-memory goroutines created by apply/update;
+// without a boot re-arm the cadence silently dies until the next apply (a
+// control-plane restart during a roll starves the harvest that way).
+func TestCronTickerSurvivesRestart(t *testing.T) {
+	withContainerDaemon(t)
+	pipe := uniq(t)
+	cronRepo := pipe + "-cron"
+	mustPipeline(t, client.Pipeline{
+		Name: pipe,
+		Transform: &client.Transform{
+			Image: "alpine:3.21",
+			Cmd:   []string{"sh", "-c", "cp -r ${cron}/* ${OUT}/"},
+		},
+		Input: &client.Input{Name: "cron", Cron: "@every 2s", Overwrite: true},
+	})
+	cleanupPipeline(t, pipe)
+	// two ticks before the restart prove the cadence was live
+	waitCronTicks(t, cronRepo, 2, 60*time.Second)
+	// crash the daemon and bring a fresh one up on the same state dir
+	restartDaemon(t)
+	// two more ticks after: the boot path re-armed the schedule
+	waitCronTicks(t, cronRepo, 4, 60*time.Second)
+}
+
 // waitCronTicks waits until the cron repository's branch holds at least n
 // commits and returns the newest one.
 func waitCronTicks(t *testing.T, cronRepo string, n int, timeout time.Duration) client.Commit {

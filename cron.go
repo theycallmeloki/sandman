@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -125,6 +127,35 @@ func (d *daemon) stopAllCronTickers() {
 	for repo, t := range d.cronTickers {
 		t.cancel()
 		delete(d.cronTickers, repo)
+	}
+}
+
+// restartCronTickers re-arms every persisted pipeline's cron schedule at
+// daemon boot. Tickers are in-memory goroutines created by apply/update,
+// so a control-plane restart leaves every schedule dead until the next
+// apply — the cadence silently stops (harvest starves; a restart during a
+// roll was exactly that). Boot walks the persisted pipeline records and
+// restarts each cron input's ticker; startCronTicker is idempotent per
+// cron repo, so a racing apply cannot double-arm a schedule.
+func (d *daemon) restartCronTickers() {
+	entries, err := os.ReadDir(filepath.Join(d.state, "pipelines"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".json")
+		rec, err := d.loadPipeline(name)
+		if err != nil || rec.Pipeline.Input == nil {
+			continue
+		}
+		for _, s := range inputSides(rec.Pipeline.Input) {
+			if s.Cron != "" {
+				d.startCronTicker(rec.Pipeline.Name, s.Name, s.Cron, s.Overwrite)
+			}
+		}
 	}
 }
 

@@ -43,14 +43,22 @@ func withContainerDaemon(t *testing.T) {
 	}
 
 	oldC, oldPort, oldState := c, daemonPort, daemonStateDir
+	oldCmd := daemonCmd
 	c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
 	daemonPort = port
 	daemonStateDir = state
+	daemonCmd = cmd // restartDaemon must kill THIS daemon, not the shared one
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		// kill whatever private daemon is live at cleanup time: a test
+		// that restarted (restartDaemon) replaced daemonCmd with a fresh
+		// process, and killing only the original would strand it holding
+		// the test's stderr pipe (go test's WaitDelay artifact)
+		if daemonCmd != nil && daemonCmd.Process != nil {
+			_ = daemonCmd.Process.Kill()
+			_ = daemonCmd.Wait()
+		}
 		os.RemoveAll(state)
-		c, daemonPort, daemonStateDir = oldC, oldPort, oldState
+		c, daemonPort, daemonStateDir, daemonCmd = oldC, oldPort, oldState, oldCmd
 	})
 }
 
