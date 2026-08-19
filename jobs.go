@@ -232,9 +232,11 @@ func (d *daemon) listJobsFiltered(pipeline, outputCommit string, states []string
 // present.
 func (d *daemon) inspectJob(id string) (client.Job, error) {
 	var info client.Job
+	var rec *jobRec
 	if b, err := os.ReadFile(filepath.Join(d.jobDir(id), "job.json")); err == nil {
-		var rec jobRec
-		if json.Unmarshal(b, &rec) == nil {
+		var r jobRec
+		if json.Unmarshal(b, &r) == nil {
+			rec = &r
 			info = rec.job()
 		}
 	}
@@ -250,6 +252,16 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 	if info.ID == "" {
 		return client.Job{}, notFound("job %q not found: specify a Job or an OutputCommit", id)
 	}
+	// keyed by output commit: load the record so the progress snapshot
+	// (below) still has the datum set and states
+	if rec == nil {
+		if b, err := os.ReadFile(filepath.Join(d.jobDir(info.ID), "job.json")); err == nil {
+			var r jobRec
+			if json.Unmarshal(b, &r) == nil {
+				rec = &r
+			}
+		}
+	}
 	// the live per-worker status
 	if b, err := os.ReadFile(filepath.Join(d.jobDir(info.ID), "workers.json")); err == nil {
 		var ws []workerStatus
@@ -261,7 +273,54 @@ func (d *daemon) inspectJob(id string) (client.Job, error) {
 			}
 		}
 	}
+	// the live progress snapshot
+	if rec != nil {
+		info.Progress = d.jobProgress(rec, info.Workers)
+	}
 	return info, nil
+}
+
+// jobProgress derives a job's live progress snapshot. Terminal datums
+// are counted from the job record's datum states or the pipeline dedup
+// outcomes (setDatum persists each datum's outcome as it finishes, so
+// the dedup on disk is live mid-run); running datums are the workers'
+// active datums; the remainder is queued. AvgProcessTime is the mean
+// process time of the finished non-skipped datums so far.
+func (d *daemon) jobProgress(rec *jobRec, workers []client.WorkerStatus) *client.JobProgress {
+	dedup := d.loadDedup(rec.Pipeline)
+	p := &client.JobProgress{Total: len(rec.DatumIDs)}
+	running := map[string]bool{}
+	for _, w := range workers {
+		if w.Datum != "" {
+			running[w.Datum] = true
+		}
+	}
+	p.Running = len(running)
+	sum, n := 0.0, 0
+	for _, id := range rec.DatumIDs {
+		st, ok := rec.DatumStates[id]
+		if !ok {
+			st = dedup[id].Outcome
+		}
+		switch st {
+		case stateSuccess, stateRecovered, stateFailure, "failed", stateSkipped:
+			p.Done++
+			if st == stateFailure || st == "failed" {
+				p.Failed++
+			}
+		}
+		if st != stateSkipped {
+			if pt := dedup[id].ProcessTime; pt > 0 {
+				sum += pt
+				n++
+			}
+		}
+	}
+	p.Queued = p.Total - p.Done - p.Running
+	if n > 0 {
+		p.AvgProcessTime = sum / float64(n)
+	}
+	return p
 }
 
 // markStaleJobsFailed repairs the state after a daemon restart: only

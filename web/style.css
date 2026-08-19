@@ -85,3 +85,18 @@ button.filter.active { border-color: var(--accent); color: var(--accent); }
 .files li { margin: 2px 0; }
 pre.json { background: #010409; border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-size: 12px; overflow: auto; max-height: 55vh; }
 label.toggle { font-size: 13px; color: var(--muted); margin-left: 12px; cursor: pointer; }
+.progressbar {
+  position: relative; height: 14px; background: #010409;
+  border: 1px solid var(--border); border-radius: 7px; overflow: hidden;
+  margin-bottom: 12px;
+}
+.progressbar .fill { position: absolute; top: 0; bottom: 0; left: 0; }
+.progressbar .fill.ok { background: var(--success); }
+.progressbar .fill.bad { background: var(--failure); }
+.minibar {
+  display: inline-block; width: 56px; height: 8px; background: #010409;
+  border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  vertical-align: middle; margin-right: 6px;
+}
+.minibar .fill.ok { display: block; height: 100%; background: var(--success); }
+.workers .worker { display: inline-block; margin-right: 10px; }

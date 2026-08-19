@@ -1036,6 +1036,23 @@ type Job struct {
 	Skipped   int `json:"skipped,omitempty"`
 	// Workers is the live per-worker status while the job runs.
 	Workers []WorkerStatus `json:"workers,omitempty"`
+	// Progress is a live progress snapshot computed on inspection (never
+	// in lightweight listings): the job's full datum count plus current
+	// done/running/queued/failed counts and the mean process time of the
+	// finished datums — the dashboard's progress bar and ETA inputs.
+	Progress *JobProgress `json:"progress,omitempty"`
+}
+
+// JobProgress is one job's progress snapshot (see Job.Progress). Done
+// counts every terminal datum (success, recovered, failed, skipped);
+// Running is the workers' active datums; the rest is Queued.
+type JobProgress struct {
+	Total          int     `json:"total"`
+	Done           int     `json:"done"`
+	Failed         int     `json:"failed"`
+	Running        int     `json:"running"`
+	Queued         int     `json:"queued"`
+	AvgProcessTime float64 `json:"avgProcessTime,omitempty"` // seconds
 }
 
 func (c *Client) ListJobs() ([]Job, error) {

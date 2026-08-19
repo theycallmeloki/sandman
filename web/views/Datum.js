@@ -12,6 +12,7 @@ export default {
   },
   data: () => ({ j: null, info: null, out: null, outErr: "", err: "" }),
   mounted() { this.load(); },
+  watch: { datum() { this.load(); } },
   methods: {
     async load() {
       try {

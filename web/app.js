@@ -53,7 +53,7 @@ const app = createApp({
   template: `
     <header class="top">
       <h1><a href="#/">sandmand</a></h1>
-      <span class="sub">{{ version ? "v" + version + " · " : "" }}read-only dashboard — writes go through the CLI</span>
+      <span class="sub">{{ version ? version + " · " : "" }}read-only dashboard — writes go through the CLI</span>
       <span style="flex:1"></span>
       <span v-if="state.err" class="error">{{ state.err }}</span>
     </header>

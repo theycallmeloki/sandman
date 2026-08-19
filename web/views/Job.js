@@ -20,6 +20,13 @@ export default {
     }, 4000);
   },
   beforeUnmount() { clearInterval(this.tick); },
+  // the router reuses this component instance across job→job
+  // navigations (same component type): mounted() fires once, so a prop
+  // change must reload — otherwise the datum table and the log tail
+  // keep showing the previous job's data
+  watch: {
+    job() { this.page = 0; this.lines = []; this.load(); this.loadLogs(); },
+  },
   methods: {
     async load() {
       try {
@@ -63,11 +70,42 @@ export default {
       return first + "–" + last + " of " + this.total();
     },
     total() {
+      // the live progress snapshot carries the exact datum count; the
+      // outcome counters only accumulate once the job finishes
+      if (this.j && this.j.progress) return this.j.progress.total;
       if (!this.dp) return 0;
       if (!this.j) return 0;
       return (this.j.processed || 0) + (this.j.recovered || 0) +
              (this.j.failed || 0) + (this.j.skipped || 0);
     },
+    // ---- live progress (see Job.Progress on the API) ----
+    prog() { return this.j && this.j.progress; },
+    pct(kind) {
+      const p = this.prog();
+      if (!p || !p.total) return 0;
+      if (kind === "failed") return Math.round(p.failed / p.total * 100);
+      // the green segment is the done portion that is NOT failed; the
+      // red failed segment sits inside it, so the two never overlap
+      return Math.round((p.done - p.failed) / p.total * 100);
+    },
+    fmtETA(sec) {
+      if (!isFinite(sec) || sec <= 0) return "—";
+      if (sec < 90) return "≈ " + Math.round(sec) + "s";
+      if (sec < 5400) return "≈ " + Math.round(sec / 60) + " min";
+      return "≈ " + (sec / 3600).toFixed(1) + " h";
+    },
+    etaText() {
+      const p = this.prog();
+      if (!p || !this.live) return "—";
+      if (p.queued <= 0) return "all datums dispatched";
+      if (!p.avgProcessTime || !this.j.workers || !this.j.workers.length) {
+        return "warming up — no finished datums yet";
+      }
+      const eta = p.queued * p.avgProcessTime / this.j.workers.length;
+      return this.fmtETA(eta) + " — " + p.queued + " queued × " +
+        p.avgProcessTime.toFixed(1) + "s avg ÷ " + this.j.workers.length + " workers";
+    },
+    workerList() { return (this.j && this.j.workers) || []; },
     summary() {
       if (!this.j) return [];
       return [
@@ -101,6 +139,32 @@ export default {
             <span class="k">output commit</span><span>{{ shortID(j.outputCommit) || "—" }}</span>
             <span class="k">outcome</span>
               <span><span v-for="s in summary()" :key="s[0]" :class="'chip ' + s[2]">{{ s[1] }} {{ s[0] }}</span><span v-if="!summary().length" class="muted">—</span></span>
+          </div>
+        </div>
+      </section>
+      <section v-if="prog() && prog().total > 0">
+        <h2>Progress
+          <span class="muted" style="text-transform:none;letter-spacing:0">— {{ prog().done }}/{{ prog().total }} datums</span>
+        </h2>
+        <div class="card">
+          <div class="progressbar" :title="prog().done + '/' + prog().total + ' done, ' + prog().failed + ' failed'">
+            <div class="fill ok" :style="{ width: pct('ok') + '%' }"></div>
+            <div class="fill bad" :style="{ width: pct('failed') + '%', left: pct('ok') + '%' }"></div>
+          </div>
+          <div class="keyvals">
+            <span class="k">done</span>
+              <span><span class="chip success">{{ prog().done }}</span> <span class="chip failure">{{ prog().failed }} failed</span></span>
+            <span class="k">in progress</span>
+              <span><span class="chip running">{{ prog().running }} running</span> <span class="chip queued">{{ prog().queued }} queued</span></span>
+            <span class="k">avg / datum</span><span>{{ prog().avgProcessTime ? prog().avgProcessTime.toFixed(1) + "s" : "—" }}</span>
+            <span class="k">eta</span><span>{{ etaText() }}</span>
+            <span v-if="live" class="k">workers</span><span v-if="live" class="workers">
+              <span v-for="w in workerList()" :key="w.worker" class="worker"
+                    :title="w.datum ? 'processing ' + w.datum + (w.started ? ' since ' + w.started : '') : 'idle'">
+                w{{ w.worker }}<span v-if="w.datum" class="muted"> · {{ shortID(w.datum) }}</span><span v-if="w.queue > 0" class="muted"> · {{ w.queue }} queued</span>
+              </span>
+              <span v-if="!workerList().length" class="muted">—</span>
+            </span>
           </div>
         </div>
       </section>

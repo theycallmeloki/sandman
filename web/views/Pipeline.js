@@ -4,12 +4,13 @@ import { api } from "../shared.js";
 export default {
   name: "Pipeline",
   props: { name: { type: String, required: true } },
-  data: () => ({ p: null, jobs: [], filter: "", allVersions: false, err: "" }),
+  data: () => ({ p: null, jobs: [], progs: {}, filter: "", allVersions: false, err: "" }),
   mounted() {
     this.load();
     this.tick = setInterval(() => { if (this.live) this.load(); }, 5000);
   },
   beforeUnmount() { clearInterval(this.tick); },
+  watch: { name() { this.load(); } },
   methods: {
     async load() {
       try {
@@ -19,9 +20,20 @@ export default {
         q += this.allVersions ? "&history=-1" : "&history=0";
         if (this.filter) q += "&state=" + encodeURIComponent(this.filter);
         this.jobs = await api(q);
+        // live progress for the executing/queued jobs — the inspect
+        // payload carries the progress snapshot; lightweight listings
+        // stay lean without it
+        const live = this.jobs.filter((j) => j.state === "running" || j.state === "queued");
+        const out = {};
+        await Promise.all(live.map(async (j) => {
+          try { out[j.id] = await api("/jobs/" + encodeURIComponent(j.id)); } catch (e) { out[j.id] = null; }
+        }));
+        this.progs = out;
         this.err = "";
       } catch (e) { this.err = String(e.message || e); }
     },
+    progOf(j) { const x = this.progs[j.id]; return x && x.progress; },
+    barPct(p) { return p && p.total ? Math.round(p.done / p.total * 100) : 0; },
     setFilter(s) { this.filter = this.filter === s ? "" : s; this.load(); },
     toggleVersions() { this.allVersions = !this.allVersions; this.load(); },
     counts(jc) {
@@ -79,12 +91,19 @@ export default {
         </h2>
         <table>
           <thead>
-            <tr><th>job</th><th>state</th><th>started</th><th>duration</th><th>proc</th><th>rec</th><th>fail</th><th>skip</th><th>reason</th></tr>
+            <tr><th>job</th><th>state</th><th>progress</th><th>started</th><th>duration</th><th>proc</th><th>rec</th><th>fail</th><th>skip</th><th>reason</th></tr>
           </thead>
           <tbody>
             <tr v-for="j in jobs" :key="j.id">
               <td><a :href="jobHref(j)">{{ shortID(j.id) }}</a></td>
               <td><span :class="'chip ' + j.state">{{ j.state }}</span></td>
+              <td>
+                <span v-if="progOf(j) && progOf(j).total > 0" :title="progOf(j).done + '/' + progOf(j).total + ' done'">
+                  <span class="minibar"><span class="fill ok" :style="{ width: barPct(progOf(j)) + '%' }"></span></span>
+                  {{ progOf(j).done }}/{{ progOf(j).total }}
+                </span>
+                <span v-else class="muted">—</span>
+              </td>
               <td class="muted"><span :title="fmtTime(j.started)" style="cursor:help">{{ relTime(j.started) }}</span></td>
               <td class="muted">{{ dur(j.started, j.finished) }}</td>
               <td>{{ j.processed }}</td>
