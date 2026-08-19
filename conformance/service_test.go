@@ -26,6 +26,9 @@ import (
 // leftover service from a previous run.
 func TestServicePipeline(t *testing.T) {
 	port := freePort()
+	// the process binds the internal port on the host — a hardcoded
+	// port collides with anything else listening there
+	internal := freePort()
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file1": "foo"})
@@ -34,12 +37,12 @@ func TestServicePipeline(t *testing.T) {
 		Name: uniq(t),
 		Transform: &client.Transform{
 			Image: "alpine:3.21",
-			Cmd:   []string{"sh", "-c", "cd /sandman/in && exec python3 -m http.server 8000"},
+			Cmd:   []string{"sh", "-c", fmt.Sprintf("cd /sandman/in && exec python3 -m http.server %d", internal)},
 		},
 		Parallelism: &client.Parallelism{Constant: 1},
 		Input:       &client.Input{Repo: repo, Glob: "/"},
 		Service: &client.Service{
-			InternalPort: 8000,
+			InternalPort: internal,
 			ExternalPort: port,
 			Annotations:  map[string]string{"foo": "bar"},
 		},
@@ -70,8 +73,8 @@ func TestServicePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect service: %v", err)
 	}
-	if info.Internal != 8000 || info.External != port {
-		t.Fatalf("service ports = %d/%d, want 8000/%d", info.Internal, info.External, port)
+	if info.Internal != internal || info.External != port {
+		t.Fatalf("service ports = %d/%d, want %d/%d", info.Internal, info.External, internal, port)
 	}
 	actual := map[string]string{}
 	for k, v := range info.Annotations {
