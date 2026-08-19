@@ -177,6 +177,15 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
 	mux.HandleFunc("DELETE /api/v1/tags/{name}", hErr(d.deleteTagH))
 	mux.HandleFunc("GET /api/v1/tags", hErr(d.listTagsH))
+	// the embedded read-only dashboard: index at /, assets under /ui/.
+	// The API owns every /api/v1/... path; Go's ServeMux prefers the
+	// more specific registered patterns, so these never shadow it, and
+	// the bare catch-all below still 404s everything else (methods,
+	// unknown paths) with the uniform JSON error shape. "GET /{$}" is
+	// the exact-match anchor: without {$}, a method-qualified "/"
+	// matches every path and would swallow the catch-all.
+	mux.HandleFunc("GET /{$}", hErr(d.webIndexH))
+	mux.HandleFunc("GET /ui/{path...}", hErr(d.webAssetH))
 	// unknown paths get the uniform JSON error shape (mux's default
 	// text/plain "404 page not found" would break the client's error
 	// decode — and version-skew callers hitting a not-yet-existing

@@ -749,6 +749,18 @@ consumer is stopped or failed).
 sum/count aggregates for file reads (split by outcome — two series), file
 writes, and job listings (one series each).
 
+### Web UI
+
+A read-only dashboard ships embedded in the daemon: point a browser at the
+daemon's port (`http://<host>:4242`) and drill from pipeline → job → datum,
+with per-job logs, live auto-refresh while jobs run, and the fleet's hosts
+and services. It is served on the same port as the API (`GET /` serves the
+page, `/ui/*` its assets; the API's `/api/v1/...` routes and the uniform
+JSON 404 for unknown paths are untouched). The dashboard is deliberately
+read-only — every write goes through the CLI (`sandman pipeline start`,
+`run`, `update`, …); the UI never mutates state. No build step, no external
+CDN: Vue is vendored into the binary.
+
 ---
 
 ## Operations
