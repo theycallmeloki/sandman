@@ -1,6 +1,6 @@
 # sandman
 
-<img width="1402" height="1122" alt="ChatGPT Image Aug 15, 2026, 01_20_39 PM" src="https://github.com/user-attachments/assets/e20a907a-7f79-4923-8638-ecd4c34214a3" />
+<img width="1402" height="1122" alt="ChatGPT Image Aug 15, 2026, 03_26_17 PM (1)" src="https://github.com/user-attachments/assets/e22fd1eb-82fe-47ac-a124-70a0da6d0f48" />
 
 
 *"Exit light, enter night."* — Metallica, "Enter Sandman"
