@@ -195,6 +195,63 @@ func TestPipelineFailureMentionsDatum(t *testing.T) {
 	}
 }
 
+// TestFailedJobPreservesSuccessfulOutputs — a job that fails on some
+// datums still uploads the successful datums' outputs: the partial corpus
+// is a real revision (readable from the output commit) while the job stays
+// failed, so downstream sees the failure but the completed work is not
+// discarded.
+func TestFailedJobPreservesSuccessfulOutputs(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm := commitFiles(t, repo, "master", map[string]string{
+		"a.txt": "GOOD-A",
+		"b.txt": "GOOD-B",
+		"c.txt": "BAD-C", // the datum whose input contains BAD fails
+	})
+	pipe := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name: pipe,
+		Transform: &client.Transform{
+			Image: "alpine:3.21",
+			// one file per datum (glob /*): copy it to OUT unless its
+			// content marks it bad, in which case the datum fails
+			Cmd: []string{"sh", "-c", fmt.Sprintf(
+				"if grep -q BAD ${%s}/*; then exit 1; fi; cp ${%s}/* ${OUT}/", repo, repo)},
+		},
+		Input: &client.Input{Repo: repo, Glob: "/*"},
+	})
+
+	jobs, err := c.Flush(cm.ID, 60*time.Second)
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected exactly 1 job, got %d", len(jobs))
+	}
+	j := jobs[0]
+	if j.State != "failure" {
+		t.Fatalf("job state = %s, want failure", j.State)
+	}
+	if j.Failed != 1 {
+		t.Fatalf("job failed datum count = %d, want 1", j.Failed)
+	}
+	if j.OutputCommit == "" {
+		t.Fatalf("failed job has no output commit — successful outputs must still be uploaded")
+	}
+	// the successful datums' outputs are readable from the failed job's
+	// output commit
+	for file, want := range map[string]string{"a.txt": "GOOD-A", "b.txt": "GOOD-B"} {
+		got, err := c.GetFile(j.OutputCommit, file)
+		if err != nil || string(got) != want {
+			t.Fatalf("GetFile(%s) = %q, %v; want %q", file, got, err, want)
+		}
+	}
+	// the failed datum contributes nothing
+	if _, err := c.GetFile(j.OutputCommit, "c.txt"); err == nil {
+		t.Fatalf("failed datum's path readable from the output commit — it must contribute nothing")
+	}
+}
+
 // TestLargeOutputAcrossParallelWorkers — 100 datums each producing
 // 100 output files (10,000 total) at parallelism 4 complete in one output
 // commit without loss.

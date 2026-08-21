@@ -578,9 +578,16 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 
 	if failedAny {
-		// All-or-nothing output: finish the commit explicitly empty. A
-		// failed datum still leaves the job inspectable and the pipeline
-		// schedulable.
+		// Partial-output preservation: a failed job still uploads the
+		// successful datums' outputs — the wave's completed work is a
+		// real revision, not discarded with the failure. The job stays
+		// failed (downstream propagates the failure), but the successful
+		// outputs remain readable and re-runnable. mergeOutputs includes
+		// successful/recovered/skipped datums' files and omits failed
+		// datums' contributions. A killed job's output stays
+		// all-or-nothing empty: stopping a pipeline is not a processing
+		// event. A job with no successful output falls back to the empty
+		// finish (parent view preserved, no tombstones).
 		killed := rj.cancelled.Load()
 		if killed {
 			rec.State = stateKilled
@@ -593,7 +600,19 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 		// the terminal state is durable before the output commit finishes,
 		// so the downstream trigger observes the failure
 		d.saveJob(rec)
-		d.finishOutput(pl, outCommit, "", true)
+		partial := false
+		if !killed {
+			if err := d.mergeOutputs(jx, datums, skipped); err == nil {
+				if entries, err := os.ReadDir(outDir); err == nil && len(entries) > 0 {
+					partial = true
+				}
+			}
+		}
+		if partial {
+			d.finishOutput(pl, outCommit, outDir, false)
+		} else {
+			d.finishOutput(pl, outCommit, "", true)
+		}
 		d.recordProvenance(outCommit.ID, rec.InputCommits)
 		if !killed && !rec.Manual {
 			// a failed output is still a revision: every downstream stage
