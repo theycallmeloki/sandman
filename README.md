@@ -7,13 +7,13 @@
 
 sandman is a peer-to-peer data and compute fabric for a trusted LAN. Nodes
 discover each other with zero configuration (mDNS, Bonjour-style), expose
-their docker, and speak two things over one port: a shell-like job protocol
+their container runtime, and speak two things over one port: a shell-like job protocol
 and a versioned-data API. Data lives in content-addressed repositories,
 pipelines turn revisions into revisions, and the fleet runs the jobs —
 no Kubernetes, no database, no coordinator. The daemon is the only moving
 part, and it is just another verb.
 
-**Thesis: a remote docker node is just a process you can't see.** The whole
+**Thesis: a remote container node is just a process you can't see.** The whole
 fabric is process verbs you already know — run, signals, exit codes, `&&`
 chains across machines. No scheduler, no job queue, no database, no
 coordinator. The shell is the scheduler:
@@ -31,7 +31,7 @@ where the fun starts.
 
 | sandman concept | Feels like | But instead of |
 |---|---|---|
-| `sandman run` | `ssh` + `docker run` | a job queue or K8s `Job` |
+| `sandman run` | `ssh` + `containerd run` | a job queue or K8s `Job` |
 | repos / commits / branches | `git` | a central server or object store |
 | dedup'd content store | `dvc` cache | a `.dvc` layer over a cloud bucket |
 | pipelines (transforms) | `Airflow` DAG tasks | a scheduler daemon with retries |
@@ -68,8 +68,8 @@ Three things are deliberately *not* here, and they change how you operate:
 - **Silence** — only the job's stdout on stdout; diagnostics on stderr
 - **Repair** — exit codes return verbatim, so `&&`/`||`/`$?` compose across
   the fabric; failures surface as broken pipes, never phantom jobs
-- **Separation** — policy lives in the shell, mechanism in docker; the
-  daemon owns the docker socket, clients never see it
+- **Separation** — policy lives in the shell, mechanism in the container
+  runtime; the daemon owns the containerd socket, clients never see it
 - **Parsimony** — one static binary, busybox-style verbs; the daemon is just
   another verb
 
@@ -77,7 +77,8 @@ Three things are deliberately *not* here, and they change how you operate:
 
 ## Quickstart: ten minutes to a dream
 
-Requirements: Linux, docker, and a LAN with multicast (one L2 segment).
+Requirements: Linux, containerd + runc (the distro packages; no docker,
+no Docker repository, no PPA), and a LAN with multicast (one L2 segment).
 
 ### 1. Install the daemon
 
@@ -90,6 +91,37 @@ sudo systemctl enable --now sandman
 That's it. The node advertises `_sandman._tcp` and browses for peers on
 boot — it joins the fleet by itself. Nothing to register, nothing to
 configure.
+
+Or install the Debian package (no Go toolchain, no docker anywhere):
+
+```sh
+make deb                                   # build/sandman_<version>_amd64.deb
+sudo apt install ./build/sandman_<version>_amd64.deb   # pulls in containerd + runc
+sudo systemctl enable --now sandman
+```
+
+The package declares `Depends: containerd, runc` — the distro supplies the
+container machinery (containerd → runc → Linux namespaces/cgroups), and
+the systemd unit starts after `containerd.service`. Docker is not
+required, not installed, and never invoked: the execution backend speaks
+containerd's Go API directly.
+
+### The runtime stack
+
+Sandman owns execution policy (which image, command, inputs, outputs,
+resources, when to kill); containerd owns container mechanics (image
+storage, snapshots, task lifecycle, OCI runtime invocation, cgroups):
+
+```
+Sandman control plane → Runner → containerRunner → containerd → runc → Linux
+```
+
+A job runs in a containerd container in the `sandman` namespace, named
+`sandman-<id>` and labeled with its owning node (orphan pruning). Images
+are pulled into containerd's content store on first use. Containers share
+the host network namespace — containerd alone provides no bridge (CNI is
+nerdctl territory), the fabric assumes a trusted LAN, and service
+pipelines need host-reachable ports.
 
 ### 2. Run a job on a remote node
 
@@ -170,7 +202,7 @@ A fleet is a set of nodes that can see each other. Each node runs the same
 binary in one of two roles:
 
 - **daemon** — the control plane (default; binds `:4242`, publishes mDNS).
-  Expect one daemon per LAN. The daemon owns the docker socket, serves the
+  Expect one daemon per LAN. The daemon owns the containerd socket, serves the
   API, and places pipeline jobs.
 - **worker** — an execution host (`sandman worker -control <url>`): no
   control-plane duties, registers with the daemon, runs the jobs the
@@ -199,7 +231,7 @@ subnets use `sandman attach` for static peers.
   and output config. Versioned: every update is a new immutable version.
 - **Transform** — the container image and command that do the work.
 - **Job** — one execution of a pipeline for one input revision. Runs a
-  docker container with the datum's files, captures logs, commits `OUT`.
+  containerd container with the datum's files, captures logs, commits `OUT`.
 - **Datum** — the unit of work: each file (or directory subtree) matched by
   the input glob. A job processes its datums with a worker pool sized by
   the pipeline's parallelism.
@@ -239,7 +271,7 @@ slack (an empty wave) or snaps (a failure).
 ### Discovery
 
 Each daemon publishes a `_sandman._tcp.local.` service (TXT records carry
-docker version and arch) and browses the same type. Peers are kept in the
+the runtime version and arch) and browses the same type. Peers are kept in the
 registry file with a last-seen timestamp and are forgotten after 90s of
 silence; a graceful shutdown announces an mDNS goodbye so peers drop the
 node immediately. `cat /var/lib/sandman/registry` is the fleet.
@@ -253,14 +285,15 @@ eventual, never a hard dependency.
 
 ### Jobs
 
-A job is an ephemeral `docker run`: the daemon creates the container with a
-scratch workdir, starts it attached, and relays the three fds over the
-connection. Exit codes come from `docker start -a` (never `docker wait`,
-which lies on `--rm` containers); signal deaths report 128+signal,
-shell-style. If the client vanishes, the daemon kills the container — no
-orphans. Containers are named `sandman-<jobid>` and labeled with their
-owning node, so a fresh daemon prunes only the containers its own crashed
-predecessor left behind.
+A job is an ephemeral containerd container (`sandman run` streams a
+scratch-workdir container the way `docker run` used to): the daemon
+creates the container with the image, starts its task attached, and relays
+the three fds over the connection. Exit codes come from the task's exit
+status (never a wait race on an auto-removed container); signal deaths
+report 128+signal, shell-style. If the client vanishes, the daemon kills
+the container — no orphans. Containers are named `sandman-<jobid>` and
+labeled with their owning node, so a fresh daemon prunes only the
+containers its own crashed predecessor left behind.
 
 ### Wire protocol
 
@@ -268,7 +301,7 @@ Line-oriented text over TCP; control lines, length-prefixed frames for data:
 
 ```
 C: HELLO sandman/0.1
-S: OK node=b2 docker=29.6.1
+S: OK node=b2 docker=2.2.2   # "docker" is the runtime version token, kept for fleet interop
 C: RUN
 C: b2-4172-88123
 C: alpine
@@ -317,7 +350,8 @@ adds a static peer; `detach` removes it.
 
 ### Adding an execution worker
 
-A machine that runs jobs for your control plane — needs docker, a trusted
+A machine that runs jobs for your control plane — needs containerd + runc
+(installed automatically from the distro packages; no docker), a trusted
 LAN; make and curl are fetched if missing:
 
 ```sh
@@ -570,10 +604,11 @@ outcomes.
 
 Resource requests and limits declared on a pipeline (memory, CPU, disk) are
 applied to the environment that executes its jobs: memory limits become
-docker `--memory`, requests `--memory-reservation`, CPU `--cpus` (a CPU
-request maps to the allocation; a disk request is recorded but not
-enforceable on docker's default driver). No declared resources → none
-injected.
+the cgroup's hard memory limit, requests the memory reservation (soft
+target), and a CPU limit or request a CFS quota/period pair (a CPU request
+maps to the allocation; a disk request is recorded but not enforceable —
+the container backend has no portable per-container writable-layer quota).
+No declared resources → none injected.
 
 ### Standby: sleep with one eye open
 
@@ -821,10 +856,10 @@ actually landed, and prints the final fleet view.
 ## Security posture
 
 Trusted-LAN by design: **the firewall is the auth**. The daemon is the only
-thing that touches the docker socket — clients speak the text protocol,
-never docker. A raw docker socket is root-equivalent; treat this fabric
-accordingly: private networks, or an L2 segment you control. No TLS, no
-tokens, no encryption (v1).
+thing that touches the containerd socket — clients speak the text protocol,
+never the runtime. A raw containerd socket is root-equivalent; treat this
+fabric accordingly: private networks, or an L2 segment you control. No TLS,
+no tokens, no encryption (v1).
 
 ---
 

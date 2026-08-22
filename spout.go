@@ -7,16 +7,13 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"sandman/client"
@@ -103,8 +100,8 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 	rj.registerContainer(cname)
 	defer rj.unregisterContainer(cname)
 
-	// the container's environment is passed as docker -e flags in argv;
-	// the mount list is the only other docker argument
+	// the container's environment is passed as env entries; the mount
+	// list is the execution backend's mount vocabulary
 	mounts := []string{"-v", outDir + ":/sandman/out"}
 	markerDir := d.spoutMarkerDir(pl.Pipeline.Name)
 	if pl.Pipeline.Spout.Marker != "" {
@@ -113,35 +110,39 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 	}
 	// the container is labelled so a crashed daemon's orphan prune finds
 	// it (pruneOrphans filters label=sandman.node=; unlabelled, a spout
-	// container survives a daemon crash forever). --rm is deliberately
-	// NOT used: the poll loop detects a natural exit via docker inspect
-	// of the stopped container, and auto-removal would read as an
-	// unexpected-exit failure.
-	argv := []string{"run", "-d", "--name", cname, "--label", "sandman.node=" + d.name, "-e", "OUT=/sandman/out", "-e", "JOB_ID=" + id}
+	// container survives a daemon crash forever). The task runs detached
+	// through the execution backend: the poll loop reads the exit
+	// channel, so a natural end is distinguishable from an
+	// unexpected-exit failure without inspecting a stopped container.
+	env := []string{"OUT=/sandman/out", "JOB_ID=" + id}
 	if pl.Pipeline.Spout.Marker != "" {
 		// the marker dir path is always derivable, so only the declared
 		// marker decides: a spout without one must not see a MARKER that
 		// points at a mount that was never attached
-		argv = append(argv, "-e", "MARKER=/sandman/marker")
+		env = append(env, "MARKER=/sandman/marker")
 	}
-	argv = append(argv, mounts...)
-	argv = append(argv, pl.Pipeline.Transform.Image, "sh", "-c", joinSh(pl.Pipeline.Transform.Cmd))
-	if pl.Pipeline.Transform.Image == "" {
-		argv[len(argv)-4] = "alpine"
+	image := pl.Pipeline.Transform.Image
+	if image == "" {
+		image = "alpine"
+	}
+	spec := JobSpec{
+		Image:    image,
+		NodeName: d.name,
+		Name:     cname,
+		Cmd:      []string{"sh", "-c", joinSh(pl.Pipeline.Transform.Cmd)},
+		Env:      env,
+		Mounts:   mounts,
+		OutDir:   outDir,
 	}
 	// the start is bounded too (an image pull may take a while; a
 	// stalled daemon beyond that fails the job instead of wedging it
-	// "running" before the poll loop ever starts)
-	sctx, scancel := context.WithTimeout(context.Background(), 120*time.Second)
-	err := exec.CommandContext(sctx, "docker", argv...).Run()
-	scancel()
-	if err != nil {
-		rec.State = stateFailure
-		rec.Reason = "spout container failed to start"
-		rec.Finished = now()
-		d.saveJob(rec)
-		return
-	}
+	// "running" before the poll loop ever starts) — the backend's
+	// provisioning budget covers it, and a start failure lands on the
+	// exit channel as a provisioning error
+	exited := make(chan RunResult, 1)
+	go func() {
+		exited <- containerRunner{}.Run(spec)
+	}()
 
 	committedOut := map[string]string{}
 	committedMarker := map[string]string{}
@@ -211,75 +212,43 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 			}
 		}
 	}
+loop:
 	for {
 		if rj.cancelled.Load() {
-			kctx, kcancel := context.WithTimeout(context.Background(), 30*time.Second)
-			exec.CommandContext(kctx, "docker", "kill", cname).Run()
-			kcancel()
-			settle(stateKilled, reasonJobCancelled)
-			break
+			// keep killing until the run settles: the run may still be
+			// pulling the image (no container yet, a single kill is
+			// lost), and the backend's run goroutine cleans up once the
+			// task dies. No cycles are committed while cancelled — the
+			// stop must not surface a partial wave.
+			containerRunner{}.Kill(cname)
+			select {
+			case <-exited:
+				settle(stateKilled, reasonJobCancelled)
+				break loop
+			case <-time.After(250 * time.Millisecond):
+			}
+			continue
 		}
-		// the container exited? (a natural end settles the job). The
-		// inspect is bounded: a stalled docker daemon must not freeze
-		// the poll — a missed beat re-inspects on the next tick, while
-		// an unbounded inspect was observed freezing the loop forever,
-		// orphaning the exited container and leaving the job "running".
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", cname).Output()
-		cancel()
-		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				continue // docker is stalled; try again on the next tick
+		select {
+		case res := <-exited:
+			if res.ProvisioningErr != nil {
+				// the container never started (bad image, runtime down):
+				// settle as failure, matching a failed `run -d` start
+				settle(stateFailure, "spout container failed to start")
+				break loop
 			}
-			// a momentary daemon blip must not kill a live spout:
-			// retry the inspect briefly before declaring the container
-			// gone.
-			live := false
-			for r := 0; r < 3; r++ {
-				time.Sleep(500 * time.Millisecond)
-				rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
-				rout, rerr := exec.CommandContext(rctx, "docker", "inspect", "-f", "{{.State.Running}}", cname).Output()
-				rcancel()
-				if rerr == nil {
-					if strings.TrimSpace(string(rout)) == "true" {
-						live = true // recovered: resume normal polling
-					}
-					break
-				}
-			}
-			if live {
-				continue
-			}
-			// the container is gone or docker is broken: settle, but
-			// first commit the final visible cycle — the container's
-			// exit is indistinguishable from a persistent inspect
-			// error, and a cycle must not be lost to either. The
-			// container is removed so a still-running one cannot
-			// orphan.
-			log.Printf("spout %s: inspect failed persistently (%v); committing final cycle", pl.Pipeline.Name, err)
-			commitCycle(true)
-			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
-			rmCancel()
-			settle(stateFailure, "spout container exited unexpectedly")
-			break
-		} else if strings.TrimSpace(string(out)) != "true" {
-			// the container is gone: commit any final cycle — a
-			// deferred mid-write file must not be lost to the settle
+			// the container exited naturally: commit any final cycle — a
+			// deferred mid-write file must not be lost to the settle (the
+			// exit code is not a gate: a spout's natural end settles the
+			// job, exactly like the container backend it replaces)
 			log.Printf("spout %s: container exited; committing final cycle", pl.Pipeline.Name)
 			commitCycle(true)
-			rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
-			rmCancel()
 			settle(stateSuccess, "")
-			break
+			break loop
+		case <-time.After(250 * time.Millisecond):
+			commitCycle(false)
 		}
-		commitCycle(false)
-		time.Sleep(250 * time.Millisecond)
 	}
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	exec.CommandContext(rmCtx, "docker", "rm", "-f", cname).Run()
-	rmCancel()
 }
 
 // spoutMarkerDir is the spout's per-pipeline marker directory: it lives

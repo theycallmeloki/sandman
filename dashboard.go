@@ -301,7 +301,7 @@ func dashboardColumns(width int) dashboardLayout {
 			{"mem", "MEMORY", tview.AlignLeft},
 			{"pids", "PIDS", tview.AlignRight},
 			{"place", "ADDR / IMAGE", tview.AlignLeft},
-			{"docker", "DOCKER / ID", tview.AlignLeft},
+			{"docker", "RUNTIME / ID", tview.AlignLeft},
 			{"version", "VERSION", tview.AlignLeft},
 		}}
 	case width >= 112:

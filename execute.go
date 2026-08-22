@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -553,7 +552,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 				}
 				rj.cancelled.Store(true)
 				for _, n := range rj.containerNames() {
-					exec.Command("docker", "kill", n).Run()
+					d.runner.Kill(n)
 				}
 			})
 			defer jobTimer.Stop()

@@ -75,19 +75,15 @@ func TestMain(m *testing.M) {
 		}
 	}
 	// Stale sandman containers from interrupted runs (a SIGKILLed daemon
-	// cannot run its docker rm -f) hold external ports and poison later
-	// runs. Scoped to the harness's own naming namespace
+	// cannot run its kill-on-disconnect cleanup) hold external ports and
+	// poison later runs. Scoped to the harness's own naming namespace
 	// (sandman-conformance-*): the node label is an exact per-daemon
 	// match, so it would miss leftovers from earlier ports, while an
 	// unscoped name=sandman- sweep SIGKILLs foreign production services
-	// on a shared dockerd (sandman-<id>-service — observed live:
+	// on a shared containerd (sandman-<id>-service — observed live:
 	// "service process exited with code 137").
-	if dockerAvailable() {
-		if out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-conformance-").Output(); err == nil {
-			for _, id := range strings.Fields(string(out)) {
-				exec.Command("docker", "rm", "-f", id).Run()
-			}
-		}
+	if runtimeAvailable() {
+		removeSandmanContainers("sandman-conformance-")
 	}
 
 	startDaemon(state)
@@ -109,12 +105,8 @@ func TestMain(m *testing.M) {
 	// straggler whose cleanup raced the process exit), remove it now —
 	// the same scoped sweep the next run's startup would do, so a
 	// batch's later tests never see a stale container.
-	if dockerAvailable() {
-		if out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-conformance-").Output(); err == nil {
-			for _, id := range strings.Fields(string(out)) {
-				exec.Command("docker", "rm", "-f", id).Run()
-			}
-		}
+	if runtimeAvailable() {
+		removeSandmanContainers("sandman-conformance-")
 	}
 	os.RemoveAll(state)
 	os.Exit(code)
@@ -152,15 +144,6 @@ func startDaemon(state string) {
 		os.Exit(1)
 	}
 	daemonCmd = cmd
-}
-
-// dockerAvailable reports whether the container runtime is present (the
-// container-facing subset runs only when it is).
-func dockerAvailable() bool {
-	if _, err := exec.LookPath("docker"); err != nil {
-		return false
-	}
-	return exec.Command("docker", "version").Run() == nil
 }
 
 // procPPID reads a process's parent pid from /proc/<pid>/stat. Returns -1

@@ -12,6 +12,7 @@
 package cli_test
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -21,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	containerd "github.com/containerd/containerd/v2/client"
 )
 
 var (
@@ -30,8 +33,8 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	if !dockerAvailable() {
-		fmt.Fprintln(os.Stderr, "cli: no docker runtime — skipping (container carve-out)")
+	if !runtimeAvailable() {
+		fmt.Fprintln(os.Stderr, "cli: no container runtime (containerd) — skipping (container carve-out)")
 		os.Exit(0)
 	}
 	binPath = filepath.Join(os.TempDir(), fmt.Sprintf("sandman-cli-%d", os.Getpid()))
@@ -70,11 +73,19 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func dockerAvailable() bool {
-	if _, err := exec.LookPath("docker"); err != nil {
+// runtimeAvailable reports whether the container runtime (containerd) is
+// present and reachable: the daemon runs its default container runner, so
+// the CLI smoke flow needs the real runtime.
+func runtimeAvailable() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cli, err := containerd.New("/run/containerd/containerd.sock")
+	if err != nil {
 		return false
 	}
-	return exec.Command("docker", "version").Run() == nil
+	defer cli.Close()
+	_, err = cli.Version(ctx)
+	return err == nil
 }
 
 // runCLI executes the binary with the global -addr flag and the

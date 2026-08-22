@@ -112,7 +112,7 @@ func (r *registry) writeSnapshot() {
 	defer r.mu.Unlock()
 	var b strings.Builder
 	b.WriteString("# sandman registry: mdns-discovered peers (ephemeral) + static peers (hand-edited)\n")
-	b.WriteString("# name addr docker source seen role version\n")
+	b.WriteString("# name addr runtime source seen role version\n")
 	for _, p := range r.peers {
 		seen := "-"
 		if p.Source == "mdns" {

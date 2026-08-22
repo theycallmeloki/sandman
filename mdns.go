@@ -20,7 +20,7 @@ import (
 // fleet never falls back to a loopback interface address from the browse).
 func advertiseMDNS(name string, port int, role, addr string) (*zeroconf.Server, error) {
 	txt := []string{
-		"docker=" + dockerVersion(),
+		"docker=" + runtimeVersion(),
 		"arch=" + runtime.GOARCH,
 		"os=" + runtime.GOOS,
 		"role=" + role,

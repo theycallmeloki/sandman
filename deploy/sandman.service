@@ -1,7 +1,11 @@
 [Unit]
-Description=Sandman fabric node (zeroconf peer-to-peer docker)
-After=network-online.target
-Wants=network-online.target
+Description=Sandman fabric node (zeroconf peer-to-peer container fabric)
+# The execution backend speaks containerd directly: the daemon must not
+# start before the container runtime is up, or every job it spawns would
+# fail as unprovisionable. Wants (not Requires) so a containerd restart
+# does not take the control plane down with it.
+After=network-online.target containerd.service
+Wants=network-online.target containerd.service
 
 [Service]
 Type=simple

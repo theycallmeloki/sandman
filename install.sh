@@ -29,9 +29,21 @@ need() {
 need curl
 need make
 
-if ! command -v docker >/dev/null 2>&1; then
-	echo "install.sh: docker is required — install it first (https://docs.docker.com/engine/install/)" >&2
-	exit 1
+# the execution backend speaks containerd + runc directly (no docker):
+# ensure the distro's container runtime is present and enabled
+for rt in containerd runc; do
+	if ! command -v $rt >/dev/null 2>&1; then
+		echo "install.sh: $rt not found — installing it"
+		sudo apt-get install -y -qq $rt || {
+			echo "install.sh: apt install failed — refreshing package lists and retrying"
+			sudo apt-get update -qq
+			sudo apt-get install -y -qq $rt
+		}
+		command -v $rt >/dev/null 2>&1 || { echo "install.sh: failed to install $rt" >&2; exit 1; }
+	fi
+done
+if ! systemctl is-active --quiet containerd; then
+	sudo systemctl enable --now containerd
 fi
 
 # fetch the repo — the Makefile does the installing
@@ -43,7 +55,7 @@ cd "$tmp"/sandman-main
 NAME=${NAME:-$(hostname)}
 PORT=${PORT:-4343}
 # the default-route interface's source address is the LAN-reachable IP —
-# `hostname -I` can lead with the docker bridge (172.x), which the daemon
+# `hostname -I` can lead with a container bridge (172.x), which the daemon
 # could not dial. ADVERTISE is an explicit opt-in: it flips the worker's
 # exec endpoint from loopback to 0.0.0.0 (worker.go), and that endpoint
 # is unauthenticated — remote placement needs it, a single-host install
