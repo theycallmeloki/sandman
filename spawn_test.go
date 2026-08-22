@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +14,11 @@ import (
 // fakeDocker installs a docker script in PATH that records its arguments
 // to rec and exits 0: the spout/service goroutines' container calls
 // (run, inspect, kill) become observable no-ops, so a test can race a
-// spawn without touching a real daemon.
+// spawn without touching a real daemon. inspect reports the container
+// running ("true") so the spout poll loop keeps polling until the cancel
+// lands — a container that exits instantly would settle the job (and
+// unregister its handle) before the pre-registration assert could
+// observe it.
 func fakeDocker(t *testing.T, rec string) {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "bin")
@@ -21,7 +26,7 @@ func fakeDocker(t *testing.T, rec string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(bin, "docker"),
-		[]byte("#!/bin/sh\necho \"$@\" >> \"$REC\"\n"), 0o755); err != nil {
+		[]byte("#!/bin/sh\nif [ \"$1\" = \"inspect\" ]; then echo \"true\"; else echo \"$@\" >> \"$REC\"; fi\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("REC", rec)
@@ -75,7 +80,12 @@ func TestSpoutPreRegistersRunningHandle(t *testing.T) {
 func TestServicePreRegistersRunningHandle(t *testing.T) {
 	rec := filepath.Join(t.TempDir(), "kills")
 	fakeDocker(t, rec)
-	d := &daemon{state: t.TempDir(), runner: &killRecorder{}, running: map[string]*runningJob{}}
+	// the fake process must stay alive until the cancel lands: with a
+	// runner that exits immediately the job legitimately settles (and
+	// unregisters its handle) before the assert can observe the
+	// registration — the invariant is then misreported as a failure
+	// (observed once under -race on CI)
+	d := &daemon{state: t.TempDir(), runner: &blockingRunner{}, running: map[string]*runningJob{}}
 	d.store = store.New(filepath.Join(d.state, "store"))
 	pl := &pipelineRec{Pipeline: client.Pipeline{
 		Name:      "sv1",
@@ -89,4 +99,36 @@ func TestServicePreRegistersRunningHandle(t *testing.T) {
 			t.Logf("30/30 spawns: handle registered at return, cancel landed, job settled")
 		}
 	}
+}
+
+// blockingRunner is a runner whose Run blocks until the container is
+// killed: the fake service process stays up for the job's lifetime, like
+// a real one, so the pre-registration invariant is observable at the
+// spawn return instead of racing a process that exits immediately.
+type blockingRunner struct {
+	mu    sync.Mutex
+	alive map[string]chan struct{}
+}
+
+func (b *blockingRunner) Run(spec JobSpec) RunResult {
+	ch := make(chan struct{})
+	b.mu.Lock()
+	if b.alive == nil {
+		b.alive = map[string]chan struct{}{}
+	}
+	b.alive[spec.Name] = ch
+	b.mu.Unlock()
+	<-ch
+	return RunResult{Code: 137}
+}
+
+func (b *blockingRunner) Kill(name string) error {
+	b.mu.Lock()
+	ch, ok := b.alive[name]
+	delete(b.alive, name)
+	b.mu.Unlock()
+	if ok {
+		close(ch)
+	}
+	return nil
 }

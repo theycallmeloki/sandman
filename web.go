@@ -29,7 +29,7 @@ func (d *daemon) webIndexH(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(b)
+	_, _ = w.Write(b)
 	return nil
 }
 
@@ -49,7 +49,7 @@ func (d *daemon) webAssetH(w http.ResponseWriter, r *http.Request) error {
 		writeErr(w, http.StatusNotFound, "no such asset: "+name)
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
 		return err

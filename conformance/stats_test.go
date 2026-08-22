@@ -540,6 +540,15 @@ func TestListDatumDuringJob(t *testing.T) {
 		j, err := c.InspectJob(job.ID)
 		return err == nil && j.State == "running"
 	})
+	// the job is running as soon as it holds the pipeline gate, before
+	// the first datum's record exists (execDatum persists it at start);
+	// under docker contention that gap can outlast the listing, so poll
+	// for the in-progress datum — the assertion is that it IS listable
+	// mid-flight, not that it appears the instant the job turns running
+	pollFor(t, "datum in progress", 30*time.Second, func() bool {
+		pg, err := c.ListDatums(job.ID, 0, 0)
+		return err == nil && len(pg.Datums) == 1
+	})
 	pg, err := c.ListDatums(job.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("list datums mid-flight: %v", err)
