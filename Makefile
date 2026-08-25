@@ -4,7 +4,15 @@
 GO ?= go
 PREFIX ?= /usr/local
 
-.PHONY: build install install-release uninstall clean daemon worker
+.PHONY: build install install-release uninstall clean daemon worker deb
+
+# deb: build a Debian package (sandman_<version>_<arch>.deb) declaring the
+# distro container runtime as its dependency — `sudo apt install
+# ./sandman_<version>_amd64.deb` pulls in containerd + runc and installs
+# /usr/bin/sandman plus the systemd units. No docker, no Docker
+# repository, no PPA. See packaging/make-deb.sh.
+deb:
+	./packaging/make-deb.sh $(VERSION)
 
 # Role selection: `make install daemon` (default) installs the control-plane
 # unit; `make install worker` installs the execution-host unit (a bare

@@ -1,7 +1,10 @@
 [Unit]
 Description=Sandman execution worker (joins a control plane)
-After=network-online.target
-Wants=network-online.target
+# The worker runs containers through containerd: it must not start before
+# the runtime is up (Wants, not Requires: a containerd restart must not
+# take the worker's registration down with it).
+After=network-online.target containerd.service
+Wants=network-online.target containerd.service
 
 [Service]
 Type=simple

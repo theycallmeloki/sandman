@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -28,40 +27,12 @@ import (
 	"sandman/internal/store"
 )
 
-var (
-	dockerVerOnce sync.Once
-	dockerVer     string
-)
-
-func dockerVersion() string {
-	dockerVerOnce.Do(func() {
-		out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").Output()
-		if err != nil {
-			dockerVer = "?"
-		} else {
-			dockerVer = strings.TrimSpace(string(out))
-		}
-	})
-	return dockerVer
-}
-
 // pruneOrphans removes containers a previous instance of THIS daemon left
 // behind (a daemon crash cannot run the kill-on-disconnect path). The
 // sandman.node label scopes the prune so a daemon never touches jobs a
-// sibling daemon owns on a shared dockerd.
+// sibling daemon owns on a shared containerd.
 func pruneOrphans(node string) {
-	out, err := exec.Command("docker", "ps", "-a", "--filter", "label=sandman.node="+node, "--format", "{{.ID}}").Output()
-	if err != nil {
-		log.Printf("orphan scan: %v", err)
-		return
-	}
-	for _, id := range strings.Fields(string(out)) {
-		if err := exec.Command("docker", "rm", "-f", id).Run(); err != nil {
-			log.Printf("orphan prune %s: %v", id, err)
-			continue
-		}
-		log.Printf("pruned orphan job container %s", id)
-	}
+	rtPrune(node)
 }
 
 // daemon is the node side of the fabric: it advertises itself, browses for
@@ -272,7 +243,7 @@ func cmdDaemon(args []string) {
 	if err != nil {
 		log.Fatalf("listen :%d: %v", *port, err)
 	}
-	log.Printf("sandmand %q on :%d docker=%s", *name, *port, dockerVersion())
+	log.Printf("sandmand %q on :%d runtime=%s", *name, *port, runtimeVersion())
 
 	// The HTTP API shares this port with the text protocol. HTTP conns are
 	// routed to http.Server (keep-alive friendly) via a channel listener;
@@ -410,8 +381,9 @@ func (d *daemon) handleNodes(w *bufio.Writer) {
 
 // handleStats answers a STATS request with the node's running containers and
 // their live resource usage: "STATS <n>" then n JSON lines, one per
-// container. The docker CLI supplies the numbers; this relays them as a
-// stable schema the fleet can consume (Rule of Representation).
+// container. containerd supplies the container list; the cgroup accounting
+// files supply the numbers; this relays them as a stable schema the fleet
+// can consume (Rule of Representation).
 func (d *daemon) handleStats(w *bufio.Writer) {
 	writeStatsReply(w, d.cpuBusy.Load())
 }
@@ -420,52 +392,7 @@ func (d *daemon) handleStats(w *bufio.Writer) {
 // n container JSON lines. Shared by the daemon (which passes its tick-sampled
 // cpuBusy) and the worker's text protocol (which samples on demand).
 func writeStatsReply(w *bufio.Writer, cpuBusy uint64) {
-	// docker stats samples all running containers and takes a few seconds
-	// on a busy node — give each call its own generous deadline.
-	psCtx, psCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer psCancel()
-	statsCtx, statsCancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer statsCancel()
-
-	type psLine struct {
-		ID, Names, Image, State, Status string
-	}
-	var conts []psLine
-	// --no-trunc: docker ps shortens IDs, but docker stats reports full IDs —
-	// the join must match on the full 64-char id.
-	if out, err := exec.CommandContext(psCtx, "docker", "ps", "--no-trunc", "--format", "{{json .}}").Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if line == "" {
-				continue
-			}
-			var c psLine
-			if json.Unmarshal([]byte(line), &c) == nil {
-				conts = append(conts, c)
-			}
-		}
-	}
-
-	type statsLine struct {
-		Container, CPUPerc, MemUsage, MemPerc, PIDs string
-	}
-	byID := map[string]containerInfo{}
-	if out, err := exec.CommandContext(statsCtx, "docker", "stats", "--no-stream", "--format", "{{json .}}").Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if line == "" {
-				continue
-			}
-			var s statsLine
-			if json.Unmarshal([]byte(line), &s) != nil {
-				continue
-			}
-			var c containerInfo
-			c.CPU, _ = strconv.ParseFloat(strings.TrimSuffix(s.CPUPerc, "%"), 64)
-			c.MemBytes, c.MemLimit = parseMemUsage(s.MemUsage)
-			c.MemPerc, _ = strconv.ParseFloat(strings.TrimSuffix(s.MemPerc, "%"), 64)
-			c.PIDs, _ = strconv.Atoi(s.PIDs)
-			byID[s.Container] = c
-		}
-	}
+	conts := rtListContainers()
 
 	// Host-level facts ride in the STATS header: cpu count, real memory
 	// totals, and host-wide cpu utilization (sampled over the 5s tick).
@@ -486,12 +413,7 @@ func writeStatsReply(w *bufio.Writer, cpuBusy uint64) {
 		return
 	}
 	for _, c := range conts {
-		info := byID[c.ID]
-		info.ID = c.ID
-		info.Name = strings.TrimPrefix(c.Names, "/")
-		info.Image = c.Image
-		info.Status = c.Status
-		line, err := json.Marshal(info)
+		line, err := json.Marshal(c)
 		if err != nil {
 			continue
 		}

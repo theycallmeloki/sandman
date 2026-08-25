@@ -1,11 +1,11 @@
 # This workflow builds, tests, and lints the Go project.
 
-# The conformance suite is docker-heavy and sequential: under a single CI
-# runner it runs ~2x slower than locally (33-45m) and individual docker
+# The conformance suite is container-heavy and sequential: under a single CI
+# runner it runs ~2x slower than locally (33-45m) and individual container
 # operations exceed the tests' 60s job waits, collapsing into a cascade of
 # timeouts (observed on every full-suite CI run). The suite is split into
 # three matrix shards by test-name range, each on its own runner: a shard
-# holds roughly a third of the docker load, fits comfortably in the 45m
+# holds roughly a third of the container load, fits comfortably in the 45m
 # budget, and a contention cascade in one shard no longer fails the others
 # (fail-fast: false).
 
@@ -18,7 +18,7 @@ on:
     branches: ["main"]
 
 # A push supersedes its own in-flight runs: parallel pushes would
-# otherwise duplicate the docker-heavy conformance suite on shared
+# otherwise duplicate the container-heavy conformance suite on shared
 # runners. cancel-in-progress applies to same-ref pushes only; a PR and
 # its base branch never cancel each other.
 concurrency:
@@ -89,14 +89,24 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # the suite's images are used with lazy docker pulls; warming the
+      # The container backend speaks containerd directly (no docker).
+      # ubuntu-latest ships containerd + runc; make sure the service is up
+      # and the runner user can reach its socket (the socket is root-only
+      # by default, and the tests spawn daemons as the runner user).
+      - name: Start containerd
+        run: |
+          sudo systemctl start containerd || sudo containerd &
+          sleep 2
+          sudo chmod 666 /run/containerd/containerd.sock || true
+          containerd --version
+
+      # the suite's images are used with lazy pulls; warming the
       # runner's cache removes pull latency from the first container runs.
       # Tags are pinned: a floating tag (alpine:latest) can break CI with
       # no code change.
-      - name: Prepare docker images
+      - name: Warm containerd images
         run: |
-          docker pull alpine:3.21
-          docker pull python:3.12-alpine
+          go run ./cmd/prewarm >/dev/null 2>&1 || true
 
       - name: Conformance (${{ matrix.shard.name }})
         run: go test -timeout 45m ./conformance/ -run '${{ matrix.shard.pattern }}'
@@ -109,7 +119,7 @@ jobs:
 
   race:
     # race-detector pass over the fast suites (root unit tests + the
-    # docker-gated cli smoke, which runs a real container daemon). The
+    # containerd-gated cli smoke, which runs a real container daemon). The
     # conformance suite is excluded: with -race it exceeds a practical CI
     # budget.
     runs-on: ubuntu-latest
@@ -122,5 +132,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Start containerd
+        run: |
+          sudo systemctl start containerd || sudo containerd &
+          sleep 2
+          sudo chmod 666 /run/containerd/containerd.sock || true
       - name: Test with race detector
         run: go test -race -timeout 15m . ./cli/...

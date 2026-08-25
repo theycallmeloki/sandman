@@ -99,7 +99,7 @@ func clientRun(node, state, image string, env, argv []string) {
 		die("node rejected job", 1)
 	}
 
-	// Forward local signals as remote docker kill signals. The second
+	// Forward local signals as remote kill signals. The second
 	// Ctrl-C escalates to SIGKILL, like any self-respecting terminal.
 	signaled := map[string]bool{}
 	sigCh := make(chan os.Signal, 4)

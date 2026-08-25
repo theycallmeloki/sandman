@@ -11,7 +11,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -19,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"sandman/client"
 )
@@ -94,7 +92,9 @@ func isProvisioningError(tail string) bool {
 	// an environment problem — crashing the pipeline (which then stops
 	// scheduling) on a perfectly fixable transform. The pull-success
 	// markers say the image WAS obtainable; whatever failed after that
-	// is not provisioning.
+	// is not provisioning. (The containerd runner classifies pull/start
+	// failures directly as ProvisioningErr; the marker list here covers
+	// the tail-text classification used by the worker and remote paths.)
 	for _, ok := range []string{"Pull complete", "Downloaded newer image", "Status: Downloaded"} {
 		if strings.Contains(tail, ok) {
 			return false
@@ -108,6 +108,9 @@ func isProvisioningError(tail string) bool {
 		"failed to resolve reference",
 		"manifest unknown",
 		"image not found",
+		"repository does not exist or may require authorization",
+		"containerd unavailable",
+		"no such host",
 	} {
 		if strings.Contains(tail, marker) {
 			return true
@@ -117,115 +120,45 @@ func isProvisioningError(tail string) bool {
 }
 
 // containerRunner executes runs in throwaway containers (the production
-// backend): `docker run --rm` per run, with the pipeline's declared
+// backend): a containerd container per run, with the pipeline's declared
 // resources applied exactly to the environment that executes its jobs.
-// The memory request is applied as --memory-reservation and the CPU
-// request as an allocation (CPU 0.5 requested as 500m); the memory
-// limit becomes --memory and the CPU limit --cpus (CPU 0.5 as a 500m
-// limit). The disk/ephemeral-storage request is accepted, recorded, and
-// round-tripped by InspectPipeline, but not enforced — the container
-// backend has no portable per-container writable-layer quota. When no
-// resource limits are declared, no limits are injected at all: absence
-// of declared limits never causes an implicit or default limit to be
-// applied, even though the pipeline has a parallelism spec. The
-// configured user identity and working directory are applied inside the
-// environment — the user's code runs as that user (observable via
-// whoami) with that working directory (observable via pwd), while
-// inputs remain readable at the standard input mount regardless of the
-// working directory. Provisioning failures are classified from the
-// runtime's error output.
+// The memory request becomes the cgroup's memory reservation (soft
+// target) and the CPU request an allocation (CPU 0.5 requested as a 500ms
+// CFS quota per 1s period); the memory limit becomes the hard cgroup
+// limit and the CPU limit a CFS quota/period pair. The disk/ephemeral-
+// storage request is accepted, recorded, and round-tripped by
+// InspectPipeline, but not enforced — the container backend has no
+// portable per-container writable-layer quota. When no resource limits
+// are declared, no limits are injected at all: absence of declared limits
+// never causes an implicit or default limit to be applied, even though
+// the pipeline has a parallelism spec. The configured user identity and
+// working directory are applied inside the environment — the user's code
+// runs as that user (observable via whoami) with that working directory
+// (observable via pwd), while inputs remain readable at the standard
+// input mount regardless of the working directory. Provisioning failures
+// (bad image, runtime unavailable) are classified directly from the
+// containerd errors.
+//
+// The runtime itself is containerd + runc (see containerd_rt.go):
+// sandman translates the JobSpec into a container/task and owns policy;
+// containerd owns the container mechanics. No docker, no nerdctl.
+//
+// Networking deviation: containers run in the host network namespace
+// (containerd alone provides no bridge/CNI, and service pipelines need
+// host-reachable ports); the fabric assumes a trusted LAN.
 type containerRunner struct{}
 
 // Run executes one command in a throwaway container under an explicit
 // name, with the spec's mounts and output directory, and returns the exit
 // code plus a tail of combined stderr/stdout for failure reporting.
 func (containerRunner) Run(spec JobSpec) RunResult {
-	image := spec.Image
-	if image == "" {
-		image = "alpine"
-	}
-	args := []string{"run", "--rm", "--name", spec.Name,
-		"--label", "sandman.node=" + spec.NodeName,
-		"-v", spec.OutDir + ":/sandman/out",
-	}
-	// resource requests and limits are applied to the execution
-	// environment. Sandbox deviation: docker
-	// expresses a CPU request only as an allocation, so a CPU request
-	// without a limit sets the container's CPU allocation; an
-	// ephemeral-storage (disk) request is recorded but not enforceable
-	// on docker's default driver.
-	if spec.ResourceLimits != nil {
-		if spec.ResourceLimits.Memory != "" {
-			args = append(args, "--memory", spec.ResourceLimits.Memory)
-		}
-		if spec.ResourceLimits.CPU > 0 {
-			args = append(args, "--cpus", fmt.Sprintf("%g", spec.ResourceLimits.CPU))
-		}
-	}
-	if spec.ResourceRequests != nil {
-		if spec.ResourceRequests.Memory != "" {
-			args = append(args, "--memory-reservation", spec.ResourceRequests.Memory)
-		}
-		if spec.ResourceRequests.CPU > 0 && (spec.ResourceLimits == nil || spec.ResourceLimits.CPU == 0) {
-			args = append(args, "--cpus", fmt.Sprintf("%g", spec.ResourceRequests.CPU))
-		}
-	}
-	args = append(args, spec.Mounts...)
-	for _, e := range spec.Env {
-		args = append(args, "-e", e)
-	}
-	if len(spec.Stdin) > 0 {
-		args = append(args, "-i")
-	}
-	workdir := spec.Workdir
-	if workdir == "" {
-		workdir = "/sandman/out"
-	}
-	args = append(args, "-w", workdir)
-	if spec.User != "" {
-		// Run user code as the configured identity: create the user and
-		// working directory in-container, then su to it. Needs a
-		// busybox-style image (alpine): adduser + su are provided.
-		inner := "cd " + shQuote(workdir) + " && exec " + joinSh(spec.Cmd)
-		script := fmt.Sprintf("adduser -D %s 2>/dev/null; mkdir -p %s; chown -R %s %s 2>/dev/null; chown %s /sandman/out 2>/dev/null; su %s -c %s",
-			shQuote(spec.User), shQuote(workdir), shQuote(spec.User), shQuote(workdir), shQuote(spec.User), shQuote(spec.User), shQuote(inner))
-		spec.Cmd = []string{"sh", "-c", script}
-	}
-
-	cmd := exec.Command("docker", append(append(args, image), spec.Cmd...)...)
-	if len(spec.Stdin) > 0 {
-		cmd.Stdin = strings.NewReader(strings.Join(spec.Stdin, "\n") + "\n")
-	}
-	var buf bytes.Buffer
-	w := io.Writer(&buf)
-	if spec.Capture != nil {
-		w = io.MultiWriter(&buf, spec.Capture)
-	}
-	cmd.Stdout = w
-	cmd.Stderr = w
-	res := RunResult{}
-	if runErr := cmd.Run(); runErr != nil {
-		if ee, ok := runErr.(*exec.ExitError); ok {
-			res.Code = ee.ExitCode()
-		} else {
-			res.Code = 1
-		}
-	}
-	res.Tail = buf.String()
-	if len(res.Tail) > 2000 {
-		res.Tail = res.Tail[len(res.Tail)-2000:]
-	}
-	if res.Code != 0 && isProvisioningError(res.Tail) {
-		res.ProvisioningErr = fmt.Errorf("%s", strings.TrimSpace(res.Tail))
-	}
-	return res
+	return rtRun(spec)
 }
 
-// Kill force-kills a running container by name.
+// Kill force-kills a running container by name (SIGKILL to its init
+// process; containerd's shim reaps the rest).
 func (containerRunner) Kill(name string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, "docker", "kill", name).Run()
+	return rtKill(name)
 }
 
 // processRunner executes runs as local processes: the command runs

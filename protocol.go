@@ -42,7 +42,7 @@ func (be textBackend) serve(c net.Conn, r *bufio.Reader) {
 	if err != nil || len(tok) == 0 || tok[0] != "HELLO" {
 		return
 	}
-	if err := writeLine(w, "OK", "node="+be.nodeName, "docker="+dockerVersion(), "version="+Version); err != nil {
+	if err := writeLine(w, "OK", "node="+be.nodeName, "docker="+runtimeVersion(), "version="+Version); err != nil {
 		return
 	}
 
