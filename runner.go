@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -68,6 +69,10 @@ type JobSpec struct {
 	User             string
 	ResourceLimits   *client.ResourceLimits
 	ResourceRequests *client.ResourceRequests
+	// Gpus are the device indices (docker/CUDA numbering) this run is
+	// allocated by the control plane; empty means no GPU. The container
+	// sees exactly these devices — never "all GPUs".
+	Gpus []int
 }
 
 // RunResult is one execution's outcome.
@@ -162,13 +167,20 @@ func (containerRunner) Run(spec JobSpec) RunResult {
 			args = append(args, "--cpus", fmt.Sprintf("%g", spec.ResourceLimits.CPU))
 		}
 	}
-	if spec.ResourceRequests != nil {
-		if spec.ResourceRequests.Memory != "" {
-			args = append(args, "--memory-reservation", spec.ResourceRequests.Memory)
+	if len(spec.Gpus) > 0 {
+		// GPU allocation is explicit per run: docker gets the concrete
+		// device indices, so a GPU job sees exactly its own device and
+		// never "all GPUs by default".
+		devices := make([]string, 0, len(spec.Gpus))
+		for _, g := range spec.Gpus {
+			devices = append(devices, strconv.Itoa(g))
 		}
-		if spec.ResourceRequests.CPU > 0 && (spec.ResourceLimits == nil || spec.ResourceLimits.CPU == 0) {
-			args = append(args, "--cpus", fmt.Sprintf("%g", spec.ResourceRequests.CPU))
-		}
+		args = append(args, "--gpus", "device="+strings.Join(devices, ","))
+	} else if spec.ResourceRequests != nil && spec.ResourceRequests.GPU > 0 {
+		// a GPU request the placement never satisfied: the environment
+		// cannot be produced here (docker needs concrete devices), and it
+		// must never silently degrade to "all GPUs"
+		return RunResult{ProvisioningErr: fmt.Errorf("gpu requested but no device assigned — place the pipeline on an execution host advertising free GPUs")}
 	}
 	args = append(args, spec.Mounts...)
 	for _, e := range spec.Env {

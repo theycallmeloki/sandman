@@ -517,6 +517,14 @@ type ResourceRequests struct {
 	Memory string  `json:"memory,omitempty"`
 	CPU    float64 `json:"cpu,omitempty"`
 	Disk   string  `json:"disk,omitempty"`
+	// GPU is the number of GPUs each datum worker requires (0 = none).
+	// GPU work is never "all GPUs by default": the control plane places
+	// it on a registered execution host advertising enough free devices
+	// and allocates specific device indices per job, so parallel jobs
+	// (and parallel datum workers) each get their own device. A pipeline
+	// requesting GPUs with no satisfiable host surfaces the outage as
+	// the crashed state, exactly like an unsatisfiable placement label.
+	GPU int `json:"gpu,omitempty"`
 }
 
 // ResourceLimits are the pipeline's hard resource limits.

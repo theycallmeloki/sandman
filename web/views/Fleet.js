@@ -31,13 +31,14 @@ export default {
       <h2>Hosts</h2>
       <table>
         <thead>
-          <tr><th>host</th><th>addr</th><th>labels</th><th>last heartbeat</th></tr>
+          <tr><th>host</th><th>addr</th><th>labels</th><th>gpus</th><th>last heartbeat</th></tr>
         </thead>
         <tbody>
           <tr v-for="h in hosts" :key="h.name" :class="{ rowfail: hostStale(h) }">
             <td><b>{{ h.name }}</b></td>
             <td class="muted">{{ h.addr }}</td>
             <td><span v-for="l in (h.labels || [])" :key="l" class="pill">{{ l }}</span><span v-if="!(h.labels || []).length" class="muted">—</span></td>
+            <td><span v-for="g in (h.gpus || [])" :key="g.index" class="pill" :class="{ failure: g.busy }">GPU{{ g.index }} {{ g.name }}<template v-if="g.memoryMiB"> · {{ g.memoryMiB }}MiB</template><template v-if="g.busy"> · busy</template></span><span v-if="!(h.gpus || []).length" class="muted">—</span></td>
             <td class="muted">{{ relTime(h.seen) }}<span v-if="hostStale(h)" class="chip failure" style="margin-left:8px">no heartbeat</span></td>
           </tr>
         </tbody>

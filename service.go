@@ -154,7 +154,7 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 	remote := ""
 	if pl.Pipeline.Placement != "" {
 		for {
-			if h, ok := d.hosts.pick(pl.Pipeline.Placement); ok {
+			if h, _, ok := d.hosts.pickAndReserve(pl.Pipeline.Placement, 0); ok {
 				remote = h.Addr
 				break
 			}

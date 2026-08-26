@@ -918,6 +918,46 @@ func TestUnplaceableRecovery(t *testing.T) {
 	}
 }
 
+// TestGpuRequestUnplaceableCrashes: a pipeline requesting GPUs on a fleet
+// with no execution host advertising enough free devices must surface the
+// outage as the crashed pipeline state — with a reason naming the missing
+// capacity — never a silent "all GPUs" fallback.
+func TestGpuRequestUnplaceableCrashes(t *testing.T) {
+	withContainerDaemon(t)
+	r := uniq(t)
+	mustRepo(t, r)
+	name := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name:  name,
+		Input: &client.Input{Repo: r, Glob: "/*"},
+		Transform: &client.Transform{
+			Image:            "alpine:3.21",
+			Cmd:              []string{"sh", "-c", "cp /sandman/in/" + r + "/file /sandman/out/file"},
+			ResourceRequests: &client.ResourceRequests{GPU: 1},
+		},
+	})
+	cm := commitFiles(t, r, "master", map[string]string{"file": "foo"})
+
+	// the job triggered by the commit requests a GPU; with no execution
+	// host advertising one, the pipeline must surface the outage as the
+	// crashed state, naming the missing capacity
+	pollFor(t, "pipeline crashed for missing GPUs", 30*time.Second, func() bool {
+		pi, err := c.InspectPipeline(name)
+		return err == nil && pi.State == "crashed" && strings.Contains(pi.Reason, "free GPUs")
+	})
+	// no job may succeed on a GPU the pipeline never received
+	js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	for _, j := range js {
+		if j.State == "success" {
+			t.Fatalf("job %s succeeded without a GPU allocation", j.ID)
+		}
+	}
+	_ = cm
+}
+
 // TestStandbyIdlesWithZeroContainers — the scale-to-zero
 // assertion: a standby pipeline with no pending work holds NO standing
 // execution participants (docker ps shows zero sandman-* containers).

@@ -173,23 +173,52 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 
 	// Placement: a pipeline may require its work to run on a host bearing
-	// a placement label. Until such a host has registered, the job waits —
-	// its record was saved at trigger time, so the pending work is
-	// durable — and the pipeline surfaces the outage as the crashed state
-	// instead of hanging silently. When a host bearing the label
-	// registers, the wait re-places automatically and the pipeline
-	// recovers: the same job, the same input revision, exactly one output
-	// commit. A cancel while unplaced settles the job killed like any
-	// other in-flight cancel.
+	// a placement label, and/or may request GPUs. Until a host that can
+	// satisfy the request has registered, the job waits — its record was
+	// saved at trigger time, so the pending work is durable — and the
+	// pipeline surfaces the outage as the crashed state instead of
+	// hanging silently. When a host that can registers, the wait
+	// re-places automatically and the pipeline recovers: the same job,
+	// the same input revision, exactly one output commit. A GPU request
+	// is satisfied by concrete device indices reserved from the picked
+	// host (never "all GPUs") and released when the job settles; a
+	// cancel while unplaced settles the job killed like any other
+	// in-flight cancel.
+	gpuPerDatum := 0
+	if tr := pl.Pipeline.Transform; tr != nil && tr.ResourceRequests != nil {
+		gpuPerDatum = tr.ResourceRequests.GPU
+	}
+	wantGPU := 0
+	if gpuPerDatum > 0 {
+		// the whole job runs on one host; its datum pool is bounded by
+		// the parallelism spec, so the reservation is the pool's ceiling
+		// — a pipeline with parallelism 2 and 1 GPU per datum holds 2
+		// devices for the job's lifetime
+		workers := 1
+		if pl.Pipeline.Parallelism != nil && pl.Pipeline.Parallelism.Constant > 0 {
+			workers = pl.Pipeline.Parallelism.Constant
+		}
+		wantGPU = workers * gpuPerDatum
+	}
 	var placedHost *execHost
-	if pl.Pipeline.Placement != "" {
+	var placedGpus []int
+	if pl.Pipeline.Placement != "" || wantGPU > 0 {
 		for {
-			if h, ok := d.hosts.pick(pl.Pipeline.Placement); ok {
+			if h, gpus, ok := d.hosts.pickAndReserve(pl.Pipeline.Placement, wantGPU); ok {
 				placedHost = &h
+				placedGpus = gpus
 				break
 			}
-			d.markPipelineCrashed(pl.Pipeline.Name,
-				fmt.Sprintf("no execution host bearing placement label %q", pl.Pipeline.Placement))
+			var reason string
+			switch {
+			case wantGPU > 0 && pl.Pipeline.Placement != "":
+				reason = fmt.Sprintf("no execution host bearing placement label %q with %d free GPUs", pl.Pipeline.Placement, wantGPU)
+			case wantGPU > 0:
+				reason = fmt.Sprintf("no execution host with %d free GPUs", wantGPU)
+			default:
+				reason = fmt.Sprintf("no execution host bearing placement label %q", pl.Pipeline.Placement)
+			}
+			d.markPipelineCrashed(pl.Pipeline.Name, reason)
 			select {
 			case <-rj.cancelCh:
 				rec.State = stateKilled
@@ -200,6 +229,9 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
+		// the job's devices are its own for its lifetime: release them
+		// on every exit from runJob (success, failure, kill, propagated)
+		defer d.hosts.release(placedHost.Name, placedGpus)
 		d.markPipelineRunning(pl.Pipeline.Name)
 	}
 
@@ -433,7 +465,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	}
 
 	jx := &jobExec{d: d, pl: pl, id: id, outDir: outDir, views: views,
-		viewDirs: map[string]string{}, dedup: dedup, rj: rj, host: placedHost,
+		viewDirs: map[string]string{}, dedup: dedup, rj: rj, host: placedHost, gpus: placedGpus,
 		transformHash: transformHash(pl.Pipeline.Transform)}
 	jx.env = d.jobEnv(pl, id, outCommit.ID, sides, heads)
 	// apply the pipeline's execution-environment customization: the
@@ -751,7 +783,7 @@ func copyDir(src, dst string) int {
 // and stdin, plus the PathMap translating the execution-internal paths
 // (/sandman/out, /sandman/in/<side>, /sandman/view/<side>, /tmp) to the
 // staging directories the process backend runs against directly.
-func datumSpec(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) JobSpec {
+func datumSpec(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string, gpus []int) JobSpec {
 	pathMap := map[string]string{"/sandman/out": outDir}
 	for i := 0; i+1 < len(mounts); i += 2 {
 		if !strings.HasPrefix(mounts[i], "-v") {
@@ -779,21 +811,26 @@ func datumSpec(tr *client.Transform, nodeName, cname string, env []string, mount
 		ResourceLimits:   tr.ResourceLimits,
 		ResourceRequests: tr.ResourceRequests,
 		PathMap:          pathMap,
+		Gpus:             gpus,
 	}
 }
 
 // runSpec executes one command on the daemon's execution backend (the
 // control plane's executor; the worker's executor is runDatumContainer).
+// The daemon's own executor never allocates GPUs: GPU work is placed on
+// registered execution hosts, so a service run requesting GPUs without
+// an allocation fails provisioning explicitly rather than degrading.
 func (d *daemon) runSpec(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
-	res := d.runner.Run(datumSpec(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin))
+	res := d.runner.Run(datumSpec(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin, nil))
 	return res.Code, res.Tail
 }
 
 // runDatumContainer runs one command through the container backend — the
 // remote execution host's worker executor: nodeName is the host
-// identity the container is labelled with.
-func runDatumContainer(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string) (int, string) {
-	res := containerRunner{}.Run(datumSpec(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin))
+// identity the container is labelled with; gpus are the device indices
+// the control plane allocated for this attempt (empty = no GPU).
+func runDatumContainer(tr *client.Transform, nodeName, cname string, env []string, mounts []string, outDir string, capture io.Writer, argv, stdin []string, gpus []int) (int, string) {
+	res := containerRunner{}.Run(datumSpec(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin, gpus))
 	return res.Code, res.Tail
 }
 

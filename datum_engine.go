@@ -470,10 +470,16 @@ type jobExec struct {
 	viewDirs map[string]string
 
 	// host is the execution host the job was placed on: non-nil only for
-	// a pipeline with a placement label, in which case every datum
-	// attempt is shipped to that host's exec endpoint instead of running
-	// on the control plane.
+	// a pipeline with a placement label (or a GPU request), in which
+	// case every datum attempt is shipped to that host's exec endpoint
+	// instead of running on the control plane.
 	host *execHost
+
+	// gpus are the device indices reserved from the execution host for
+	// this job's pool (parallelism × per-datum GPU); each attempt's
+	// container is allocated its own slice (per worker slot). Released
+	// when the job settles.
+	gpus []int
 
 	// tmpDir is the job's temp directory, mounted at the container's /tmp:
 	// temp files a transform creates are host-readable, so symlinks to
@@ -1052,6 +1058,16 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 			// docker expresses a CPU request only as an allocation; a
 			// request without a limit sets it (sandman deviation)
 			req.CPU = tr.ResourceRequests.CPU
+		}
+		if tr.ResourceRequests.GPU > 0 && len(jx.gpus) > 0 {
+			// each pool worker gets its own devices: the job's
+			// reservation (parallelism × per-datum GPU) partitions by
+			// worker slot, so concurrent datums never share a device
+			per := tr.ResourceRequests.GPU
+			start := worker * per
+			if end := start + per; end <= len(jx.gpus) {
+				req.Gpus = jx.gpus[start:end]
+			}
 		}
 	}
 	for _, sd := range dt.Sides {

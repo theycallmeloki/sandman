@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,10 @@ type execRequest struct {
 	AcceptReturnCode  int        `json:"acceptReturnCode,omitempty"`
 	User              string     `json:"user,omitempty"`
 	Workdir           string     `json:"workdir,omitempty"`
+	// Gpus are the device indices (docker/CUDA numbering) this attempt is
+	// allocated by the control plane; empty means no GPU. The container
+	// sees exactly these devices — never "all GPUs".
+	Gpus []int `json:"gpus,omitempty"`
 }
 
 // execSide is one input side's files for the attempt, shipped as content.
@@ -97,6 +102,8 @@ func cmdWorker(args []string) {
 	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
 	var labels multiFlag
 	fs.Var(&labels, "label", "placement label this host bears (repeatable)")
+	var gpuFilter multiFlag
+	fs.Var(&gpuFilter, "gpu", "GPU device index this worker makes schedulable (repeatable; default: every GPU detected)")
 	fs.Parse(args)
 	if *name == "" {
 		// a bare `sandman worker` is a legal default worker: the unit and
@@ -291,11 +298,16 @@ func cmdWorker(args []string) {
 		ln.Close()
 	}()
 
-	// register, then heartbeat every few seconds: the control plane's
-	// host TTL expires a worker that stops reporting, so a vanished host
-	// stops receiving work on its own.
+	gpus := detectGPUs(gpuFilter)
+	if len(gpus) > 0 {
+		names := make([]string, 0, len(gpus))
+		for _, g := range gpus {
+			names = append(names, fmt.Sprintf("%d:%s", g.Index, g.Name))
+		}
+		fmt.Fprintf(os.Stderr, "sandman worker %s: GPUs schedulable: %v\n", *name, names)
+	}
 	for {
-		if err := registerHost(*control, *name, addr, labels); err != nil {
+		if err := registerHost(*control, *name, addr, labels, gpus); err != nil {
 			fmt.Fprintf(os.Stderr, "sandman worker %s: register: %v\n", *name, err)
 		}
 		select {
@@ -306,10 +318,48 @@ func cmdWorker(args []string) {
 	}
 }
 
+// detectGPUs enumerates the worker's NVIDIA GPUs via nvidia-smi and
+// returns the devices the operator made schedulable (every detected
+// device when the filter is empty). A host without the NVIDIA driver or
+// toolkit advertises no GPUs, and GPU pipelines are simply never placed
+// there. Enumerated once at startup: device topology is static for the
+// process's lifetime.
+func detectGPUs(filter []string) []GpuInfo {
+	out, err := exec.Command("nvidia-smi",
+		"--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return nil
+	}
+	filtered := map[int]bool{}
+	for _, f := range filter {
+		if i, err := strconv.Atoi(f); err == nil {
+			filtered[i] = true
+		}
+	}
+	var gpus []GpuInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// "0, NVIDIA GeForce RTX 3090, 24576"
+		parts := strings.SplitN(line, ",", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		idx, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			continue
+		}
+		if len(filtered) > 0 && !filtered[idx] {
+			continue
+		}
+		mem, _ := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
+		gpus = append(gpus, GpuInfo{Index: idx, Name: strings.TrimSpace(parts[1]), MemoryMiB: mem})
+	}
+	return gpus
+}
+
 // registerHost joins (or refreshes) the worker in the control plane's
 // host registry.
-func registerHost(control, name, addr string, labels []string) error {
-	body, err := json.Marshal(map[string]any{"name": name, "addr": addr, "labels": labels})
+func registerHost(control, name, addr string, labels []string, gpus []GpuInfo) error {
+	body, err := json.Marshal(map[string]any{"name": name, "addr": addr, "labels": labels, "gpus": gpus})
 	if err != nil {
 		return err
 	}
@@ -405,7 +455,7 @@ func runExec(nodeName string, req execRequest) execResult {
 			}
 			return code, ""
 		}
-		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, nil, argv, stdin)
+		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, nil, argv, stdin, req.Gpus)
 	}
 	primaryCode, tail := run(cname, req.Cmd, req.Stdin)
 	// without an error-handling command a nonzero primary exit fails the

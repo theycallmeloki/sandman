@@ -776,9 +776,10 @@ func (d *daemon) deleteSecretH(w http.ResponseWriter, r *http.Request) error {
 // came from that host's execution.
 func (d *daemon) registerHostH(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
-		Name   string   `json:"name"`
-		Addr   string   `json:"addr"`
-		Labels []string `json:"labels"`
+		Name   string    `json:"name"`
+		Addr   string    `json:"addr"`
+		Labels []string  `json:"labels"`
+		Gpus   []GpuInfo `json:"gpus"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		return fmt.Errorf("invalid request body")
@@ -786,7 +787,7 @@ func (d *daemon) registerHostH(w http.ResponseWriter, r *http.Request) error {
 	if body.Name == "" || body.Addr == "" {
 		return fmt.Errorf("host registration needs a name and an address")
 	}
-	h := d.hosts.register(body.Name, body.Addr, body.Labels)
+	h := d.hosts.register(body.Name, body.Addr, body.Labels, body.Gpus)
 	writeJSON(w, h)
 	return nil
 }

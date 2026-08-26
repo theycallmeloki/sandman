@@ -344,21 +344,46 @@ CONTROL=http://192.168.1.147:4242 \
 ```
 
 The equivalent manual flags: `sandman worker -name <host> -port <n>
--advertise <host:port> -control <url> -label <label>`. `-port 0` (the
-default) binds an ephemeral exec port; `-advertise` is required for
+-advertise <host:port> -control <url> -label <label> -gpu <index>`. `-port
+0` (the default) binds an ephemeral exec port; `-advertise` is required for
 placement on a remote host and binds the exec endpoint on all interfaces —
 the endpoint is unauthenticated, so only set it when the control plane is
-on another host. `-label` is repeatable.
+on another host. `-label` and `-gpu` are repeatable: `-gpu` limits which
+detected NVIDIA devices the worker makes schedulable (default: every GPU
+`nvidia-smi` reports).
 
-### Placement
+### GPUs
 
-A pipeline may require a placement label; its jobs run on a worker that
-registered that label. The pipeline definition never names a host address.
-Work that no registered host can take surfaces as the pipeline's crashed
-state instead of hanging; when a host bearing the label registers, the
-pending job re-places on its own and completes — one output commit, same
-result as a local run (the execution host's identity is visible to the
-transform as `HOSTNAME`).
+GPU work is a counted resource on the same registry, not a label — a label
+can only say "this host has GPUs", never "this job gets one of two,
+exclusively". A worker advertises its devices (`nvidia-smi` at startup:
+index, name, memory) with its registration; a pipeline requests them in
+the spec:
+
+```json
+{
+  "transform": {
+    "image": "nvidia/cuda:12.4.1-base-ubuntu22.04",
+    "cmd": ["nvidia-smi", "-L"],
+    "resourceRequests": {"gpu": 1}
+  },
+  "parallelism": {"constant": 1}
+}
+```
+
+The control plane allocates **specific device indices** per job — never
+`--gpus all` — from a live host with enough free devices, and the job's
+containers see exactly their own device (`--gpus device=0`, per pool
+worker). The reservation is the pool's ceiling: `parallelism` 2 with 1 GPU
+per datum holds 2 devices for the job's lifetime, and parallel pipelines
+each get their own device. GPU placement composes with labels (`placement`
+still pins the machine class; `-gpu <index>` on the worker filters which
+of its devices are schedulable, e.g. reserving one GPU for another
+workload). Like an unsatisfiable label, a GPU request no host can satisfy
+surfaces as the pipeline's crashed state naming the missing capacity —
+never a silent fallback — and GPU work requires a registered execution
+host: a local (unplaced) run requesting GPUs fails provisioning explicitly.
+The fleet view shows each host's devices with their allocation state.
 
 ### Stats and dashboard
 
