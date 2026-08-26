@@ -447,10 +447,26 @@ func TestKeepRepoOnDelete(t *testing.T) {
 		t.Fatalf("output repo survived the no-keep delete")
 	}
 
+	// other tests share this daemon and their pipelines outlive them;
+	// tear everything down so the empty-cluster assertion below holds
+	// regardless of run order (the suite shards by name pattern, and a
+	// shard's daemon is shared)
+	ps, err := c.ListPipelines()
+	if err != nil {
+		t.Fatalf("list pipelines before emptying: %v", err)
+	}
+	for _, p := range ps {
+		noPanic(t, c.DeletePipeline(p.Name, true, false))
+	}
+	pollFor(t, "cluster emptied", 30*time.Second, func() bool {
+		ps, err := c.ListPipelines()
+		return err == nil && len(ps) == 0
+	})
+
 	// deleting the last pipeline empties the cluster — the list must
 	// come back as [] (a JSON null breaks the dashboard's array
 	// consumers), on every path that empties it
-	ps, err := c.ListPipelines()
+	ps, err = c.ListPipelines()
 	if err != nil {
 		t.Fatalf("list pipelines after emptying: %v", err)
 	}

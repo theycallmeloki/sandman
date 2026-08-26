@@ -226,9 +226,9 @@ func cmdDaemon(args []string) {
 	// of the daemon; a restart finds it already there
 	d.store.CreateRepo("spec")
 	pruneOrphans(*name)
-	d.markStaleJobsFailed() // jobs running in a previous daemon died with it
+	d.markStaleJobsFailed()   // jobs running in a previous daemon died with it
 	d.respawnBackgroundJobs() // spout/service pipelines come back with their marker state
-	d.restartCronTickers()  // persisted cron schedules died with the old process
+	d.restartCronTickers()    // persisted cron schedules died with the old process
 
 	server, err := advertiseMDNS(*name, *port, "daemon", "")
 	if err != nil {
