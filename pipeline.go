@@ -1183,7 +1183,9 @@ func (d *daemon) listPipelinesFiltered(history *int, name string, allowIncomplet
 	}
 	sort.Strings(names)
 
-	var out []client.PipelineInfo
+	// an empty pipelines directory must list as [] — never JSON null,
+	// which breaks the dashboard's array consumers
+	out := []client.PipelineInfo{}
 	if history != nil && *history < 0 {
 		// every historical version of every (or the named) pipeline
 		for _, n := range names {

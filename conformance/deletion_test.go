@@ -446,4 +446,15 @@ func TestKeepRepoOnDelete(t *testing.T) {
 	if _, err := c.InspectRepo(name); err == nil {
 		t.Fatalf("output repo survived the no-keep delete")
 	}
+
+	// deleting the last pipeline empties the cluster — the list must
+	// come back as [] (a JSON null breaks the dashboard's array
+	// consumers), on every path that empties it
+	ps, err := c.ListPipelines()
+	if err != nil {
+		t.Fatalf("list pipelines after emptying: %v", err)
+	}
+	if ps == nil || len(ps) != 0 {
+		t.Fatalf("pipelines list = %#v, want a non-nil empty slice", ps)
+	}
 }
