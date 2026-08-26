@@ -1428,7 +1428,11 @@ func buildPipelineFromFlags(name string) (client.Pipeline, error) {
 		if err != nil {
 			return p, err
 		}
-		in := &client.Input{Repo: repo, Glob: pipelineGlob}
+		glob := pipelineGlob
+		if glob == "" {
+			glob = "/*" // the server requires a glob on repo inputs
+		}
+		in := &client.Input{Repo: repo, Glob: glob}
 		if branch != "" && branch != "master" {
 			in.Branch = branch
 		}
