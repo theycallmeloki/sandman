@@ -307,8 +307,8 @@ func TestPipelineNamePathEscapeRejected(t *testing.T) {
 
 // TestHyphenatedRepoName — a repo with a hyphen in its name is
 // consumable: the datum env var derives from the repo name with
-// non-identifier characters sanitized to underscores (pachctl allows
-// hyphens in names throughout; the transform references the sanitized
+// non-identifier characters sanitized to underscores (names may carry
+// hyphens throughout; the transform references the sanitized
 // name).
 func TestHyphenatedRepoName(t *testing.T) {
 	repo := uniq(t) + "-data"

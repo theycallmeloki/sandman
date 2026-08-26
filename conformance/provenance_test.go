@@ -5,6 +5,7 @@ package conformance
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,7 +116,7 @@ func TestSpecialOutputFileFails(t *testing.T) {
 	if j.State != "failure" {
 		t.Fatalf("job state = %s, want failure (reason %q)", j.State, j.Reason)
 	}
-	if !containsStr(j.Reason, "special file") {
+	if !strings.Contains(j.Reason, "special file") {
 		t.Fatalf("failure reason %q does not name the special file", j.Reason)
 	}
 }
@@ -422,13 +423,4 @@ func TestFileRevisionHistory(t *testing.T) {
 	if string(b) != "a0b0a0b1a0b2a1b0a1b1a1b2a2b0a2b1a2b2" {
 		t.Fatalf("combined = %q, want the 3x3 cartesian product", string(b))
 	}
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

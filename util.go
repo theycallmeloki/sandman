@@ -27,7 +27,6 @@ const (
 	stateQueued    = "queued"
 	stateFailure   = "failure"
 	stateCrashed   = "crashed"
-	stateStopped   = "stopped"
 	stateSuccess   = "success"
 	stateKilled    = "killed"
 	stateFailed    = "failed"

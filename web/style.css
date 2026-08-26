@@ -106,11 +106,12 @@ section { margin-bottom: 26px; animation: fadeUp .35s ease both; }
                  animation: chipPulse 1.5s ease-in-out infinite; }
 .chip.queued   { background: rgba(25,201,166,0.08); color: var(--queued); border-color: rgba(25,201,166,0.4); }
 .chip.paused   { background: rgba(25,201,166,0.08); color: var(--queued); border-color: rgba(25,201,166,0.4); }
+.chip.standby  { background: rgba(25,201,166,0.08); color: var(--queued); border-color: rgba(25,201,166,0.4); }
+.chip.crashed  { background: rgba(255,77,94,0.08); color: var(--failure); border-color: rgba(255,77,94,0.45); }
 .chip.recovered{ background: rgba(255,193,77,0.08); color: var(--recovered); border-color: rgba(255,193,77,0.4); }
 .chip.killed   { background: rgba(183,140,255,0.08); color: var(--killed); border-color: rgba(183,140,255,0.4); }
 .chip.skipped  { background: rgba(74,90,79,0.1); color: var(--skipped); border-color: var(--border-dim); }
 .chip.stopped  { background: rgba(74,90,79,0.1); color: var(--skipped); border-color: var(--border-dim); }
-.chip.ready    { background: rgba(74,90,79,0.1); color: var(--skipped); border-color: var(--border-dim); }
 @keyframes chipPulse {
   0%, 100% { box-shadow: 0 0 0 rgba(0,255,65,0); }
   50%      { box-shadow: 0 0 14px rgba(0,255,65,0.7); }
@@ -166,7 +167,6 @@ thead th { position: sticky; top: 0; background: rgba(2,10,5,0.96); z-index: 1; 
 tbody tr { transition: background .15s; }
 tbody tr:hover td { background: rgba(0,255,65,0.05); }
 /* running datum rows get a subtle processing glow on their state cell */
-td.chip-cell { white-space: nowrap; }
 
 button.filter {
   background: var(--panel-solid); color: var(--text);

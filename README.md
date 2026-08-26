@@ -341,8 +341,9 @@ CONTROL=http://192.168.1.147:4242 \
 ### Placement
 
 A pipeline may require a placement label; its jobs run on a worker that
-registered that label (`sandman worker -control <url> -advertise <addr>
--label <label>`). The pipeline definition never names a host address. Work
+registered that label (`sandman worker -control <url> -advertise <host:port> -label <label>`,
+where advertise requires an explicit `-port`). The pipeline definition
+never names a host address. Work
 that no registered host can take surfaces as the pipeline's crashed state
 instead of hanging; when a host bearing the label registers, the pending
 job re-places on its own and completes — one output commit, same result as
@@ -758,8 +759,9 @@ and services. It is served on the same port as the API (`GET /` serves the
 page, `/ui/*` its assets; the API's `/api/v1/...` routes and the uniform
 JSON 404 for unknown paths are untouched). The dashboard is deliberately
 read-only — every write goes through the CLI (`sandman pipeline start`,
-`run`, `update`, …); the UI never mutates state. No build step, no external
-CDN: Vue is vendored into the binary.
+`run`, `update`, …); the UI never mutates state. No build step: the
+dashboard is plain Vue 3 loaded from a CDN at runtime (ESM import map);
+only the page and its assets are embedded.
 
 ---
 

@@ -525,7 +525,7 @@ type ResourceLimits struct {
 	CPU    float64 `json:"cpu,omitempty"`
 }
 
-// Input is a file-scoped (PFS) input: files of the repo matched by Glob.
+// Input is a file-scoped input: files of the repo matched by Glob.
 // Name aliases the input's environment variable and defaults to the repo
 // name; it must be a valid shell identifier and not "out".
 // Branch defaults to "master". Cross, when non-empty, makes the input the
@@ -1003,7 +1003,7 @@ func (c *Client) RestartDatum(jobID, datumID string) error {
 
 // ---- Jobs and flush ----
 
-// Job states: running, success, failure, killed, skipped.
+// Job states: running, queued, success, failure, killed, skipped.
 type Job struct {
 	ID           string   `json:"id"`
 	Pipeline     string   `json:"pipeline"`

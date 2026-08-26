@@ -40,7 +40,7 @@ export default {
       if (!jc) return [];
       return Object.entries(jc).sort((a, b) => b[1] - a[1]);
     },
-    stateOf() { return this.p.stopped ? "stopped" : (this.p.state || "ready"); },
+    stateOf() { return this.p.state; },
     envSummary(t) {
       if (!t || !t.env) return "";
       return Object.keys(t.env).join(", ");

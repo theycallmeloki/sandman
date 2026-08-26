@@ -4,6 +4,7 @@
 package conformance
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -160,7 +161,7 @@ func TestRunPipeline(t *testing.T) {
 		// a provenance commit outside the input lineage errors
 		if _, err := c.RunPipeline(pipe, []string{uc.ID}, ""); err == nil {
 			t.Fatalf("run with an unrelated provenance commit: expected error")
-		} else if !containsStr(err.Error(), "not part of the pipeline's input") {
+		} else if !strings.Contains(err.Error(), "not part of the pipeline's input") {
 			t.Fatalf("unrelated-commit error = %q", err.Error())
 		}
 		// two commits of the same branch error
@@ -168,7 +169,7 @@ func TestRunPipeline(t *testing.T) {
 		flushOK(t, cm2.ID)
 		if _, err := c.RunPipeline(pipe, []string{cm.ID, cm2.ID}, ""); err == nil {
 			t.Fatalf("run with two commits of one branch: expected error")
-		} else if !containsStr(err.Error(), "two commits") {
+		} else if !strings.Contains(err.Error(), "two commits") {
 			t.Fatalf("same-branch error = %q", err.Error())
 		}
 	})

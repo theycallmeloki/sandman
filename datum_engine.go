@@ -243,8 +243,8 @@ func (d *daemon) appendLogLine(id, line string) {
 	f.Write(b)
 }
 
-// globMatches reports whether a relative view path matches a pfs-style
-// glob. Patterns are root-anchored ("/dirA/*" matches "dirA/file"); "**"
+// globMatches reports whether a relative view path matches a glob.
+// Patterns are root-anchored ("/dirA/*" matches "dirA/file"); "**"
 // matches across directories, "*" within one.
 func globMatches(pattern, path string) bool {
 	pattern = strings.TrimPrefix(pattern, "/")
@@ -619,7 +619,7 @@ func (d *daemon) runDatums(jx *jobExec, todo []datum) bool {
 	}
 	wg.Wait()
 	for _, dt := range todo {
-		if jx.dedup[dt.ID].Outcome == "failed" {
+		if jx.dedup[dt.ID].Outcome == stateFailed {
 			return true
 		}
 	}
@@ -718,7 +718,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 	attempt := 1
 	for {
 		if jx.canceled() {
-			rec.Outcome = "failed"
+			rec.Outcome = stateFailed
 			rec.Reason = reasonJobCancelled
 			rec.Tries = attempt - 1
 			rec.Finished = now()
@@ -754,7 +754,7 @@ func (d *daemon) execDatum(jx *jobExec, dt datum, worker, index int) (requeue bo
 		d.appendLogLine(jx.id, fmt.Sprintf("datum %s: errored running user code after %d attempt(s)", dt.ID, attempt))
 		attempt++
 	}
-	rec.Outcome = "failed"
+	rec.Outcome = stateFailed
 	rec.Tries = tries
 	rec.Reason = lastReason
 	rec.Finished = now()
@@ -808,7 +808,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	dir := filepath.Join(d.jobDir(jx.id), "datum", fmt.Sprintf("%d-%d", index, attempt))
 	outDir := filepath.Join(dir, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return "failed", err.Error(), nil
+		return stateFailed, err.Error(), nil
 	}
 	// materialize each side's files into its own input directory
 	var mounts []string
@@ -824,19 +824,19 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	for _, sd := range dt.Sides {
 		inDir := filepath.Join(dir, "in", sd.Name)
 		if err := os.MkdirAll(inDir, 0o755); err != nil {
-			return "failed", err.Error(), nil
+			return stateFailed, err.Error(), nil
 		}
 		for _, f := range sd.Files {
 			data, err := d.sideFileData(jx, sd, f)
 			if err != nil {
-				return "failed", "materialize input: " + err.Error(), nil
+				return stateFailed, "materialize input: " + err.Error(), nil
 			}
 			dst := filepath.Join(inDir, filepath.FromSlash(f))
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return "failed", err.Error(), nil
+				return stateFailed, err.Error(), nil
 			}
 			if err := os.WriteFile(dst, data, 0o644); err != nil {
-				return "failed", err.Error(), nil
+				return stateFailed, err.Error(), nil
 			}
 		}
 		env = append(env, sd.Name+"=/sandman/in/"+sd.Name)
@@ -950,7 +950,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 	if code == 0 || accepted {
 		files, err := d.storeOutput(outDir, link)
 		if err != nil {
-			return "failed", "scan output: " + err.Error(), nil
+			return stateFailed, "scan output: " + err.Error(), nil
 		}
 		return stateSuccess, "", files
 	}
@@ -965,7 +965,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		if ecode == 0 {
 			files, err := d.storeOutput(outDir, link)
 			if err != nil {
-				return "failed", "scan output: " + err.Error(), nil
+				return stateFailed, "scan output: " + err.Error(), nil
 			}
 			return stateRecovered, "", files
 		}
@@ -983,7 +983,7 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		}
 		reason += ": " + r
 	}
-	return "failed", reason, nil
+	return stateFailed, reason, nil
 }
 
 // sideFileData reads one side file's content: a union side's file is the
@@ -1059,7 +1059,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		for _, f := range sd.Files {
 			data, err := d.sideFileData(jx, sd, f)
 			if err != nil {
-				return "failed", "materialize input: " + err.Error(), nil
+				return stateFailed, "materialize input: " + err.Error(), nil
 			}
 			side.Files = append(side.Files, shipFile{Path: f, Data: data})
 		}
@@ -1087,7 +1087,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		// an environment problem, not a user-code failure — the pipeline
 		// surfaces the crash
 		d.markPipelineCrashed(jx.pl.Pipeline.Name, "execution host "+jx.host.Name+": "+err.Error())
-		return "failed", "execution host: " + err.Error(), nil
+		return stateFailed, "execution host: " + err.Error(), nil
 	}
 	accepted := tr.AcceptReturnCode != 0 && code == tr.AcceptReturnCode
 	if code == 0 || accepted || errCode == 0 {
@@ -1116,7 +1116,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 	if tail != "" {
 		reason += ": " + strings.TrimSpace(tail)
 	}
-	return "failed", reason, nil
+	return stateFailed, reason, nil
 }
 
 // ensureView materializes an input side's full view once into the job's

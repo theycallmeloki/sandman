@@ -114,7 +114,7 @@ func (d *daemon) statsEnabled(pipeline string) bool {
 // datums come before skipped ones.
 func datumStateRank(outcome string) int {
 	switch outcome {
-	case "failed":
+	case stateFailed:
 		return 0
 	case stateRecovered:
 		return 1

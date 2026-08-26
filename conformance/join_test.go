@@ -5,6 +5,7 @@ package conformance
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"sandman/client"
@@ -113,7 +114,7 @@ func TestOuterJoinKeepsUnmatchedOuterOnly(t *testing.T) {
 		t.Fatalf("missing the unmatched outer file foo (have %v)", names)
 	}
 	for _, f := range files {
-		if containsStr(f.Path, "bar") {
+		if strings.Contains(f.Path, "bar") {
 			t.Fatalf("the unmatched inner file bar must not appear in the output")
 		}
 	}

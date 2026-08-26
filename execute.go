@@ -464,7 +464,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 	// written as a file at MountPath/<key> and/or injected as the env
 	// var, so secret values reach the execution environment before the
 	// job starts. References sharing a MountPath merge into one bind
-	// mount: the pachyderm-style {name, mountPath} pattern declares
+	// mount: the {name, mountPath} pattern declares
 	// several keys at one path, and docker rejects duplicate mount
 	// points for the same container path (exit 125). A key mounted
 	// twice on one path (from two secrets, or twice from one) is an
@@ -570,7 +570,7 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			rec.Processed++
 		case stateRecovered:
 			rec.Recovered++
-		case "failed":
+		case stateFailed:
 			rec.Failed++
 		case stateSkipped:
 			rec.Skipped++

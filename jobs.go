@@ -34,7 +34,7 @@ type datumRef = store.DatumRef
 type jobRec struct {
 	ID           string            `json:"id"`
 	Pipeline     string            `json:"pipeline"`
-	State        string            `json:"state"` // running | success | failure | killed | skipped
+	State        string            `json:"state"` // running | queued | success | failure | killed | skipped
 	Reason       string            `json:"reason,omitempty"`
 	InputCommits []string          `json:"inputCommits,omitempty"`
 	OutputCommit string            `json:"outputCommit,omitempty"`
@@ -303,9 +303,9 @@ func (d *daemon) jobProgress(rec *jobRec, workers []client.WorkerStatus) *client
 			st = dedup[id].Outcome
 		}
 		switch st {
-		case stateSuccess, stateRecovered, stateFailure, "failed", stateSkipped:
+		case stateSuccess, stateRecovered, stateFailure, stateFailed, stateSkipped:
 			p.Done++
-			if st == stateFailure || st == "failed" {
+			if st == stateFailure || st == stateFailed {
 				p.Failed++
 			}
 		}
@@ -1335,7 +1335,7 @@ func failedDatumReason(dedup map[string]datumState, datums []datum) string {
 	var parts []string
 	for _, dt := range datums {
 		st := dedup[dt.ID]
-		if st.Outcome != "failed" {
+		if st.Outcome != stateFailed {
 			continue
 		}
 		r := "datum " + dt.ID + " failed"

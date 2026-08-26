@@ -1173,10 +1173,11 @@ func (d *daemon) listFilesH(w http.ResponseWriter, r *http.Request) error {
 
 func (d *daemon) createPipelineH(w http.ResponseWriter, r *http.Request) error {
 	var p pipelineRec
-	// strict spec decode: an unknown field (a typo, or a pachyderm-
-	// shaped port like top-level resource_limits) must fail the request
-	// loudly — silently ignoring it drops the declaration with no error,
-	// a quiet resource-policy loss. The error names the field (400).
+	// strict spec decode: an unknown field (a typo, or a ported spec
+	// carrying an unsupported field like top-level resource_limits)
+	// must fail the request loudly — silently ignoring it drops the
+	// declaration with no error, a quiet resource-policy loss. The
+	// error names the field (400).
 	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<30))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p.Pipeline); err != nil {

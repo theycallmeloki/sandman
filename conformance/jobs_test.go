@@ -97,7 +97,7 @@ func TestListJobsFilteredByStates(t *testing.T) {
 		t.Fatalf("unfiltered: %d jobs, want 1", len(all))
 	}
 
-	succ, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe, States: []string{"starting", "running", "success", "merging"}})
+	succ, err := c.ListJobsFiltered(client.JobFilter{Pipeline: pipe, States: []string{"running", "success"}})
 	if err != nil {
 		t.Fatalf("success-inclusive filter: %v", err)
 	}

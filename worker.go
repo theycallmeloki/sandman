@@ -92,7 +92,7 @@ type execResult struct {
 func cmdWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	name := fs.String("name", "", "host name (default: this host's hostname)")
-	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:650 (default: discover the daemon via mDNS)")
+	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:4242 (default: discover the daemon via mDNS)")
 	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
 	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
 	var labels multiFlag

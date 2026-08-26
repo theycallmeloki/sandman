@@ -237,7 +237,7 @@ func parseRef(s string) (repo, branch, path string, err error) {
 	} else {
 		branch = rest
 	}
-	// store paths are repo-relative; accept pachctl-style /path and
+	// store paths are repo-relative; accept a leading-slash /path and
 	// normalize (a leading slash is pure convention, not a filesystem root)
 	path = strings.TrimPrefix(path, "/")
 	if repo == "" {
@@ -641,8 +641,8 @@ func newFileCmd() *cobra.Command {
 			if err != nil {
 				die("file put: "+err.Error(), 1)
 			}
-			// pachctl errors on puts into repos that do not exist — no
-			// silent auto-create (StartCommit would create the repo)
+			// puts into repos that do not exist error out — no silent
+			// auto-create
 			if _, err := cliClient().InspectRepo(repo); err != nil {
 				die("file put: repo "+repo+" not found", 1)
 			}
@@ -1233,7 +1233,7 @@ func readPipelineSpec(src string) (client.Pipeline, error) {
 	var p client.Pipeline
 	dec := json.NewDecoder(r)
 	// strict: a spec field the decoder does not recognize — a typo, or
-	// a pachyderm-shaped port like top-level resource_limits — fails
+	// a ported spec carrying top-level resource_limits — fails
 	// loudly instead of being silently ignored (a quiet resource-policy
 	// loss: the ported spec runs with no limits, no error)
 	dec.DisallowUnknownFields()

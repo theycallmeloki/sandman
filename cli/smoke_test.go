@@ -325,8 +325,8 @@ func TestCLI_VerbCoverage(t *testing.T) {
 	if !strings.Contains(ji, "state") || !strings.Contains(ji, "success") {
 		t.Fatalf("job inspect %q: want state: success", ji)
 	}
-	// 5b. job inspect prints the per-datum aggregate counts (pachctl
-	// parity). The newest cap2 job is the update-triggered
+	// 5b. job inspect prints the per-datum aggregate counts. The
+	// newest cap2 job is the update-triggered
 	// re-run: its single datum is unchanged from the flush's successful
 	// run, so dedup skips it — skipped 1, processed 0 — and
 	// statsCommit stays absent (stats disabled here)
@@ -464,7 +464,7 @@ func TestCLI_VerbCoverage(t *testing.T) {
 	}
 
 	// 6d2. unknown spec fields are rejected, not silently ignored — a
-	// ported pachyderm spec with top-level resource_limits must fail
+	// ported spec carrying top-level resource_limits must fail
 	// loudly (the pre-fix decode dropped the declaration and ran the
 	// container with no limits, no error)
 	badSpec := filepath.Join(t.TempDir(), "bad.json")
@@ -812,8 +812,8 @@ func TestCLI_WrapperCoverage(t *testing.T) {
 		t.Fatalf("cron flush output %q: want a cronp success job", fc)
 	}
 
-	// 18. pipeline create staged in a transaction (pachctl-style), then
-	// finishing the transaction applies it
+	// 18. pipeline create staged in a transaction, then finishing the
+	// transaction applies it
 	tx3 := strings.TrimSpace(mustCLI(t, "", "transaction", "start"))
 	txpSpec := filepath.Join(t.TempDir(), "txp.json")
 	if err := os.WriteFile(txpSpec, []byte(`{

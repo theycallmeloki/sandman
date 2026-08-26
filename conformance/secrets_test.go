@@ -218,8 +218,8 @@ func TestSecretBindingSurvivesRestart(t *testing.T) {
 }
 
 // References to several keys at one
-// MountPath merge into a single bind mount: the pachyderm-style
-// {name, mountPath} pattern declares multiple keys at one path, and
+// MountPath merge into a single bind mount: the {name, mountPath}
+// pattern declares multiple keys at one path, and
 // docker rejects duplicate mount points for the same container path
 // (the pre-fix behavior failed the job with exit 125).
 func TestSameMountPathMerges(t *testing.T) {

@@ -3,9 +3,8 @@
 // exactly as the spec describes — Given/When/Then against the observable
 // surface.
 //
-// The suite is currently RED by design: the HTTP API the tests exercise
-// does not exist yet. The tests are the contract; the interfaces phase
-// implements the endpoints to green them.
+// The suite is green: the HTTP API the tests exercise is implemented by
+// the daemon, and these tests are the contract that keeps it that way.
 package conformance
 
 import (

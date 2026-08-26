@@ -642,7 +642,7 @@ func TestSpoutPipelines(t *testing.T) {
 		}
 		if err := c.CreatePipeline(bad); err == nil {
 			t.Fatalf("a spout with an input must be rejected")
-		} else if !containsStr(err.Error(), "cannot have inputs") {
+		} else if !strings.Contains(err.Error(), "cannot have inputs") {
 			t.Fatalf("spout-with-input error = %q", err.Error())
 		}
 		badMarker := client.Pipeline{
@@ -652,7 +652,7 @@ func TestSpoutPipelines(t *testing.T) {
 		}
 		if err := c.CreatePipeline(badMarker); err == nil {
 			t.Fatalf("a spout with a glob-metacharacter marker must be rejected")
-		} else if !containsStr(err.Error(), "marker") {
+		} else if !strings.Contains(err.Error(), "marker") {
 			t.Fatalf("marker validation error = %q", err.Error())
 		}
 	})

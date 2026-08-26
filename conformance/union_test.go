@@ -5,6 +5,7 @@ package conformance
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"sandman/client"
@@ -186,7 +187,7 @@ func TestUnionComposition(t *testing.T) {
 	}
 	if err := c.CreatePipeline(bad); err == nil {
 		t.Fatalf("case 5: a cross with a shared alias must be rejected")
-	} else if !containsStr(err.Error(), "distinct namespaces") {
+	} else if !strings.Contains(err.Error(), "distinct namespaces") {
 		t.Fatalf("case 5: rejection error = %q", err.Error())
 	}
 
@@ -208,7 +209,7 @@ func TestUnionComposition(t *testing.T) {
 	}
 	if err := c.CreatePipeline(bad6); err == nil {
 		t.Fatalf("case 6: a cross of unions with the same alias must be rejected")
-	} else if !containsStr(err.Error(), "distinct namespaces") {
+	} else if !strings.Contains(err.Error(), "distinct namespaces") {
 		t.Fatalf("case 6: rejection error = %q", err.Error())
 	}
 	good6 := client.Pipeline{

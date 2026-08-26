@@ -76,5 +76,5 @@ export function jobHref(j) {
 }
 
 export function stateClass(s) {
-  return s || "stopped";
+  return s || "";
 }

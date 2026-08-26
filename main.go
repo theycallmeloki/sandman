@@ -126,6 +126,8 @@ verbs:
   tag                 put/get/list tags
   logs                pipeline/job logs (--follow streams)
   transaction         start/finish/delete/list/inspect/resume/stop
+  backup [dest]       snapshot the full control-plane state to a tar.gz
+  reset --yes         destroy every repo and pipeline (state to zero)
 
 flags (per verb):
   -state <dir>        state directory (default /var/lib/sandman)

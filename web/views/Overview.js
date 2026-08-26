@@ -30,7 +30,7 @@ export default {
       if (!jc) return [];
       return Object.entries(jc).sort((a, b) => b[1] - a[1]);
     },
-    stateOf(p) { return p.stopped ? "stopped" : (p.state || "ready"); },
+    stateOf(p) { return p.state; },
   },
   computed: {
     recentJobs() {
@@ -83,10 +83,10 @@ export default {
       <h2>Fleet</h2>
       <div class="grid">
         <div class="card" v-for="h in hosts" :key="h.name">
-          <b>{{ h.name }}</b> <span class="muted">{{ h.addr || h.advertise || "" }}</span>
+          <b>{{ h.name }}</b> <span class="muted">{{ h.addr }}</span>
         </div>
-        <div class="card" v-for="s in services" :key="s.name">
-          <b>{{ s.name }}</b> <span class="muted">service</span>
+        <div class="card" v-for="s in services" :key="s.pipeline">
+          <b>{{ s.pipeline }}</b> <span class="muted">:{{ s.internalPort }} → :{{ s.externalPort }}</span>
         </div>
       </div>
     </section>

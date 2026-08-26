@@ -31,7 +31,7 @@ import (
 // replayed on start.
 type pipelineRec struct {
 	Pipeline  client.Pipeline `json:"pipeline"`
-	State     string          `json:"state"` // running | stopped | standby | failure | crashed
+	State     string          `json:"state"` // running | paused | standby | failure | crashed
 	Reason    string          `json:"reason,omitempty"`
 	Stopped   bool            `json:"stopped,omitempty"`
 	StoppedAt string          `json:"stoppedAt,omitempty"`
@@ -48,7 +48,7 @@ var shIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // envName renders a shell-identifier from an arbitrary string: characters
 // that cannot appear in an environment variable name (e.g. hyphens in
 // repo names) become underscores. The datum env var is named after its
-// repo; pachctl allows hyphens in names throughout, so the derived name
+// repo; names may carry hyphens throughout, so the derived name
 // is the sanitized form while the repo keeps its own spelling.
 func envName(s string) string {
 	var b strings.Builder

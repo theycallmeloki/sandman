@@ -6,11 +6,10 @@ PREFIX ?= /usr/local
 
 .PHONY: build install install-release uninstall clean daemon worker
 
-# Role selection: `make install daemon` (default) installs the control-plane
-# unit; `make install worker` installs the execution-host unit (a bare
-# `sandman worker` — name defaults to the hostname, control plane
-# discovered via mDNS; add -advertise for placement, or use the curl
-# installer which writes the unit with the flags baked in).
+# Role selection: `make install daemon` (default) vs `make install worker`
+# picks the post-install enable hint only — do-install always writes both
+# deploy/sandman.service (control plane) and deploy/sandman-worker.service
+# (execution host), so a node can switch roles without reinstalling.
 # The role word is a goal, so MAKECMDGOALS picks it up before `install` runs.
 ifneq ($(filter worker,$(MAKECMDGOALS)),)
 ROLE := worker

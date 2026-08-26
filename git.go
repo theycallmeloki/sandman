@@ -30,7 +30,7 @@ import (
 // supported form may reach creation.
 func validateGitURL(u string) error {
 	if u == "" {
-		return fmt.Errorf("clone URL is missing (")
+		return fmt.Errorf("clone URL is missing")
 	}
 	if !strings.HasSuffix(u, ".git") {
 		return fmt.Errorf("clone URL is missing .git suffix")
