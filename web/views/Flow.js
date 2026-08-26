@@ -28,8 +28,8 @@ export default {
           api("/pipelines"),
           api("/jobs?history=0"),
         ]);
-        this.pipelines = p;
-        this.jobs = j;
+        this.pipelines = p || [];
+        this.jobs = j || [];
         this.err = "";
         await this.loadProgress();
       } catch (e) { this.err = String(e.message || e); }

@@ -1169,7 +1169,9 @@ func (d *daemon) listPipelinesFiltered(history *int, name string, allowIncomplet
 	entries, err := os.ReadDir(filepath.Join(d.state, "pipelines"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			// an empty cluster lists as [] — a JSON null would break the
+			// dashboard's list consumers, which expect an array
+			return []client.PipelineInfo{}, nil
 		}
 		return nil, err
 	}

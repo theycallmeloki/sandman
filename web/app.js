@@ -19,7 +19,7 @@ import Fleet from "./views/Fleet.js";
 import Pipeline from "./views/Pipeline.js";
 import Job from "./views/Job.js";
 import Datum from "./views/Datum.js";
-import { inputSummary, jobHref, shortID, relTime, dur, fmtTime, stateClass } from "./shared.js";
+import * as shared from "./shared.js";
 
 // reactive at module scope: onHash mutates it OUTSIDE the component, so
 // it must be a Vue reactive proxy itself — a plain object would be
@@ -101,12 +101,14 @@ const app = createApp({
           api("/jobs?history=0"),
           api("/hosts").catch(() => []),
         ]);
-        const jp = jobPulse(jobs);
+        const jp = jobPulse(jobs || []);
+        const pipelinesArr = pipelines || [];
+        const hostsArr = hosts || [];
         this.pulse = {
           running: jp.running,
           queued: jp.queued,
           failure: jp.failure,
-          attention: attentionCount(pipelines, jobs, hosts),
+          attention: attentionCount(pipelinesArr, jobs || [], hostsArr),
         };
       } catch {}
     },
@@ -146,9 +148,11 @@ const app = createApp({
 });
 
 // Runtime-compiled templates resolve identifiers through the component
-// instance, not module scope — shared helpers must be registered on
-// globalProperties or every template call would be undefined.
-for (const [k, v] of Object.entries({ inputSummary, jobHref, shortID, relTime, dur, fmtTime, stateClass })) {
+// instance, not module scope — every shared helper must be registered
+// on globalProperties or a template call would be undefined (Fleet's
+// hostStale rendered blank until registered). Registering the whole
+// module beats a whitelist: any helper any view calls just works.
+for (const [k, v] of Object.entries(shared)) {
   app.config.globalProperties[k] = v;
 }
 

@@ -19,7 +19,7 @@ export default {
     async load() {
       try {
         const [pl] = await Promise.all([api("/pipelines")]);
-        this.pipelines = pl;
+        this.pipelines = pl || [];
         const q = ["history=" + (this.allVersions ? "-1" : "0")];
         if (this.pipeline) q.push("pipeline=" + encodeURIComponent(this.pipeline));
         if (this.filter) q.push("state=" + encodeURIComponent(this.filter));

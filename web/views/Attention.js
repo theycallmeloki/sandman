@@ -29,9 +29,9 @@ export default {
           api("/jobs?history=0"),
           api("/hosts").catch(() => []),
         ]);
-        this.pipelines = p;
-        this.jobs = j;
-        this.hosts = h;
+        this.pipelines = p || [];
+        this.jobs = j || [];
+        this.hosts = h || [];
         this.err = "";
         await this.loadFailedDatums();
       } catch (e) { this.err = String(e.message || e); }
