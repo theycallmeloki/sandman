@@ -133,15 +133,17 @@ you give a dream so you can find it again later.
 
 ```sh
 sandman pipeline create clean --image alpine \
-  --cmd 'sh -c cp $in/* $OUT/' --input in@master
+  --sh 'cp $in/* $OUT/' --input in@master
 ```
 
 Builder flags cover the common cases (`--gpu 1`, `--parallelism 4`,
 `--memory 100M`, `--cron '@every 5m'`, `--env K=V`, `--placement exec`,
-…); the full spec file stays available via `-f spec.json` (or `-` for
-stdin). The pipeline subscribes to the `in` repo. The next commit triggers
-one job; the job's `OUT` directory becomes a new commit in the pipeline's
-own output repo (`clean`). The environment sees each input as a variable
+…); `--sh` runs the script as `sh -c '<script>'` — the natural form for
+`$in`/`$OUT` and redirects — while `--cmd` splits into an exec-form argv.
+The full spec file stays available via `-f spec.json` (or `-` for stdin).
+The pipeline subscribes to the `in` repo. The next commit triggers one
+job; the job's `OUT` directory becomes a new commit in the pipeline's own
+output repo (`clean`). The environment sees each input as a variable
 named after it (`$in` = the datum's input directory), plus `OUT`,
 `JOB_ID`, `OUTPUT_COMMIT`, and `<input>_COMMIT`.
 
@@ -454,12 +456,13 @@ unreachable daemons get pointed fixes instead of bare errors. Shell
 completion: `sandman completion bash|zsh|fish`.
 
 `pipeline create`/`update` take either a spec file (`-f`, `-` for stdin)
-or a name with builder flags (`--image`, `--cmd`, `--input repo[@branch]`,
-`--glob`, `--cron`, `--parallelism`, `--gpu`, `--memory`, `--cpu`,
-`--placement`, `--standby`, `--autoscaling`, `--env K=V`, `--secret`,
-`--reprocess`). `pipeline run <name> --wait` starts a job and blocks until
-it settles, exiting non-zero unless it succeeded; `logs [pipeline-or-job]`
-takes the subject positionally.
+or a name with builder flags (`--image`, `--sh '<script>'` for
+`sh -c`-style scripts, `--cmd` for an exec-form argv, `--input
+repo[@branch]`, `--glob`, `--cron`, `--parallelism`, `--gpu`, `--memory`,
+`--cpu`, `--placement`, `--standby`, `--autoscaling`, `--env K=V`,
+`--secret`, `--reprocess`). `pipeline run <name> --wait` starts a job and
+blocks until it settles, exiting non-zero unless it succeeded; `logs
+[pipeline-or-job]` takes the subject positionally.
 
 ### Repositories
 

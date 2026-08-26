@@ -1333,6 +1333,7 @@ func isTerminalJob(state string) bool {
 var (
 	pipelineImage       string
 	pipelineCmd         string
+	pipelineSh          string
 	pipelineInput       string
 	pipelineGlob        string
 	pipelineCron        string
@@ -1353,7 +1354,8 @@ var (
 func addPipelineBuilderFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&pipelineImage, "image", "", "transform image (e.g. nvidia/cuda:12.4.1-base-ubuntu22.04)")
-	f.StringVar(&pipelineCmd, "cmd", "", "transform command, whitespace-split (e.g. 'sh -c nvidia-smi')")
+	f.StringVar(&pipelineCmd, "cmd", "", "transform command, whitespace-split into argv (exec form)")
+	f.StringVar(&pipelineSh, "sh", "", "transform shell script — runs as sh -c '<script>' (use for $in/$OUT, redirects)")
 	f.StringVar(&pipelineInput, "input", "", "input repo[@branch] (e.g. in@master)")
 	f.StringVar(&pipelineGlob, "glob", "", "input file glob (default: all files)")
 	f.StringVar(&pipelineCron, "cron", "", "cron input schedule (e.g. '@every 5m') — replaces --input")
@@ -1392,12 +1394,19 @@ func buildPipelineFromFlags(name string) (client.Pipeline, error) {
 	if pipelineCron != "" && pipelineInput != "" {
 		return p, fmt.Errorf("--cron and --input are mutually exclusive")
 	}
-	if pipelineImage == "" && pipelineCmd == "" {
+	if pipelineCmd != "" && pipelineSh != "" {
+		return p, fmt.Errorf("--cmd and --sh are mutually exclusive")
+	}
+	if pipelineImage == "" && pipelineCmd == "" && pipelineSh == "" {
 		return p, fmt.Errorf("a transform needs --image (or use -f spec.json)")
 	}
-	p.Transform = &client.Transform{
-		Image: pipelineImage,
-		Cmd:   strings.Fields(pipelineCmd),
+	p.Transform = &client.Transform{Image: pipelineImage}
+	switch {
+	case pipelineSh != "":
+		// the whole script is one argv element: sh -c '<script>'
+		p.Transform.Cmd = []string{"sh", "-c", pipelineSh}
+	case pipelineCmd != "":
+		p.Transform.Cmd = strings.Fields(pipelineCmd)
 	}
 	if len(pipelineEnv) > 0 {
 		env := map[string]string{}

@@ -661,6 +661,27 @@ func TestPipelineCreateFlagValidation(t *testing.T) {
 	}
 }
 
+// TestPipelineCreateShFlag: --sh keeps the whole script as one argv
+// element (sh -c '<script>') — the form that survives $in/$OUT and
+// redirects intact.
+func TestPipelineCreateShFlag(t *testing.T) {
+	f := newFakeDaemon()
+	testRepo(t, f)
+	_, _, code := runCLI(t, f, nil, "pipeline", "create", "s", "--image", "alpine",
+		"--sh", "cp $in/* $OUT/ > /tmp/x", "--input", "in@master")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	p := f.pipelines[0]
+	want := []string{"sh", "-c", "cp $in/* $OUT/ > /tmp/x"}
+	if len(p.Transform.Cmd) != 3 || p.Transform.Cmd[0] != want[0] || p.Transform.Cmd[1] != want[1] || p.Transform.Cmd[2] != want[2] {
+		t.Fatalf("cmd = %v, want %v", p.Transform.Cmd, want)
+	}
+	if p.Input.Glob != "/*" {
+		t.Fatalf("glob = %q, want default /*", p.Input.Glob)
+	}
+}
+
 // ---- status / version / reachability ----
 
 func TestStatus(t *testing.T) {
