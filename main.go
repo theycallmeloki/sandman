@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -8,8 +9,15 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"sandman/client"
 	"sandman/internal/cli"
 )
+
+// rootAddr is the root command's persistent --addr: `sandman repo list
+// --addr host:port` lands here (the global -addr, parsed by the std flag
+// package, still works in leading position). PersistentPreRun installs
+// it into the data-plane CLI before any subcommand runs.
+var rootAddr string
 
 // Version is the baked build version. Releases set it at build time via
 // -ldflags "-X main.Version=0.0.1"; dev builds fall back to this value.
@@ -46,6 +54,14 @@ func newRootCmd() *cobra.Command {
 		Use:          "sandman",
 		Short:        "sandman — a naive peer-to-peer docker fabric",
 		SilenceUsage: true,
+	}
+	// --addr also works after the verb (`sandman repo list --addr X`);
+	// the leading-position -addr is consumed by the std flag package
+	root.PersistentFlags().StringVar(&rootAddr, "addr", "", "control-plane address (overrides $SANDMAN_ADDR)")
+	root.PersistentPreRun = func(_ *cobra.Command, _ []string) {
+		if rootAddr != "" {
+			cli.SetAddr(rootAddr)
+		}
 	}
 	for _, f := range []struct {
 		use string
@@ -112,10 +128,17 @@ verbs:
   detach <name>       forget a static peer
   update [--check]    check GitHub releases and install the latest build
   version / -version  print binary and daemon versions
+
+  put                 upload files (cp-like: put <src>... <repo@branch:path>)
+  get                 fetch files (repo@branch:path), -o writes to a file/dir
+  ls                  list repos, or files in a repo
+  cat                 fetch files to stdout
+  ps                  list jobs (alias for job list)
+  status              one-glance view: daemon, hosts, pipelines, jobs
+
   repo                create/list/inspect/delete repositories
   commit              start/finish/list/inspect/delete commits
   branch              create/list branches
-  get                 fetch files from commits (repo@branch:path)
   file                put/get/list/copy/delete files (repo@branch:path)
   check               consistency check (fsck analog)
   pipeline            create/update/list/inspect/delete/start/stop/run/run-cron/extract/edit
@@ -128,6 +151,7 @@ verbs:
   transaction         start/finish/delete/list/inspect/resume/stop
   backup [dest]       snapshot the full control-plane state to a tar.gz
   reset --yes         destroy every repo and pipeline (state to zero)
+  completion bash|zsh|fish    generate shell completion
 
 flags (per verb):
   -state <dir>        state directory (default /var/lib/sandman)
@@ -164,8 +188,40 @@ func cmdStats(args []string) {
 
 func cmdNodes(args []string) {
 	fs := flag.NewFlagSet("nodes", flag.ExitOnError)
-	state := fs.String("state", DefaultState, "state directory")
+	state := fs.String("state", DefaultState, "state directory (local browse fallback)")
+	addr := fs.String("addr", defaultAddr(), "control-plane address (default $SANDMAN_ADDR or 127.0.0.1:4242)")
+	local := fs.Bool("local", false, "browse mDNS and local registry files instead of asking the daemon")
+	asJSON := fs.Bool("json", false, "emit JSON instead of a table")
 	fs.Parse(args)
+	if !*local {
+		hosts, err := client.New(*addr).Hosts()
+		if err == nil {
+			if *asJSON {
+				b, _ := json.MarshalIndent(hosts, "", "  ")
+				fmt.Println(string(b))
+				return
+			}
+			rows := make([][]string, 0, len(hosts))
+			for _, h := range hosts {
+				var gpus []string
+				for _, g := range h.Gpus {
+					s := fmt.Sprintf("%d %s", g.Index, g.Name)
+					if g.Busy {
+						s += " (busy)"
+					}
+					gpus = append(gpus, s)
+				}
+				rows = append(rows, []string{h.Name, h.Addr, strings.Join(h.Labels, ","), strings.Join(gpus, ", "), h.Seen})
+			}
+			cli.RenderTable([]string{"NAME", "ADDR", "LABELS", "GPUS", "SEEN"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no registered hosts")
+			}
+			return
+		}
+		// daemon unreachable: fall back to the local mDNS browse
+		fmt.Fprintf(os.Stderr, "sandman: daemon not reachable at %s — falling back to local browse\n", *addr)
+	}
 	clientNodes(*state)
 }
 

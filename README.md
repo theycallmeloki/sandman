@@ -116,31 +116,34 @@ code remains.
 Repos hold immutable revisions (commits) on branches:
 
 ```sh
-curl -X POST localhost:4242/api/v1/repos            -d '{"name":"in"}'
-curl -X POST localhost:4242/api/v1/repos/in/commits -d '{}'        # → commit id
-curl -X PUT  localhost:4242/api/v1/commits/$ID/files/features.csv \
-     --data-binary @features.csv
-curl -X POST localhost:4242/api/v1/commits/$ID/finish -d '{}'
+sandman repo create in
+sandman put features.csv in@master:features.csv    # → wrote in@master:features.csv (…)
+sandman ls in@master
+sandman get in@master:features.csv                 # stdout; -o file writes to disk
 ```
 
-Every commit is a dream you can revisit. Tags are the names you give a
-dream so you can find it again later.
+`put` is cp-like: sources first, destination last. A directory uploads its
+whole tree, `-` reads stdin, and one transfer is one commit. `get` fetches
+a single file to stdout (pipe it anywhere) or `-o` writes to a file,
+directory, or glob match — `sandman get in@master -o snap/` downloads the
+whole repo. Every commit is a dream you can revisit; tags are the names
+you give a dream so you can find it again later.
 
 ### 4. Point a pipeline at it
 
 ```sh
-curl -X POST localhost:4242/api/v1/pipelines -d '{
-  "name":"clean",
-  "transform":{"image":"alpine","cmd":["sh","-c","cp $in/* $OUT/"]},
-  "input":{"repo":"in","glob":"/*"}
-}'
+sandman pipeline create clean --image alpine \
+  --cmd 'sh -c cp $in/* $OUT/' --input in@master
 ```
 
-The pipeline subscribes to the `in` repo. The next commit triggers one job;
-the job's `OUT` directory becomes a new commit in the pipeline's own output
-repo (`clean`). The environment sees each input as a variable named after
-it (`$in` = the datum's input directory), plus `OUT`, `JOB_ID`,
-`OUTPUT_COMMIT`, and `<input>_COMMIT`.
+Builder flags cover the common cases (`--gpu 1`, `--parallelism 4`,
+`--memory 100M`, `--cron '@every 5m'`, `--env K=V`, `--placement exec`,
+…); the full spec file stays available via `-f spec.json` (or `-` for
+stdin). The pipeline subscribes to the `in` repo. The next commit triggers
+one job; the job's `OUT` directory becomes a new commit in the pipeline's
+own output repo (`clean`). The environment sees each input as a variable
+named after it (`$in` = the datum's input directory), plus `OUT`,
+`JOB_ID`, `OUTPUT_COMMIT`, and `<input>_COMMIT`.
 
 ### 5. Chain a second stage
 
@@ -307,7 +310,8 @@ separate server, no port to remember.
 
 ```sh
 sandman daemon                # run the node side (TCP :4242, mDNS)
-sandman nodes                 # list the fleet
+sandman nodes                 # list registered hosts (asks the daemon; --local for mDNS)
+sandman status                # one glance: daemon version, hosts, pipelines, jobs
 sandman stats                 # poll every node; fleet state as JSONL on stdout
 sandman dashboard             # live TUI: nodes, containers, per-container cpu/mem
 sandman run <node> -- <image> <cmd...>   # stream a job; exit code is the container's
@@ -316,6 +320,14 @@ sandman attach <name> <addr>  # static peer (non-mDNS networks)
 sandman detach <name>
 sandman update [--check]      # check GitHub releases and install the latest build
 ```
+
+`sandman nodes` asks the control plane for its registered execution hosts
+(name, address, placement labels, GPUs with allocation state) — the same
+authoritative view the dashboard renders. Without a reachable daemon it
+falls back to the local mDNS browse (`--local` forces the browse);
+`--json` emits the raw host records. `sandman status` is the first thing
+to type when something feels off: daemon version, registered hosts (GPU
+hosts called out), pipeline states, and job states.
 
 Cross-subnet nodes (no multicast): `sandman attach wan-node 10.0.0.9:4242`
 adds a static peer; `detach` removes it.
@@ -412,6 +424,42 @@ console (see [Web UI](#web-ui)).
 ## The data plane: repos, commits, files
 
 All endpoints hang off `/api/v1` on the daemon's port.
+
+### The CLI
+
+Every endpoint has a cobra verb; the ergonomic ones are the cp/less-style
+file verbs. `-addr` selects the control plane (or `SANDMAN_ADDR`); it
+works in leading position or after the verb.
+
+```sh
+sandman put data.csv in@master:data.csv        # upload: src(s) then dest
+sandman put dataset/ in@master:dataset         #   whole tree, one commit
+sandman put - data.json < data.json            #   stdin
+sandman put f.csv <commit-id>:f.csv            #   into an open commit
+sandman get in@master:data.csv                 # download: stdout
+sandman get in@master:data.csv -o data.csv     #   -o writes a file
+sandman get in@master:dataset -o out/          #   a directory tree
+sandman get 'in@master:data/*.csv' -o out/     #   a glob of files
+sandman get in@master -o snap/                 #   the whole repo
+sandman ls [in@master[:path]]                  # repos, or files in a repo
+sandman cat in@master:data.csv                 # files to stdout
+sandman ps [pipeline]                          # jobs (job list -s filters state)
+sandman status                                 # daemon, hosts, pipelines, jobs
+```
+
+Transfers over a megabyte show progress on stderr when stderr is a
+terminal (`--no-progress` disables); stdout stays clean for scripts.
+Every list verb takes `--json` for machine output, and missing repos and
+unreachable daemons get pointed fixes instead of bare errors. Shell
+completion: `sandman completion bash|zsh|fish`.
+
+`pipeline create`/`update` take either a spec file (`-f`, `-` for stdin)
+or a name with builder flags (`--image`, `--cmd`, `--input repo[@branch]`,
+`--glob`, `--cron`, `--parallelism`, `--gpu`, `--memory`, `--cpu`,
+`--placement`, `--standby`, `--autoscaling`, `--env K=V`, `--secret`,
+`--reprocess`). `pipeline run <name> --wait` starts a job and blocks until
+it settles, exiting non-zero unless it succeeded; `logs [pipeline-or-job]`
+takes the subject positionally.
 
 ### Repositories
 

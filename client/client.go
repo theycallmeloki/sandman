@@ -357,6 +357,36 @@ func (c *Client) inspectCommitBrief(id string) (Commit, error) {
 	return out, c.do("GET", "/api/v1/commits/"+url.PathEscape(id)+"?brief=1", nil, &out)
 }
 
+// ---- Execution hosts ----
+
+// GpuInfo is one GPU an execution host advertises for allocation: the
+// device index (as docker/CUDA enumerate it), the vendor-reported name,
+// and its total memory. Busy is computed by the control plane at list
+// time — the device is currently allocated to a running job.
+type GpuInfo struct {
+	Index     int    `json:"index"`
+	Name      string `json:"name,omitempty"`
+	MemoryMiB int64  `json:"memoryMiB,omitempty"`
+	Busy      bool   `json:"busy,omitempty"`
+}
+
+// HostInfo is one registered execution host as the control plane sees it:
+// name, exec endpoint, placement labels, advertised GPUs, last heartbeat.
+type HostInfo struct {
+	Name   string    `json:"name"`
+	Addr   string    `json:"addr"`
+	Labels []string  `json:"labels,omitempty"`
+	Gpus   []GpuInfo `json:"gpus,omitempty"`
+	Seen   string    `json:"seen"`
+}
+
+// Hosts lists the execution hosts currently registered with the control
+// plane (the authoritative fleet view the dashboard renders).
+func (c *Client) Hosts() ([]HostInfo, error) {
+	var out []HostInfo
+	return out, c.do("GET", "/api/v1/hosts", nil, &out)
+}
+
 // ---- Files ----
 
 type FileInfo struct {
@@ -369,6 +399,32 @@ type FileInfo struct {
 
 func (c *Client) PutFile(commitID, p string, data []byte) error {
 	_, err := c.doRaw("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p), data)
+	return err
+}
+
+// PutFileStream uploads a file's content from r without buffering it
+// client-side: the request body streams (chunked), so a large local file
+// never sits in memory twice. overwrite has the same meaning as
+// PutFileOverwrite — replace content accumulated at the path.
+func (c *Client) PutFileStream(commitID, p string, overwrite bool, r io.Reader) error {
+	u := "/api/v1/commits/" + url.PathEscape(commitID) + "/files/" + url.PathEscape(p)
+	if overwrite {
+		u += "?overwrite=1"
+	}
+	req, err := http.NewRequest("PUT", c.base+u, r)
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return decodeError(resp.StatusCode, b)
+	}
+	_, err = io.Copy(io.Discard, resp.Body)
 	return err
 }
 

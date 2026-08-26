@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,11 +39,58 @@ var binVersion = "0.0.1"
 // SetVersion installs the binary's baked version for PrintVersion.
 func SetVersion(v string) { binVersion = v }
 
+// exitFunc is swappable for tests: the real CLI exits; tests capture the
+// code instead of killing the test process.
+var exitFunc = os.Exit
+
 // die is the CLI's fatal-error exit: print the message to stderr and
 // exit with the given code.
 func die(msg string, code int) {
 	fmt.Fprintln(os.Stderr, "sandman:", msg)
-	os.Exit(code)
+	exitFunc(code)
+}
+
+// isConnErr reports whether an error string smells like a control-plane
+// reachability problem — the case where the fix is "start the daemon",
+// not "change the arguments".
+func isConnErr(msg string) bool {
+	l := strings.ToLower(msg)
+	return strings.Contains(l, "connection refused") ||
+		strings.Contains(l, "no such host") ||
+		strings.Contains(l, "connection reset") ||
+		strings.Contains(l, "dial tcp") ||
+		strings.Contains(l, "i/o timeout") ||
+		strings.Contains(l, "eof")
+}
+
+// dieErr is die for verb failures: it appends a daemon-reachability hint
+// for connection-shaped errors, and a caller-supplied hint for the cases
+// where the fix is a specific next command.
+func dieErr(verb string, err error, hint string) {
+	msg := err.Error()
+	switch {
+	case isConnErr(msg):
+		die(fmt.Sprintf("%s: %v (daemon not reachable at %s — is it running? start it with `sandman daemon`)", verb, err, addr), 1)
+	case hint != "":
+		die(fmt.Sprintf("%s: %v — %s", verb, err, hint), 1)
+	default:
+		die(fmt.Sprintf("%s: %v", verb, err), 1)
+	}
+}
+
+// jsonOut is the shared --json flag of the list verbs: a command binds it
+// to its own flag, and emitJSON prints the raw objects instead of a
+// table. One command executes per run, so the shared package variable is
+// safe (the same pattern as the shared specFile/forceDelete flags).
+var jsonOut bool
+
+// emitJSON prints v as indented JSON — the --json mode of the list verbs.
+func emitJSON(v any) {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		die("json: "+err.Error(), 1)
+	}
+	fmt.Println(string(b))
 }
 
 // listingGlob turns a file-list [:path] argument into the server's
@@ -83,7 +131,12 @@ func cliClient() *client.Client {
 // verbs (daemon, worker, nodes, ...).
 func Commands() []*cobra.Command {
 	cmds := dataPlaneCommands()
-	cmds = append(cmds, getCmd())
+	cmds = append(cmds, getCmd())    // get [file] <ref> [-o dest]
+	cmds = append(cmds, putCmd())    // cp-like upload
+	cmds = append(cmds, lsCmd())     // repos, or files in a repo
+	cmds = append(cmds, catCmd())    // files to stdout
+	cmds = append(cmds, psCmd())     // jobs, alias for `job list`
+	cmds = append(cmds, statusCmd()) // one-glance fleet/pipeline/job view
 	cmds = append(cmds, &cobra.Command{
 		Use: "version",
 		Run: func(*cobra.Command, []string) { PrintVersion() },
@@ -304,18 +357,18 @@ func newBackupCmd() *cobra.Command {
 			}
 			f, err := os.Create(dest)
 			if err != nil {
-				die("backup: "+err.Error(), 1)
+				dieErr("backup", err, "")
 			}
 			if err := cliClient().Backup(f); err != nil {
 				f.Close()
 				// die() is os.Exit — no deferred cleanup runs; a
 				// truncated archive must not stay on disk looking valid
 				os.Remove(dest)
-				die("backup: "+err.Error(), 1)
+				dieErr("backup", err, "")
 			}
 			if err := f.Close(); err != nil {
 				os.Remove(dest)
-				die("backup: "+err.Error(), 1)
+				dieErr("backup", err, "")
 			}
 			fmt.Printf("backed up control-plane state to %s\n", dest)
 			fmt.Println("restore: stop the daemon, extract the archive into the state dir, start the daemon")
@@ -336,7 +389,7 @@ func newResetCmd() *cobra.Command {
 				die("reset: this destroys every repo and pipeline; pass --yes", 1)
 			}
 			if err := cliClient().Reset(); err != nil {
-				die("reset: "+err.Error(), 1)
+				dieErr("reset", err, "")
 			}
 			fmt.Println("reset complete — repos, pipelines, jobs, secrets, tags cleared (spec repo recreated)")
 		},
@@ -347,41 +400,33 @@ func newResetCmd() *cobra.Command {
 
 func newRepoCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "repo", Short: "manage repositories"}
+	list := &cobra.Command{
+		Use:  "list",
+		Args: cobra.NoArgs,
+		Run: func(_ *cobra.Command, _ []string) {
+			repoList()
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:  "create <name>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().CreateRepo(args[0]); err != nil {
-					die("repo create: "+err.Error(), 1)
+					dieErr("repo create", err, "")
 				}
 				fmt.Printf("created repo %s\n", args[0])
 			},
 		},
-		&cobra.Command{
-			Use: "list",
-			Run: func(_ *cobra.Command, _ []string) {
-				repos, err := cliClient().ListRepos()
-				if err != nil {
-					die("repo list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(repos))
-				for _, r := range repos {
-					rows = append(rows, []string{r.Name, HumanSize(r.SizeBytes), strings.Join(r.Branches, ",")})
-				}
-				table([]string{"NAME", "SIZE", "BRANCHES"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no repos")
-				}
-			},
-		},
+		list,
 		&cobra.Command{
 			Use:  "inspect <name>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				r, err := cliClient().InspectRepo(args[0])
 				if err != nil {
-					die("repo inspect: "+err.Error(), 1)
+					dieErr("repo inspect", err, "")
 				}
 				detail(
 					[2]string{"name", r.Name},
@@ -396,7 +441,7 @@ func newRepoCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			if err := cliClient().DeleteRepo(args[0], forceDelete); err != nil {
-				die("repo delete: "+err.Error(), 1)
+				dieErr("repo delete", err, "")
 			}
 			fmt.Printf("deleted repo %s\n", args[0])
 		},
@@ -411,6 +456,33 @@ var forcePipelineDelete bool
 
 func newCommitCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "commit", Short: "manage commits"}
+	list := &cobra.Command{
+		Use:  "list <repo>[@branch]",
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			repo, branch, _, err := parseRef(args[0])
+			if err != nil {
+				die(err.Error(), 2)
+			}
+			hist, err := cliClient().CommitHistory(repo, branch)
+			if err != nil {
+				dieErr("commit list", err, "")
+			}
+			if jsonOut {
+				emitJSON(hist)
+				return
+			}
+			rows := make([][]string, 0, len(hist))
+			for _, cm := range hist {
+				rows = append(rows, []string{cm.ID, cm.Branch, fmt.Sprintf("%t", cm.Finished)})
+			}
+			table([]string{"ID", "BRANCH", "FINISHED"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no commits")
+			}
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:  "start <repo>[@branch]",
@@ -422,7 +494,7 @@ func newCommitCmd() *cobra.Command {
 				}
 				cm, err := cliClient().StartCommit(repo, branch, "")
 				if err != nil {
-					die("commit start: "+err.Error(), 1)
+					dieErr("commit start", err, "")
 				}
 				fmt.Println(cm.ID)
 			},
@@ -432,31 +504,9 @@ func newCommitCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if _, err := cliClient().FinishCommit(args[0], "", false); err != nil {
-					die("commit finish: "+err.Error(), 1)
+					dieErr("commit finish", err, "")
 				}
 				fmt.Printf("finished commit %s\n", args[0])
-			},
-		},
-		&cobra.Command{
-			Use:  "list <repo>[@branch]",
-			Args: cobra.ExactArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				repo, branch, _, err := parseRef(args[0])
-				if err != nil {
-					die(err.Error(), 2)
-				}
-				hist, err := cliClient().CommitHistory(repo, branch)
-				if err != nil {
-					die("commit list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(hist))
-				for _, cm := range hist {
-					rows = append(rows, []string{cm.ID, cm.Branch, fmt.Sprintf("%t", cm.Finished)})
-				}
-				table([]string{"ID", "BRANCH", "FINISHED"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no commits")
-				}
 			},
 		},
 		&cobra.Command{
@@ -471,13 +521,13 @@ func newCommitCmd() *cobra.Command {
 					}
 					resolved, err := resolveCommitRef(cliClient(), repo, branch)
 					if err != nil {
-						die("commit inspect: "+err.Error(), 1)
+						dieErr("commit inspect", err, "")
 					}
 					id = resolved
 				}
 				cm, err := cliClient().InspectCommit(id)
 				if err != nil {
-					die("commit inspect: "+err.Error(), 1)
+					dieErr("commit inspect", err, "")
 				}
 				detail(
 					[2]string{"id", cm.ID},
@@ -493,7 +543,7 @@ func newCommitCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().DeleteCommit(args[0]); err != nil {
-					die("commit delete: "+err.Error(), 1)
+					dieErr("commit delete", err, "")
 				}
 				fmt.Printf("deleted commit %s\n", args[0])
 			},
@@ -504,6 +554,56 @@ func newCommitCmd() *cobra.Command {
 
 func newBranchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "branch", Short: "manage branches"}
+	list := &cobra.Command{
+		Use:  "list [repo]",
+		Args: cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			if len(args) == 1 {
+				bs, err := cliClient().ListBranches(args[0])
+				if err != nil {
+					dieErr("branch list", err, "")
+				}
+				if jsonOut {
+					emitJSON(bs)
+					return
+				}
+				rows := make([][]string, 0, len(bs))
+				for _, b := range bs {
+					rows = append(rows, []string{b.Branch, b.Head})
+				}
+				table([]string{"BRANCH", "HEAD"}, rows)
+				if len(rows) == 0 {
+					fmt.Println("no branches")
+				}
+				return
+			}
+			repos, err := cliClient().ListRepos()
+			if err != nil {
+				dieErr("branch list", err, "")
+			}
+			if jsonOut {
+				var bs []client.Branch
+				for _, r := range repos {
+					for _, b := range r.Branches {
+						bs = append(bs, client.Branch{Repo: r.Name, Branch: b})
+					}
+				}
+				emitJSON(bs)
+				return
+			}
+			var rows [][]string
+			for _, r := range repos {
+				for _, b := range r.Branches {
+					rows = append(rows, []string{r.Name, b})
+				}
+			}
+			table([]string{"REPO", "BRANCH"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no branches")
+			}
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(
 		&cobra.Command{
 			// head defaults to the repo's master head (the reference's
@@ -517,12 +617,12 @@ func newBranchCmd() *cobra.Command {
 				} else {
 					h, err := cliClient().HeadCommit(args[0], "master")
 					if err != nil {
-						die("branch create: "+err.Error(), 1)
+						dieErr("branch create", err, "")
 					}
 					head = h.ID
 				}
 				if err := cliClient().CreateBranch(args[0], args[1], head); err != nil {
-					die("branch create: "+err.Error(), 1)
+					dieErr("branch create", err, "")
 				}
 				fmt.Printf("created branch %s@%s\n", args[0], args[1])
 			},
@@ -533,7 +633,7 @@ func newBranchCmd() *cobra.Command {
 			Run: func(_ *cobra.Command, args []string) {
 				b, err := cliClient().InspectBranch(args[0], args[1])
 				if err != nil {
-					die("branch inspect: "+err.Error(), 1)
+					dieErr("branch inspect", err, "")
 				}
 				detail(
 					[2]string{"repo", b.Repo},
@@ -543,46 +643,11 @@ func newBranchCmd() *cobra.Command {
 			},
 		},
 		&cobra.Command{
-			Use:  "list [repo]",
-			Args: cobra.MaximumNArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				if len(args) == 1 {
-					bs, err := cliClient().ListBranches(args[0])
-					if err != nil {
-						die("branch list: "+err.Error(), 1)
-					}
-					rows := make([][]string, 0, len(bs))
-					for _, b := range bs {
-						rows = append(rows, []string{b.Branch, b.Head})
-					}
-					table([]string{"BRANCH", "HEAD"}, rows)
-					if len(rows) == 0 {
-						fmt.Println("no branches")
-					}
-					return
-				}
-				repos, err := cliClient().ListRepos()
-				if err != nil {
-					die("branch list: "+err.Error(), 1)
-				}
-				var rows [][]string
-				for _, r := range repos {
-					for _, b := range r.Branches {
-						rows = append(rows, []string{r.Name, b})
-					}
-				}
-				table([]string{"REPO", "BRANCH"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no branches")
-				}
-			},
-		},
-		&cobra.Command{
 			Use:  "delete <repo> <branch>",
 			Args: cobra.ExactArgs(2),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().DeleteBranch(args[0], args[1]); err != nil {
-					die("branch delete: "+err.Error(), 1)
+					dieErr("branch delete", err, "")
 				}
 				fmt.Printf("deleted branch %s@%s\n", args[0], args[1])
 			},
@@ -591,33 +656,8 @@ func newBranchCmd() *cobra.Command {
 	return cmd
 }
 
-// getCmd is the reference's top-level `get file` verb: fetch a file
-// from a commit by ref, the canonical recovery path. Equivalent to
-// `file get` (same resolution), kept as its own command for parity.
-func getCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "get", Short: "fetch files from commits"}
-	cmd.AddCommand(&cobra.Command{
-		Use:  "file <repo@branch:path>",
-		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
-			repo, branch, path, err := parseRef(args[0])
-			if err != nil {
-				die(err.Error(), 2)
-			}
-			if path == "" {
-				die("get file: path required (repo@branch:path)", 2)
-			}
-			head, err := resolveCommitRef(cliClient(), repo, branch)
-			if err != nil {
-				die("get file: "+err.Error(), 1)
-			}
-			if _, err := cliClient().FetchFileTo(os.Stdout, head, path, false, 0); err != nil {
-				die("get file: "+err.Error(), 1)
-			}
-		},
-	})
-	return cmd
-}
+// getCmd is defined in transfer.go: the reference's `get file <ref>`
+// survives as a subcommand; `get <ref> [-o dest]` is the ergonomic form.
 
 func newFileCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "file", Short: "manage files"}
@@ -625,96 +665,42 @@ func newFileCmd() *cobra.Command {
 		Use:  "put <repo@branch:path> <src|->",
 		Args: cobra.ExactArgs(2),
 		Run: func(_ *cobra.Command, args []string) {
-			repo, branch, path, err := parseRef(args[0])
+			_, _, path, err := parseRef(args[0])
 			if err != nil {
 				die(err.Error(), 2)
 			}
 			if path == "" {
 				die("file put: path required (repo@branch:path)", 2)
 			}
-			var data []byte
-			if args[1] == "-" {
-				data, err = io.ReadAll(os.Stdin)
-			} else {
-				data, err = os.ReadFile(args[1])
-			}
-			if err != nil {
-				die("file put: "+err.Error(), 1)
-			}
-			// puts into repos that do not exist error out — no silent
-			// auto-create
-			if _, err := cliClient().InspectRepo(repo); err != nil {
-				die("file put: repo "+repo+" not found", 1)
-			}
-			if store.IsCommitID(branch) {
-				// the canonical explicit-commit flow (F14): a commit-id
-				// ref writes into that OPEN commit — the put neither
-				// starts a new commit nor finishes it (the explicit
-				// `commit finish <id>` completes the flow). A branch of
-				// the commit's name can only be a phantom.
-				cm, err := cliClient().InspectCommit(branch)
-				if err != nil {
-					die("file put: "+err.Error(), 1)
-				}
-				if cm.Repo != repo {
-					die(fmt.Sprintf("file put: commit %s is in repo %s, not %s", branch, cm.Repo, repo), 1)
-				}
-				if cm.Finished {
-					die(fmt.Sprintf("file put: commit %s is finished; start a new commit to write", branch), 1)
-				}
-				if fileOverwrite {
-					err = cliClient().PutFileOverwrite(branch, path, data)
-				} else {
-					err = cliClient().PutFile(branch, path, data)
-				}
-				if err != nil {
-					die("file put: "+err.Error(), 1)
-				}
-				fmt.Printf("wrote %s@%s:%s (%d bytes, commit %s)\n", repo, branch, path, len(data), branch)
-				return
-			}
-			cm, err := cliClient().StartCommit(repo, branch, "")
-			if err != nil {
-				die("file put: "+err.Error(), 1)
-			}
-			if fileOverwrite {
-				err = cliClient().PutFileOverwrite(cm.ID, path, data)
-			} else {
-				err = cliClient().PutFile(cm.ID, path, data)
-			}
-			if err != nil {
-				die("file put: "+err.Error(), 1)
-			}
-			if _, err := cliClient().FinishCommit(cm.ID, "", false); err != nil {
-				die("file put: "+err.Error(), 1)
-			}
-			fmt.Printf("wrote %s@%s:%s (%d bytes, commit %s)\n", repo, branch, path, len(data), cm.ID)
+			// shared upload: `put` uses the cp-like order, `file put`
+			// keeps the reference's <ref> <src> order — same machinery
+			putRun([]string{args[1]}, args[0], fileOverwrite, true, "file put")
 		},
 	}
 	put.Flags().BoolVarP(&fileOverwrite, "overwrite", "o", false, "overwrite accumulated content at the path")
 	cmd.AddCommand(put)
 
-	cmd.AddCommand(
-		&cobra.Command{
-			Use:  "get <repo@branch:path>",
-			Args: cobra.ExactArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				repo, branch, path, err := parseRef(args[0])
-				if err != nil {
-					die(err.Error(), 2)
-				}
-				if path == "" {
-					die("file get: path required (repo@branch:path)", 2)
-				}
-				head, err := resolveCommitRef(cliClient(), repo, branch)
-				if err != nil {
-					die("file get: "+err.Error(), 1)
-				}
-				if _, err := cliClient().FetchFileTo(os.Stdout, head, path, false, 0); err != nil {
-					die("file get: "+err.Error(), 1)
-				}
-			},
+	get := &cobra.Command{
+		Use:  "get <repo@branch:path>",
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			getRun(cliClient(), args[0], fileGetOut, false, "file get")
 		},
+	}
+	get.Flags().StringVarP(&fileGetOut, "output", "o", "", "write to this file or directory (default: stdout)")
+	cmd.AddCommand(get)
+
+	list := &cobra.Command{
+		Use:  "list <repo@branch>[:path]",
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			listFilesRef(args[0])
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
+	cmd.AddCommand(list)
+
+	cmd.AddCommand(
 		&cobra.Command{
 			Use:  "inspect <repo@branch:path>",
 			Args: cobra.ExactArgs(1),
@@ -728,47 +714,16 @@ func newFileCmd() *cobra.Command {
 				}
 				head, err := resolveCommitRef(cliClient(), repo, branch)
 				if err != nil {
-					die("file inspect: "+err.Error(), 1)
+					dieErr("file inspect", err, "")
 				}
 				data, err := cliClient().GetFile(head, path)
 				if err != nil {
-					die("file inspect: "+err.Error(), 1)
+					dieErr("file inspect", err, "")
 				}
 				detail(
 					[2]string{"path", path},
 					[2]string{"size", HumanSize(uint64(len(data)))},
 				)
-			},
-		},
-		&cobra.Command{
-			Use:  "list <repo@branch>[:path]",
-			Args: cobra.ExactArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				repo, branch, path, err := parseRef(args[0])
-				if err != nil {
-					die(err.Error(), 2)
-				}
-				head, err := resolveCommitRef(cliClient(), repo, branch)
-				if err != nil {
-					die("file list: "+err.Error(), 1)
-				}
-				var files []client.FileInfo
-				if path != "" {
-					files, err = cliClient().ListFilesGlob(head, listingGlob(path))
-				} else {
-					files, err = cliClient().ListFiles(head)
-				}
-				if err != nil {
-					die("file list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(files))
-				for _, f := range files {
-					rows = append(rows, []string{f.Path, HumanSize(f.Size)})
-				}
-				table([]string{"PATH", "SIZE"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no files")
-				}
 			},
 		},
 	)
@@ -789,17 +744,17 @@ func newFileCmd() *cobra.Command {
 			}
 			srcHead, err := cliClient().HeadCommit(srcRepo, srcBranch)
 			if err != nil {
-				die("file copy: "+err.Error(), 1)
+				dieErr("file copy", err, "")
 			}
 			dst, err := cliClient().StartCommit(dstRepo, dstBranch, "")
 			if err != nil {
-				die("file copy: "+err.Error(), 1)
+				dieErr("file copy", err, "")
 			}
 			if err := cliClient().CopyFile(dst.ID, dstPath, srcHead.ID, srcPath, fileOverwrite); err != nil {
-				die("file copy: "+err.Error(), 1)
+				dieErr("file copy", err, "")
 			}
 			if _, err := cliClient().FinishCommit(dst.ID, "", false); err != nil {
-				die("file copy: "+err.Error(), 1)
+				dieErr("file copy", err, "")
 			}
 			fmt.Printf("copied %s to %s@%s:%s (commit %s)\n", srcPath, dstRepo, dstBranch, dstPath, dst.ID)
 		},
@@ -821,13 +776,13 @@ func newFileCmd() *cobra.Command {
 				}
 				cm, err := cliClient().StartCommit(repo, branch, "")
 				if err != nil {
-					die("file delete: "+err.Error(), 1)
+					dieErr("file delete", err, "")
 				}
 				if err := cliClient().DeleteFile(cm.ID, path); err != nil {
-					die("file delete: "+err.Error(), 1)
+					dieErr("file delete", err, "")
 				}
 				if _, err := cliClient().FinishCommit(cm.ID, "", false); err != nil {
-					die("file delete: "+err.Error(), 1)
+					dieErr("file delete", err, "")
 				}
 				fmt.Printf("deleted %s@%s:%s (commit %s)\n", repo, branch, path, cm.ID)
 			},
@@ -836,7 +791,10 @@ func newFileCmd() *cobra.Command {
 	return cmd
 }
 
-var fileOverwrite bool
+var (
+	fileOverwrite bool
+	fileGetOut    string
+)
 
 func newCheckCmd() *cobra.Command {
 	return &cobra.Command{
@@ -844,7 +802,7 @@ func newCheckCmd() *cobra.Command {
 		Short: "consistency check (fsck analog)",
 		Run: func(_ *cobra.Command, _ []string) {
 			if err := cliClient().Check(); err != nil {
-				die("check: "+err.Error(), 1)
+				dieErr("check", err, "")
 			}
 			fmt.Println("ok")
 		},
@@ -853,36 +811,24 @@ func newCheckCmd() *cobra.Command {
 
 func newJobCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "job", Short: "manage jobs"}
-	cmd.AddCommand(
-		&cobra.Command{
-			Use:  "list [pipeline]",
-			Args: cobra.MaximumNArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				filter := client.JobFilter{}
-				if len(args) == 1 {
-					filter.Pipeline = args[0]
-				}
-				js, err := cliClient().ListJobsFiltered(filter)
-				if err != nil {
-					die("job list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(js))
-				for _, j := range js {
-					rows = append(rows, []string{j.ID, j.Pipeline, j.State})
-				}
-				table([]string{"ID", "PIPELINE", "STATE"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no jobs")
-				}
-			},
+	list := &cobra.Command{
+		Use:  "list [pipeline]",
+		Args: cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			runJobList(args, jobStates)
 		},
+	}
+	list.Flags().StringSliceVarP(&jobStates, "state", "s", nil, "only jobs in these states (repeatable)")
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
+	cmd.AddCommand(list)
+	cmd.AddCommand(
 		&cobra.Command{
 			Use:  "inspect <id>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				j, err := cliClient().InspectJob(args[0])
 				if err != nil {
-					die("job inspect: "+err.Error(), 1)
+					dieErr("job inspect", err, "")
 				}
 				rows := [][2]string{
 					{"id", j.ID},
@@ -906,7 +852,7 @@ func newJobCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().DeleteJob(args[0]); err != nil {
-					die("job delete: "+err.Error(), 1)
+					dieErr("job delete", err, "")
 				}
 				fmt.Printf("deleted job %s\n", args[0])
 			},
@@ -916,7 +862,7 @@ func newJobCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().StopJob(args[0]); err != nil {
-					die("job stop: "+err.Error(), 1)
+					dieErr("job stop", err, "")
 				}
 				fmt.Printf("stopped job %s\n", args[0])
 			},
@@ -926,7 +872,7 @@ func newJobCmd() *cobra.Command {
 			Args: cobra.ExactArgs(2),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().RestartDatum(args[0], args[1]); err != nil {
-					die("job restart-datum: "+err.Error(), 1)
+					dieErr("job restart-datum", err, "")
 				}
 				fmt.Printf("restarted datum %s\n", args[1])
 			},
@@ -935,34 +881,152 @@ func newJobCmd() *cobra.Command {
 	return cmd
 }
 
+// jobStates is the shared --state filter of `job list` and `ps`.
+var jobStates []string
+
+// runJobList is the shared listing of `job list` and `ps`: pipeline
+// filter, repeatable state filter, table or JSON.
+func runJobList(args []string, states []string) {
+	filter := client.JobFilter{}
+	if len(args) == 1 {
+		filter.Pipeline = args[0]
+	}
+	filter.States = states
+	js, err := cliClient().ListJobsFiltered(filter)
+	if err != nil {
+		dieErr("job list", err, "")
+	}
+	if jsonOut {
+		emitJSON(js)
+		return
+	}
+	rows := make([][]string, 0, len(js))
+	for _, j := range js {
+		rows = append(rows, []string{j.ID, j.Pipeline, j.State})
+	}
+	table([]string{"ID", "PIPELINE", "STATE"}, rows)
+	if len(rows) == 0 {
+		fmt.Println("no jobs")
+	}
+}
+
+// psCmd is the ps-style face of `job list`: `sandman ps [pipeline]`.
+func psCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "ps [pipeline]",
+		Short: "list jobs (alias for `job list`)",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			runJobList(args, jobStates)
+		},
+	}
+	cmd.Flags().StringSliceVarP(&jobStates, "state", "s", nil, "only jobs in these states (repeatable)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
+	return cmd
+}
+
+// statusCmd is the one-glance view: daemon version, registered hosts,
+// pipelines by state, jobs by state — the first thing to type when
+// something feels off.
+func statusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "one-glance view: daemon, hosts, pipelines, jobs",
+		Args:  cobra.NoArgs,
+		Run: func(_ *cobra.Command, _ []string) {
+			c := cliClient()
+			ver, err := c.Version()
+			if err != nil {
+				dieErr("status", err, "")
+			}
+			fmt.Printf("daemon    %s @ %s\n", ver, addr)
+			hosts, err := c.Hosts()
+			if err != nil {
+				dieErr("status", err, "")
+			}
+			gpuHosts := 0
+			for _, h := range hosts {
+				if len(h.Gpus) > 0 {
+					gpuHosts++
+				}
+			}
+			fmt.Printf("hosts     %d registered", len(hosts))
+			if gpuHosts > 0 {
+				fmt.Printf(" (%d with GPUs)", gpuHosts)
+			}
+			fmt.Println()
+			ps, err := c.ListPipelines()
+			if err != nil {
+				dieErr("status", err, "")
+			}
+			fmt.Printf("pipelines %d (%s)\n", len(ps), countStates(ps, func(p client.PipelineInfo) string { return p.State }))
+			js, err := c.ListJobsFiltered(client.JobFilter{})
+			if err != nil {
+				dieErr("status", err, "")
+			}
+			fmt.Printf("jobs      %d (%s)\n", len(js), countStates(js, func(j client.Job) string { return j.State }))
+		},
+	}
+	return cmd
+}
+
+// countStates renders a state histogram of State-carrying records:
+// "2 running, 1 queued, 9 success"; an empty list prints as "none".
+func countStates[T any](items []T, state func(T) string) string {
+	if len(items) == 0 {
+		return "none"
+	}
+	counts := map[string]int{}
+	var order []string
+	for _, it := range items {
+		s := state(it)
+		if _, seen := counts[s]; !seen {
+			order = append(order, s)
+		}
+		counts[s]++
+	}
+	sort.Strings(order)
+	parts := make([]string, 0, len(order))
+	for _, s := range order {
+		parts = append(parts, fmt.Sprintf("%d %s", counts[s], s))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func newDatumCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "datum", Short: "manage datums"}
-	cmd.AddCommand(
-		&cobra.Command{
-			Use:  "list <job>",
-			Args: cobra.ExactArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				page, err := cliClient().ListDatums(args[0], 0, 0)
-				if err != nil {
-					die("datum list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(page.Datums))
-				for _, d := range page.Datums {
-					rows = append(rows, []string{d.ID, d.State})
-				}
-				table([]string{"ID", "STATE"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no datums")
-				}
-			},
+	list := &cobra.Command{
+		Use:  "list <job>",
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			page, err := cliClient().ListDatums(args[0], 0, 0)
+			if err != nil {
+				dieErr("datum list", err, "")
+			}
+			if jsonOut {
+				emitJSON(page.Datums)
+				return
+			}
+			rows := make([][]string, 0, len(page.Datums))
+			for _, d := range page.Datums {
+				rows = append(rows, []string{d.ID, d.State})
+			}
+			table([]string{"ID", "STATE"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no datums")
+			}
 		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
+	cmd.AddCommand(list)
+	cmd.AddCommand(
 		&cobra.Command{
 			Use:  "inspect <job> <datum>",
 			Args: cobra.ExactArgs(2),
 			Run: func(_ *cobra.Command, args []string) {
 				d, err := cliClient().InspectDatum(args[0], args[1])
 				if err != nil {
-					die("datum inspect: "+err.Error(), 1)
+					dieErr("datum inspect", err, "")
 				}
 				detail(
 					[2]string{"id", d.ID},
@@ -978,7 +1042,7 @@ func newDatumCmd() *cobra.Command {
 			Args: cobra.ExactArgs(2),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().RestartDatum(args[0], args[1]); err != nil {
-					die("datum restart: "+err.Error(), 1)
+					dieErr("datum restart", err, "")
 				}
 				fmt.Printf("restarted datum %s\n", args[1])
 			},
@@ -989,13 +1053,72 @@ func newDatumCmd() *cobra.Command {
 
 func newPipelineCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "pipeline", Short: "manage pipelines"}
-	create := &cobra.Command{
-		Use:  "create -f <spec.json>",
-		Args: cobra.NoArgs,
+	list := &cobra.Command{
+		Use: "list",
 		Run: func(_ *cobra.Command, _ []string) {
-			p, err := readPipelineSpec(specFile)
+			ps, err := cliClient().ListPipelines()
 			if err != nil {
-				die("pipeline create: "+err.Error(), 1)
+				dieErr("pipeline list", err, "")
+			}
+			if jsonOut {
+				emitJSON(ps)
+				return
+			}
+			rows := make([][]string, 0, len(ps))
+			for _, p := range ps {
+				rows = append(rows, []string{p.Name, p.State, fmt.Sprintf("%d", p.Version)})
+			}
+			table([]string{"NAME", "STATE", "VERSION"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no pipelines")
+			}
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
+	run := &cobra.Command{
+		Use:  "run <name>",
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			j, err := cliClient().RunPipeline(args[0], nil, "")
+			if err != nil {
+				dieErr("pipeline run", err, "")
+			}
+			if !pipelineWait {
+				fmt.Println(j.ID)
+				return
+			}
+			c := cliClient()
+			fmt.Printf("job %s started, waiting for it to settle...\n", j.ID)
+			state := j.State
+			for !isTerminalJob(state) {
+				time.Sleep(time.Second)
+				cur, err := c.InspectJob(j.ID)
+				if err != nil {
+					dieErr("pipeline run", err, "")
+				}
+				state = cur.State
+			}
+			fmt.Printf("job %s: %s\n", j.ID, state)
+			if state != "success" {
+				os.Exit(1)
+			}
+		},
+	}
+	run.Flags().BoolVarP(&pipelineWait, "wait", "w", false, "wait for the job to settle (exit 1 unless it succeeds)")
+	create := &cobra.Command{
+		Use:   "create [name]",
+		Short: "create a pipeline from a spec file (-f) or builder flags",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			p, fromFlags, err := pipelineFromArgs(args)
+			if err != nil {
+				dieErr("pipeline create", err, "")
+			}
+			if !fromFlags {
+				p, err = readPipelineSpec(specFile)
+				if err != nil {
+					dieErr("pipeline create", err, "")
+				}
 			}
 			tx := txID
 			if tx == "" {
@@ -1003,25 +1126,33 @@ func newPipelineCmd() *cobra.Command {
 			}
 			if tx != "" {
 				if err := cliClient().CreatePipelineTx(p, tx); err != nil {
-					die("pipeline create: "+err.Error(), 1)
+					dieErr("pipeline create", err, "")
 				}
 			} else if err := cliClient().CreatePipeline(p); err != nil {
-				die("pipeline create: "+err.Error(), 1)
+				dieErr("pipeline create", err, "")
 			}
 			fmt.Printf("created pipeline %s\n", p.Name)
 		},
 	}
 	create.Flags().StringVarP(&specFile, "spec", "f", "-", "pipeline spec JSON file ('-' = stdin)")
 	create.Flags().StringVar(&txID, "tx", "", "stage the create in this transaction")
+	addPipelineBuilderFlags(create)
 	cmd.AddCommand(create)
 
 	update := &cobra.Command{
-		Use:  "update -f <spec.json>",
-		Args: cobra.NoArgs,
-		Run: func(_ *cobra.Command, _ []string) {
-			p, err := readPipelineSpec(specFile)
+		Use:   "update [name]",
+		Short: "update a pipeline from a spec file (-f) or builder flags",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			p, fromFlags, err := pipelineFromArgs(args)
 			if err != nil {
-				die("pipeline update: "+err.Error(), 1)
+				dieErr("pipeline update", err, "")
+			}
+			if !fromFlags {
+				p, err = readPipelineSpec(specFile)
+				if err != nil {
+					dieErr("pipeline update", err, "")
+				}
 			}
 			p.Update = true
 			tx := txID
@@ -1030,16 +1161,17 @@ func newPipelineCmd() *cobra.Command {
 			}
 			if tx != "" {
 				if err := cliClient().CreatePipelineTx(p, tx); err != nil {
-					die("pipeline update: "+err.Error(), 1)
+					dieErr("pipeline update", err, "")
 				}
 			} else if err := cliClient().CreatePipeline(p); err != nil {
-				die("pipeline update: "+err.Error(), 1)
+				dieErr("pipeline update", err, "")
 			}
 			fmt.Printf("updated pipeline %s\n", p.Name)
 		},
 	}
 	update.Flags().StringVarP(&specFile, "spec", "f", "-", "pipeline spec JSON file ('-' = stdin)")
 	update.Flags().StringVar(&txID, "tx", "", "stage the update in this transaction")
+	addPipelineBuilderFlags(update)
 	cmd.AddCommand(update)
 
 	pdel := &cobra.Command{
@@ -1047,37 +1179,21 @@ func newPipelineCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			if err := cliClient().DeletePipeline(args[0], forcePipelineDelete, false); err != nil {
-				die("pipeline delete: "+err.Error(), 1)
+				dieErr("pipeline delete", err, "")
 			}
 			fmt.Printf("deleted pipeline %s\n", args[0])
 		},
 	}
 	pdel.Flags().BoolVar(&forcePipelineDelete, "force", false, "delete a pipeline even if it has downstream consumers")
 	cmd.AddCommand(
-		&cobra.Command{
-			Use: "list",
-			Run: func(_ *cobra.Command, _ []string) {
-				ps, err := cliClient().ListPipelines()
-				if err != nil {
-					die("pipeline list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(ps))
-				for _, p := range ps {
-					rows = append(rows, []string{p.Name, p.State, fmt.Sprintf("%d", p.Version)})
-				}
-				table([]string{"NAME", "STATE", "VERSION"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no pipelines")
-				}
-			},
-		},
+		list,
 		&cobra.Command{
 			Use:  "inspect <name>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				p, err := cliClient().InspectPipeline(args[0])
 				if err != nil {
-					die("pipeline inspect: "+err.Error(), 1)
+					dieErr("pipeline inspect", err, "")
 				}
 				detail(
 					[2]string{"name", p.Name},
@@ -1093,7 +1209,7 @@ func newPipelineCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().StartPipeline(args[0]); err != nil {
-					die("pipeline start: "+err.Error(), 1)
+					dieErr("pipeline start", err, "")
 				}
 				fmt.Printf("started pipeline %s\n", args[0])
 			},
@@ -1103,28 +1219,18 @@ func newPipelineCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().StopPipeline(args[0]); err != nil {
-					die("pipeline stop: "+err.Error(), 1)
+					dieErr("pipeline stop", err, "")
 				}
 				fmt.Printf("stopped pipeline %s\n", args[0])
 			},
 		},
-		&cobra.Command{
-			Use:  "run <name>",
-			Args: cobra.ExactArgs(1),
-			Run: func(_ *cobra.Command, args []string) {
-				j, err := cliClient().RunPipeline(args[0], nil, "")
-				if err != nil {
-					die("pipeline run: "+err.Error(), 1)
-				}
-				fmt.Println(j.ID)
-			},
-		},
+		run,
 		&cobra.Command{
 			Use:  "run-cron <name>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().TriggerCron(args[0]); err != nil {
-					die("pipeline run-cron: "+err.Error(), 1)
+					dieErr("pipeline run-cron", err, "")
 				}
 				fmt.Printf("triggered %s\n", args[0])
 			},
@@ -1135,15 +1241,15 @@ func newPipelineCmd() *cobra.Command {
 			Run: func(_ *cobra.Command, args []string) {
 				p, err := cliClient().InspectPipeline(args[0])
 				if err != nil {
-					die("pipeline extract: "+err.Error(), 1)
+					dieErr("pipeline extract", err, "")
 				}
 				b, err := json.Marshal(p)
 				if err != nil {
-					die("pipeline extract: "+err.Error(), 1)
+					dieErr("pipeline extract", err, "")
 				}
 				out, err := normalizeSpec(b)
 				if err != nil {
-					die("pipeline extract: "+err.Error(), 1)
+					dieErr("pipeline extract", err, "")
 				}
 				fmt.Println(string(out))
 			},
@@ -1154,27 +1260,27 @@ func newPipelineCmd() *cobra.Command {
 			Run: func(_ *cobra.Command, args []string) {
 				p, err := cliClient().InspectPipeline(args[0])
 				if err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				raw, err := json.Marshal(p)
 				if err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				// the editor file is the normalized spec, not the raw
 				// inspection: the strict spec decoder rejects the
 				// inspection's state/version/jobCounts fields
 				b, err := normalizeSpec(raw)
 				if err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				f, err := os.CreateTemp("", "sandman-pipeline-*.json")
 				if err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				name := f.Name()
 				defer os.Remove(name)
 				if _, err := f.Write(b); err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				f.Close()
 				editor := os.Getenv("EDITOR")
@@ -1184,15 +1290,15 @@ func newPipelineCmd() *cobra.Command {
 				cmd := exec.Command("sh", "-c", editor+" "+strconv.Quote(name))
 				cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 				if err := cmd.Run(); err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				spec, err := readPipelineSpec(name)
 				if err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				spec.Update = true
 				if err := cliClient().CreatePipeline(spec); err != nil {
-					die("pipeline edit: "+err.Error(), 1)
+					dieErr("pipeline edit", err, "")
 				}
 				fmt.Printf("updated pipeline %s\n", spec.Name)
 			},
@@ -1202,9 +1308,144 @@ func newPipelineCmd() *cobra.Command {
 }
 
 var (
-	specFile string
-	txID     string
+	specFile     string
+	txID         string
+	pipelineWait bool
 )
+
+// isTerminalJob reports whether a job state is settled: the --wait
+// polling loop stops there.
+func isTerminalJob(state string) bool {
+	switch state {
+	case "success", "failure", "killed", "skipped":
+		return true
+	}
+	return false
+}
+
+// ---- pipeline builder flags ----
+//
+// `pipeline create mypipe --image x --cmd 'sh -c hi' --input in@master
+// --gpu 1` — the ad-hoc path; the full spec file (-f) remains the
+// complete-control path. The two are mutually exclusive: a name means
+// "build from flags", -f (or stdin) means "use this spec".
+
+var (
+	pipelineImage       string
+	pipelineCmd         string
+	pipelineInput       string
+	pipelineGlob        string
+	pipelineCron        string
+	pipelinePlacement   string
+	pipelineDescription string
+	pipelineParallelism int
+	pipelineGPU         int
+	pipelineCPU         float64
+	pipelineMemory      string
+	pipelineStandby     bool
+	pipelineAutoscaling bool
+	pipelineReprocess   bool
+	pipelineEnableStats bool
+	pipelineEnv         []string
+	pipelineSecrets     []string
+)
+
+func addPipelineBuilderFlags(cmd *cobra.Command) {
+	f := cmd.Flags()
+	f.StringVar(&pipelineImage, "image", "", "transform image (e.g. nvidia/cuda:12.4.1-base-ubuntu22.04)")
+	f.StringVar(&pipelineCmd, "cmd", "", "transform command, whitespace-split (e.g. 'sh -c nvidia-smi')")
+	f.StringVar(&pipelineInput, "input", "", "input repo[@branch] (e.g. in@master)")
+	f.StringVar(&pipelineGlob, "glob", "", "input file glob (default: all files)")
+	f.StringVar(&pipelineCron, "cron", "", "cron input schedule (e.g. '@every 5m') — replaces --input")
+	f.StringVar(&pipelinePlacement, "placement", "", "placement label a host must bear")
+	f.StringVar(&pipelineDescription, "description", "", "human description")
+	f.IntVar(&pipelineParallelism, "parallelism", 0, "constant parallelism (default: 1)")
+	f.IntVar(&pipelineGPU, "gpu", 0, "GPUs per datum worker (0 = none)")
+	f.Float64Var(&pipelineCPU, "cpu", 0, "CPU cores per datum worker (fractional allowed)")
+	f.StringVar(&pipelineMemory, "memory", "", "memory request per datum worker (e.g. 100M, 2G)")
+	f.BoolVar(&pipelineStandby, "standby", false, "idle until work arrives")
+	f.BoolVar(&pipelineAutoscaling, "autoscaling", false, "scale workers to the datum count")
+	f.BoolVar(&pipelineReprocess, "reprocess", false, "re-execute all datums on the next job")
+	f.BoolVar(&pipelineEnableStats, "enable-stats", false, "persist per-datum statistics")
+	f.StringSliceVar(&pipelineEnv, "env", nil, "environment variable K=V (repeatable)")
+	f.StringSliceVar(&pipelineSecrets, "secret", nil, "bind a secret's keys into the environment (repeatable)")
+}
+
+// pipelineFromArgs resolves the create/update input: a positional name
+// builds a spec from the builder flags; no positional uses -f. Returns
+// the pipeline, whether flags built it, and a validation error.
+func pipelineFromArgs(args []string) (client.Pipeline, bool, error) {
+	if len(args) == 0 {
+		return client.Pipeline{}, false, nil
+	}
+	if specFile != "-" {
+		return client.Pipeline{}, false, fmt.Errorf("give either a pipeline name (with flags) or -f, not both")
+	}
+	p, err := buildPipelineFromFlags(args[0])
+	return p, true, err
+}
+
+func buildPipelineFromFlags(name string) (client.Pipeline, error) {
+	var p client.Pipeline
+	p.Name = name
+	p.Description = pipelineDescription
+	if pipelineCron != "" && pipelineInput != "" {
+		return p, fmt.Errorf("--cron and --input are mutually exclusive")
+	}
+	if pipelineImage == "" && pipelineCmd == "" {
+		return p, fmt.Errorf("a transform needs --image (or use -f spec.json)")
+	}
+	p.Transform = &client.Transform{
+		Image: pipelineImage,
+		Cmd:   strings.Fields(pipelineCmd),
+	}
+	if len(pipelineEnv) > 0 {
+		env := map[string]string{}
+		for _, kv := range pipelineEnv {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok || k == "" {
+				return p, fmt.Errorf("env %q: want K=V", kv)
+			}
+			env[k] = v
+		}
+		p.Transform.Env = env
+	}
+	for _, s := range pipelineSecrets {
+		p.Transform.Secrets = append(p.Transform.Secrets, client.SecretMount{Name: s, EnvVar: s})
+	}
+	if pipelineMemory != "" || pipelineCPU > 0 || pipelineGPU > 0 {
+		p.Transform.ResourceRequests = &client.ResourceRequests{
+			Memory: pipelineMemory,
+			CPU:    pipelineCPU,
+			GPU:    pipelineGPU,
+		}
+	}
+	switch {
+	case pipelineCron != "":
+		p.Input = &client.Input{Cron: pipelineCron}
+	case pipelineInput != "":
+		repo, branch, _, err := parseRef(pipelineInput)
+		if err != nil {
+			return p, err
+		}
+		in := &client.Input{Repo: repo, Glob: pipelineGlob}
+		if branch != "" && branch != "master" {
+			in.Branch = branch
+		}
+		p.Input = in
+	default:
+		return p, fmt.Errorf("a pipeline needs --input repo[@branch] (or --cron, or use -f spec.json)")
+	}
+	if pipelineParallelism > 0 {
+		p.Parallelism = &client.Parallelism{Constant: pipelineParallelism}
+	}
+	p.Placement = pipelinePlacement
+	p.Standby = pipelineStandby
+	p.Autoscaling = pipelineAutoscaling
+	p.Reprocess = pipelineReprocess
+	p.EnableStats = pipelineEnableStats
+	return p, nil
+}
 
 // normalizeSpec strips a pipeline inspection down to its spec shape so
 // the result round-trips through `pipeline create -f`: the inspection
@@ -1255,11 +1496,11 @@ func newFlushCmd() *cobra.Command {
 			}
 			head, err := cliClient().HeadCommit(repo, branch)
 			if err != nil {
-				die("flush: "+err.Error(), 1)
+				dieErr("flush", err, "")
 			}
 			js, err := cliClient().Flush(head.ID, flushTimeout)
 			if err != nil {
-				die("flush: "+err.Error(), 1)
+				dieErr("flush", err, "")
 			}
 			rows := make([][]string, 0, len(js))
 			for _, j := range js {
@@ -1280,6 +1521,28 @@ var flushTimeout time.Duration
 
 func newSecretCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "secret", Short: "manage secrets"}
+	list := &cobra.Command{
+		Use: "list",
+		Run: func(_ *cobra.Command, _ []string) {
+			ss, err := cliClient().ListSecrets()
+			if err != nil {
+				dieErr("secret list", err, "")
+			}
+			if jsonOut {
+				emitJSON(ss)
+				return
+			}
+			rows := make([][]string, 0, len(ss))
+			for _, s := range ss {
+				rows = append(rows, []string{s.Name, s.Type})
+			}
+			table([]string{"NAME", "TYPE"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no secrets")
+			}
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	create := &cobra.Command{
 		Use:  "create <name> [<json|->]",
 		Args: cobra.RangeArgs(1, 2),
@@ -1288,17 +1551,17 @@ func newSecretCmd() *cobra.Command {
 			if len(args) == 2 && args[1] != "-" {
 				f, err := os.Open(args[1])
 				if err != nil {
-					die("secret create: "+err.Error(), 1)
+					dieErr("secret create", err, "")
 				}
 				defer f.Close()
 				r = f
 			}
 			var data map[string]string
 			if err := json.NewDecoder(r).Decode(&data); err != nil {
-				die("secret create: data: "+err.Error(), 1)
+				dieErr("secret create", err, "")
 			}
 			if err := cliClient().CreateSecret(args[0], data); err != nil {
-				die("secret create: "+err.Error(), 1)
+				dieErr("secret create", err, "")
 			}
 			fmt.Printf("created secret %s\n", args[0])
 		},
@@ -1311,7 +1574,7 @@ func newSecretCmd() *cobra.Command {
 			Run: func(_ *cobra.Command, args []string) {
 				s, err := cliClient().InspectSecret(args[0])
 				if err != nil {
-					die("secret inspect: "+err.Error(), 1)
+					dieErr("secret inspect", err, "")
 				}
 				detail(
 					[2]string{"name", s.Name},
@@ -1320,29 +1583,13 @@ func newSecretCmd() *cobra.Command {
 				)
 			},
 		},
-		&cobra.Command{
-			Use: "list",
-			Run: func(_ *cobra.Command, _ []string) {
-				ss, err := cliClient().ListSecrets()
-				if err != nil {
-					die("secret list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(ss))
-				for _, s := range ss {
-					rows = append(rows, []string{s.Name, s.Type})
-				}
-				table([]string{"NAME", "TYPE"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no secrets")
-				}
-			},
-		},
+		list,
 		&cobra.Command{
 			Use:  "delete <name>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().DeleteSecret(args[0]); err != nil {
-					die("secret delete: "+err.Error(), 1)
+					dieErr("secret delete", err, "")
 				}
 				fmt.Printf("deleted secret %s\n", args[0])
 			},
@@ -1353,6 +1600,28 @@ func newSecretCmd() *cobra.Command {
 
 func newTagCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "tag", Short: "manage tags"}
+	list := &cobra.Command{
+		Use: "list",
+		Run: func(_ *cobra.Command, _ []string) {
+			ts, err := cliClient().ListTags()
+			if err != nil {
+				dieErr("tag list", err, "")
+			}
+			if jsonOut {
+				emitJSON(ts)
+				return
+			}
+			rows := make([][]string, 0, len(ts))
+			for _, t := range ts {
+				rows = append(rows, []string{t.Name, t.Ref})
+			}
+			table([]string{"NAME", "REF"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no tags")
+			}
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:  "put <name> <src|->",
@@ -1366,10 +1635,10 @@ func newTagCmd() *cobra.Command {
 					data, err = os.ReadFile(args[1])
 				}
 				if err != nil {
-					die("tag put: "+err.Error(), 1)
+					dieErr("tag put", err, "")
 				}
 				if err := cliClient().PutTag(args[0], data); err != nil {
-					die("tag put: "+err.Error(), 1)
+					dieErr("tag put", err, "")
 				}
 				fmt.Printf("put tag %s (%d bytes)\n", args[0], len(data))
 			},
@@ -1380,34 +1649,18 @@ func newTagCmd() *cobra.Command {
 			Run: func(_ *cobra.Command, args []string) {
 				data, err := cliClient().GetTag(args[0])
 				if err != nil {
-					die("tag get: "+err.Error(), 1)
+					dieErr("tag get", err, "")
 				}
 				_, _ = os.Stdout.Write(data)
 			},
 		},
-		&cobra.Command{
-			Use: "list",
-			Run: func(_ *cobra.Command, _ []string) {
-				ts, err := cliClient().ListTags()
-				if err != nil {
-					die("tag list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(ts))
-				for _, t := range ts {
-					rows = append(rows, []string{t.Name, t.Ref})
-				}
-				table([]string{"NAME", "REF"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no tags")
-				}
-			},
-		},
+		list,
 		&cobra.Command{
 			Use:  "delete <name>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().DeleteTag(args[0]); err != nil {
-					die("tag delete: "+err.Error(), 1)
+					dieErr("tag delete", err, "")
 				}
 				fmt.Printf("deleted tag %s\n", args[0])
 			},
@@ -1418,14 +1671,22 @@ func newTagCmd() *cobra.Command {
 
 func newLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "logs",
+		Use:   "logs [pipeline-or-job]",
 		Short: "job and pipeline logs",
-		Run: func(_ *cobra.Command, _ []string) {
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			if len(args) == 1 {
+				if store.IsCommitID(args[0]) {
+					logJob = args[0]
+				} else {
+					logPipeline = args[0]
+				}
+			}
 			params := client.LogParams{Pipeline: logPipeline, Job: logJob, Since: logSince}
 			if logFollow {
 				rc, err := cliClient().FollowLogs(params)
 				if err != nil {
-					die("logs: "+err.Error(), 1)
+					dieErr("logs", err, "")
 				}
 				defer rc.Close()
 				// the follow stream is NDJSON {"line": ...}; decode and
@@ -1444,7 +1705,7 @@ func newLogsCmd() *cobra.Command {
 			}
 			lines, err := cliClient().Logs(params)
 			if err != nil {
-				die("logs: "+err.Error(), 1)
+				dieErr("logs", err, "")
 			}
 			for _, l := range lines {
 				fmt.Println(l)
@@ -1467,13 +1728,35 @@ var (
 
 func newTransactionCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "transaction", Short: "manage transactions"}
+	list := &cobra.Command{
+		Use: "list",
+		Run: func(_ *cobra.Command, _ []string) {
+			ts, err := cliClient().ListTransactions()
+			if err != nil {
+				dieErr("transaction list", err, "")
+			}
+			if jsonOut {
+				emitJSON(ts)
+				return
+			}
+			rows := make([][]string, 0, len(ts))
+			for _, tx := range ts {
+				rows = append(rows, []string{tx.ID, fmt.Sprintf("%d ops", len(tx.Ops))})
+			}
+			table([]string{"ID", "OPS"}, rows)
+			if len(rows) == 0 {
+				fmt.Println("no transactions")
+			}
+		},
+	}
+	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(
 		&cobra.Command{
 			Use: "start",
 			Run: func(_ *cobra.Command, _ []string) {
 				id, err := cliClient().StartTransaction()
 				if err != nil {
-					die("transaction start: "+err.Error(), 1)
+					dieErr("transaction start", err, "")
 				}
 				fmt.Println(id)
 			},
@@ -1483,7 +1766,7 @@ func newTransactionCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().FinishTransaction(args[0]); err != nil {
-					die("transaction finish: "+err.Error(), 1)
+					dieErr("transaction finish", err, "")
 				}
 				fmt.Printf("finished transaction %s\n", args[0])
 			},
@@ -1493,35 +1776,19 @@ func newTransactionCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := cliClient().DeleteTransaction(args[0]); err != nil {
-					die("transaction delete: "+err.Error(), 1)
+					dieErr("transaction delete", err, "")
 				}
 				fmt.Printf("deleted transaction %s\n", args[0])
 			},
 		},
-		&cobra.Command{
-			Use: "list",
-			Run: func(_ *cobra.Command, _ []string) {
-				ts, err := cliClient().ListTransactions()
-				if err != nil {
-					die("transaction list: "+err.Error(), 1)
-				}
-				rows := make([][]string, 0, len(ts))
-				for _, tx := range ts {
-					rows = append(rows, []string{tx.ID, fmt.Sprintf("%d ops", len(tx.Ops))})
-				}
-				table([]string{"ID", "OPS"}, rows)
-				if len(rows) == 0 {
-					fmt.Println("no transactions")
-				}
-			},
-		},
+		list,
 		&cobra.Command{
 			Use:  "inspect <id>",
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				tx, err := cliClient().InspectTransaction(args[0])
 				if err != nil {
-					die("transaction inspect: "+err.Error(), 1)
+					dieErr("transaction inspect", err, "")
 				}
 				fmt.Printf("transaction: %s\n", tx.ID)
 				if len(tx.Ops) == 0 {
@@ -1537,7 +1804,7 @@ func newTransactionCmd() *cobra.Command {
 			Args: cobra.ExactArgs(1),
 			Run: func(_ *cobra.Command, args []string) {
 				if err := setActiveTx(args[0]); err != nil {
-					die("transaction resume: "+err.Error(), 1)
+					dieErr("transaction resume", err, "")
 				}
 				fmt.Printf("resumed transaction %s (pipeline create/update will stage into it)\n", args[0])
 			},
@@ -1546,7 +1813,7 @@ func newTransactionCmd() *cobra.Command {
 			Use: "stop",
 			Run: func(_ *cobra.Command, _ []string) {
 				if err := setActiveTx(""); err != nil {
-					die("transaction stop: "+err.Error(), 1)
+					dieErr("transaction stop", err, "")
 				}
 				fmt.Println("no active transaction")
 			},
