@@ -122,7 +122,7 @@ export default {
   },
   template: `
     <div class="breadcrumb">
-      <a href="#/">overview</a> / <a :href="'#/pipelines/' + encodeURIComponent(pipeline)">{{ pipeline }}</a> / <span>{{ shortID(job) }}</span>
+      <a href="#/flow">flow</a> / <a :href="'#/pipelines/' + encodeURIComponent(pipeline)">{{ pipeline }}</a> / <span>{{ shortID(job) }}</span>
     </div>
     <div v-if="err" class="error">{{ err }}</div>
     <template v-if="j">

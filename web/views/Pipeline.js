@@ -54,7 +54,7 @@ export default {
     live() { return this.p && !this.p.stopped; },
   },
   template: `
-    <div class="breadcrumb"><a href="#/">overview</a> / {{ name }}</div>
+    <div class="breadcrumb"><a href="#/flow">flow</a> / {{ name }}</div>
     <div v-if="err" class="error">{{ err }}</div>
     <template v-if="p">
       <section>

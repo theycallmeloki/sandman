@@ -50,7 +50,7 @@ export default {
   },
   template: `
     <div class="breadcrumb">
-      <a href="#/">overview</a> / <a :href="'#/pipelines/' + encodeURIComponent(pipeline)">{{ pipeline }}</a> / <a :href="'#/pipelines/' + encodeURIComponent(pipeline) + '/jobs/' + encodeURIComponent(job)">{{ shortID(job) }}</a> / <span>{{ shortID(datum) }}</span>
+      <a href="#/flow">flow</a> / <a :href="'#/pipelines/' + encodeURIComponent(pipeline)">{{ pipeline }}</a> / <a :href="'#/pipelines/' + encodeURIComponent(pipeline) + '/jobs/' + encodeURIComponent(job)">{{ shortID(job) }}</a> / <span>{{ shortID(datum) }}</span>
     </div>
     <div v-if="err" class="error">{{ err }}</div>
     <template v-if="info">

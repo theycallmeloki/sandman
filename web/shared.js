@@ -78,3 +78,107 @@ export function jobHref(j) {
 export function stateClass(s) {
   return s || "";
 }
+// inputRepos flattens a pipeline input into its repo inputs. Cross/join/
+// group/union members each contribute their repo; cron/git/trigger/spout
+// contribute no repo (they are external drivers, rendered as source
+// pills by the flow view).
+export function inputRepos(inp) {
+  if (!inp) return [];
+  const out = [];
+  const add = (m) => {
+    const repo = (m && (m.repo || m.name)) || "";
+    if (repo) out.push({ repo, branch: m.branch || "" });
+  };
+  if (inp.repo) add(inp);
+  else if (inp.cross) inp.cross.forEach(add);
+  else if (inp.join) inp.join.forEach(add);
+  else if (inp.group) inp.group.forEach(add);
+  else if (inp.union) inp.union.forEach(add);
+  return out;
+}
+
+// chainLayout derives the pipeline chain from the pipeline list alone:
+// a pipeline's output repo is named after the pipeline, so pipeline B is
+// downstream of A exactly when one of B's input repos is A's name.
+// Returns { levels, edges, sources } where levels[0] is the source
+// (non-pipeline) repos and levels[i>0] are the pipelines at that depth,
+// topologically ordered.
+export function chainLayout(pipelines) {
+  const byName = new Map(pipelines.map((p) => [p.name, p]));
+  const level = new Map();
+  const edges = [];
+  const edgeKey = new Set();
+  const sources = [];
+  const seenSources = new Set();
+  for (const p of pipelines) level.set(p.name, 1);
+  // relaxation, cycle-safe: level(P) = 1 + max(level of the pipeline
+  // producing each of P's input repos); cap at the pipeline count so a
+  // (rejected at creation but conceivable) indirect cycle terminates
+  const cap = pipelines.length + 1;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const p of pipelines) {
+      let lv = level.get(p.name);
+      for (const r of inputRepos(p.input)) {
+        if (byName.has(r.repo)) {
+          const k = r.repo + "\u0000" + p.name;
+          if (!edgeKey.has(k)) {
+            edgeKey.add(k);
+            edges.push({ from: r.repo, to: p.name });
+          }
+          lv = Math.max(lv, level.get(r.repo) + 1);
+        } else if (!seenSources.has(r.repo)) {
+          seenSources.add(r.repo);
+          sources.push(r);
+        }
+      }
+      if (lv !== level.get(p.name)) {
+        if (lv > cap) lv = cap;
+        level.set(p.name, lv);
+        changed = true;
+      }
+    }
+  }
+  const maxLevel = Math.max(1, ...level.values());
+  const levels = [];
+  for (let i = 0; i <= maxLevel; i++) levels.push([]);
+  for (const p of pipelines) levels[level.get(p.name)].push(p);
+  return { levels, edges, sources };
+}
+
+// jobPulse tallies the job states a lightweight listing carries. State
+// vocabulary: running | queued | success | failure | killed | skipped.
+export function jobPulse(jobs) {
+  const p = { running: 0, queued: 0, failure: 0, killed: 0, success: 0, skipped: 0, paused: 0 };
+  for (const j of jobs || []) {
+    if (p[j.state] !== undefined) p[j.state] += 1;
+  }
+  return p;
+}
+
+// attentionCount is the header/nav "needs you" badge: pipelines in
+// failure/crashed, jobs failed/killed, hosts with no heartbeat for more
+// than a minute (the registry TTL is 30s, so that is well past dead).
+export function attentionCount(pipelines, jobs, hosts) {
+  let n = 0;
+  for (const p of pipelines || []) {
+    if (p.state === "failure" || p.state === "crashed") n += 1;
+  }
+  const pulse = jobPulse(jobs);
+  n += pulse.failure + pulse.killed;
+  for (const h of hosts || []) {
+    if (hostStale(h)) n += 1;
+  }
+  return n;
+}
+
+// hostStale reports a host whose last heartbeat is older than 60s — the
+// registry keeps stale hosts listed until dropped, so the dashboard can
+// flag them before the operator would notice a missing worker.
+export function hostStale(h) {
+  if (!h || !h.seen) return false;
+  const t = new Date(h.seen).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t > 60 * 1000;
+}
