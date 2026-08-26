@@ -52,6 +52,9 @@ const routes = [
     view: Fleet, props: () => ({}) },
   { re: /^#\/attention$/,
     view: Attention, props: () => ({}) },
+  { re: /^#\/flow$/,
+    view: Flow, props: () => ({}) },
+  // bare "#/" (fresh tab, old bookmark) falls back to the flow view
   { re: /^#\/?$/,
     view: Flow, props: () => ({}) },
 ];
@@ -115,7 +118,7 @@ const app = createApp({
     <header class="top">
       <h1><a href="#/flow">sandmand</a></h1>
       <nav class="tabs">
-        <a v-for="t in tabs" :key="t.id" :href="'#' + t.hash" :class="{ active: tab === t.id }">
+        <a v-for="t in tabs" :key="t.id" :href="t.hash" :class="{ active: tab === t.id }">
           {{ t.label }}
           <span v-if="t.id === 'attention' && pulse.attention > 0" class="badge">{{ pulse.attention }}</span>
         </a>

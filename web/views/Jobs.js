@@ -7,6 +7,7 @@ const LIVE_CAP = 12;
 const JOB_STATES = ["running", "queued", "paused", "success", "failure", "killed", "skipped"];
 
 export default {
+  name: "Jobs",
   data: () => ({ pipelines: [], jobs: [], progs: {}, filter: "", pipeline: "", allVersions: false, err: "", JOB_STATES }),
   mounted() {
     this.load();
