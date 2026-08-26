@@ -484,6 +484,7 @@ func newCommitCmd() *cobra.Command {
 	}
 	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(
+		list,
 		&cobra.Command{
 			Use:  "start <repo>[@branch]",
 			Args: cobra.ExactArgs(1),
@@ -605,6 +606,7 @@ func newBranchCmd() *cobra.Command {
 	}
 	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(
+		list,
 		&cobra.Command{
 			// head defaults to the repo's master head (the reference's
 			// `branch create <repo> <branch> [head]`)

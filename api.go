@@ -241,7 +241,20 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func decodeBody(r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(io.LimitReader(r.Body, 1<<30)).Decode(v)
+	if r.ContentLength == 0 {
+		// an empty body is an empty document: POST /commits/{id}/finish
+		// with no body is a legitimate "no description" request, and
+		// treating it as a parse error rejects otherwise-fine HTTP
+		// clients that omit -d
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<30)).Decode(v); err != nil {
+		if err == io.EOF {
+			return nil // a chunked request with no bytes is empty too
+		}
+		return err
+	}
+	return nil
 }
 
 // ---- repos ----

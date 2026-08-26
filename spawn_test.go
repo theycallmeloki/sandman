@@ -138,6 +138,92 @@ func TestSpoutPassesTransformEnv(t *testing.T) {
 	}
 }
 
+// TestRespawnBackgroundJobs pins G2: after a daemon restart, spout and
+// service pipelines whose records say running must come back up on boot —
+// their jobs died with the old process, and startPipeline alone cannot
+// resurrect them (a restart never sets Stopped, so its already-running
+// guard is a no-op). Stopped pipelines stay down.
+func TestRespawnBackgroundJobs(t *testing.T) {
+	rec := filepath.Join(t.TempDir(), "runs")
+	fakeDocker(t, rec)
+	d := &daemon{state: t.TempDir(), runner: &blockingRunner{}, running: map[string]*runningJob{}}
+	d.store = store.New(filepath.Join(d.state, "store"))
+	sp := &pipelineRec{Pipeline: client.Pipeline{
+		Name: "sp-respawn", Spout: &client.Spout{Marker: "seen"},
+		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "true"}},
+	}, State: stateRunning, Version: 1}
+	sv := &pipelineRec{Pipeline: client.Pipeline{
+		Name: "sv-respawn", Service: &client.Service{},
+		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "true"}},
+	}, State: stateRunning, Version: 1}
+	stopped := &pipelineRec{Pipeline: client.Pipeline{
+		Name: "sp-stopped", Spout: &client.Spout{},
+		Transform: &client.Transform{Image: "alpine", Cmd: []string{"sh", "-c", "true"}},
+	}, State: statePaused, Stopped: true, Version: 1}
+	for _, p := range []*pipelineRec{sp, sv, stopped} {
+		if err := d.savePipeline(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.respawnBackgroundJobs()
+
+	// the spout and service jobs must register and stay up (blockingRunner
+	// holds the service; the fake docker inspect keeps the spout polling);
+	// the stopped pipeline must not spawn — three registrations would
+	// mean it did. The spout's container launch (goroutine-written) must
+	// land in the argv record before we assert on it.
+	deadline := time.Now().Add(3 * time.Second)
+	var spoutArgv []byte
+	for {
+		d.jobsMu.Lock()
+		n := len(d.running)
+		d.jobsMu.Unlock()
+		if b, err := os.ReadFile(rec); err == nil && strings.Contains(string(b), "-spout") {
+			spoutArgv = b
+		}
+		if n == 2 && spoutArgv != nil {
+			break
+		}
+		if n > 2 {
+			t.Fatalf("respawn spawned %d background jobs (stopped pipeline resurrected?), want 2", n)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("respawn brought up %d background jobs, want 2 (spout argv recorded: %v)", n, spoutArgv != nil)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// clean up the goroutines so the test exits promptly
+	d.jobsMu.Lock()
+	ids := make([]string, 0, len(d.running))
+	for id := range d.running {
+		ids = append(ids, id)
+	}
+	d.jobsMu.Unlock()
+	for _, id := range ids {
+		d.cancelJob(id)
+	}
+
+	// exactly one spout container was launched, with its marker env; the
+	// service job ran through the runner (no docker argv) and is covered
+	// by the registration count above
+	lines := strings.Split(strings.TrimSpace(string(spoutArgv)), "\n")
+	var spoutRuns int
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "run ") && !strings.Contains(l, " run ") {
+			continue
+		}
+		if strings.Contains(l, "-spout") {
+			spoutRuns++
+			if !strings.Contains(l, "MARKER=/sandman/marker") {
+				t.Fatalf("respawned spout lost its marker env: %s", l)
+			}
+		}
+	}
+	if spoutRuns != 1 {
+		t.Fatalf("respawn launched %d spout containers, want 1; argv=%s", spoutRuns, spoutArgv)
+	}
+}
+
 func TestServicePreRegistersRunningHandle(t *testing.T) {
 	rec := filepath.Join(t.TempDir(), "kills")
 	fakeDocker(t, rec)

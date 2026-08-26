@@ -346,6 +346,35 @@ func (d *daemon) markStaleJobsFailed() {
 	}
 }
 
+// respawnBackgroundJobs resurrects spout and service pipelines after a
+// daemon restart. Their jobs died with the old process (markStaleJobsFailed
+// records them failed) and nothing else would bring them back: the pipeline
+// record still says "running" — a restart never sets Stopped — so
+// startPipeline is a no-op. Spouts resume from their preserved marker
+// state; services re-materialize the current input head. Stopped or
+// standby pipelines stay down (they are not running work to resurrect).
+func (d *daemon) respawnBackgroundJobs() {
+	entries, err := os.ReadDir(filepath.Join(d.state, "pipelines"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		rec, err := d.loadPipeline(strings.TrimSuffix(e.Name(), ".json"))
+		if err != nil || rec.Stopped || rec.State != stateRunning {
+			continue
+		}
+		switch {
+		case rec.Pipeline.Spout != nil:
+			d.spawnSpoutJob(rec, false)
+		case rec.Pipeline.Service != nil:
+			d.spawnServiceJob(rec)
+		}
+	}
+}
+
 func (d *daemon) mustListJobs() []client.Job {
 	jobs, _ := d.listJobs()
 	return jobs
