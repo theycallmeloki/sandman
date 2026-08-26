@@ -124,6 +124,15 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 		// points at a mount that was never attached
 		argv = append(argv, "-e", "MARKER=/sandman/marker")
 	}
+	// the transform's static environment joins the spout container, as it
+	// does for batch and service jobs — a spout is configured by its
+	// spec, and its env is part of the spec. System-owned names are never
+	// shadowed (reservedEnv plus the spout's MARKER).
+	for k, v := range pl.Pipeline.Transform.Env {
+		if !reservedEnv[k] && k != "MARKER" {
+			argv = append(argv, "-e", k+"="+v)
+		}
+	}
 	argv = append(argv, mounts...)
 	argv = append(argv, pl.Pipeline.Transform.Image, "sh", "-c", joinSh(pl.Pipeline.Transform.Cmd))
 	if pl.Pipeline.Transform.Image == "" {

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +75,66 @@ func TestSpoutPreRegistersRunningHandle(t *testing.T) {
 		if i == 29 {
 			t.Logf("30/30 spawns: handle registered at return, cancel landed, job settled")
 		}
+	}
+}
+
+// TestSpoutPassesTransformEnv pins the contract that a spout container
+// receives the pipeline transform's static environment, like batch and
+// service jobs do — a spout's TRACE_URL/POLL_SECS etc. come from the
+// spec, and silently dropping them makes spouts unconfigurable.
+func TestSpoutPassesTransformEnv(t *testing.T) {
+	rec := filepath.Join(t.TempDir(), "runs")
+	fakeDocker(t, rec)
+	d := &daemon{state: t.TempDir(), runner: &killRecorder{}, running: map[string]*runningJob{}}
+	d.store = store.New(filepath.Join(d.state, "store"))
+	pl := &pipelineRec{Pipeline: client.Pipeline{
+		Name:  "sp-env",
+		Spout: &client.Spout{Marker: "seen"},
+		Transform: &client.Transform{
+			Image: "alpine",
+			Cmd:   []string{"sh", "-c", "true"},
+			Env: map[string]string{
+				"TRACE_URL": "http://192.168.1.147:8090/traces",
+				"OUT":       "evil", // reserved — must not shadow the system value
+				"MARKER":    "evil", // spout-owned — must not shadow
+			},
+		},
+	}}
+	id := d.spawnSpoutJob(pl, false)
+	defer d.cancelJob(id)
+
+	// the container launch runs in the spawn goroutine — poll for the
+	// argv record instead of racing it
+	var raw []byte
+	for i := 0; i < 100; i++ {
+		if b, err := os.ReadFile(rec); err == nil {
+			raw = b
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if raw == nil {
+		t.Fatalf("docker argv record never written to %s", rec)
+	}
+	argv := strings.Fields(string(raw))
+	want := "-e"
+	found := map[string]bool{}
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == want {
+			found[argv[i+1]] = true
+		}
+	}
+	if !found["TRACE_URL=http://192.168.1.147:8090/traces"] {
+		t.Fatalf("spout container argv missing transform env; argv=%v", argv)
+	}
+	if found["OUT=evil"] {
+		t.Fatalf("spout container must not shadow reserved OUT; argv=%v", argv)
+	}
+	if found["MARKER=evil"] {
+		t.Fatalf("spout container must not shadow spout-owned MARKER; argv=%v", argv)
+	}
+	if !found["OUT=/sandman/out"] {
+		t.Fatalf("spout container lost its system OUT; argv=%v", argv)
 	}
 }
 
