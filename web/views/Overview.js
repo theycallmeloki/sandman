@@ -44,7 +44,7 @@ export default {
     <section>
       <h2>Pipelines</h2>
       <div class="grid">
-        <div v-for="p in pipelines" :key="p.name" class="card">
+        <div v-for="p in pipelines" :key="p.name" class="card" :class="{ running: stateOf(p) === 'running' }">
           <a :href="'#/pipelines/' + encodeURIComponent(p.name)"><b>{{ p.name }}</b></a>
           <span :class="'chip ' + stateOf(p)">{{ stateOf(p) }}</span>
           <p v-if="p.description" class="muted" style="margin:6px 0 0">{{ p.description }}</p>

@@ -41,26 +41,44 @@ const routes = [
 ];
 
 const app = createApp({
-  data: () => ({ state, version: "" }),
+  data: () => ({ state, version: "", clock: "" }),
   mounted() {
     onHash();
     window.addEventListener("hashchange", onHash);
     api("/version").then((v) => { this.version = v.version || ""; }).catch(() => {});
+    // a live UTC clock in the header — it never navigates, so a 1s tick is cheap
+    this.tickClock();
+    this.clockTimer = setInterval(this.tickClock, 1000);
   },
   beforeUnmount() {
     window.removeEventListener("hashchange", onHash);
+    clearInterval(this.clockTimer);
+  },
+  methods: {
+    tickClock() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, "0");
+      this.clock = "UTC " + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + ":" + p(d.getUTCSeconds());
+    },
   },
   template: `
     <header class="top">
       <h1><a href="#/">sandmand</a></h1>
       <span class="sub">{{ version ? version + " · " : "" }}read-only dashboard — writes go through the CLI</span>
-      <span style="flex:1"></span>
       <span v-if="state.err" class="error">{{ state.err }}</span>
+      <span class="clock">{{ clock }}</span>
     </header>
     <main>
       <component :is="state.view" v-bind="state.props" v-if="state.view" />
       <p v-if="!state.view && state.err" class="error">{{ state.err }}</p>
     </main>
+    <footer class="foot">
+      <span class="live"><span class="dot"></span>LIVE</span>
+      <span>sandmand · operations console</span>
+      <span class="spacer"></span>
+      <span class="pill">{{ version ? "build " + version : "" }}</span>
+      <span>read-only — writes go through the CLI</span>
+    </footer>
   `,
 });
 

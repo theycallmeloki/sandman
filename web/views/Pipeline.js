@@ -61,7 +61,7 @@ export default {
         <h2>{{ p.name }} <span :class="'chip ' + stateOf()">{{ stateOf() }}</span>
           <span v-if="p.reason" class="muted" style="text-transform:none;letter-spacing:0">— {{ p.reason }}</span>
         </h2>
-        <div class="card">
+        <div class="card" :class="{ running: stateOf() === 'running' }">
           <div class="keyvals">
             <span class="k">input</span><span>{{ inputSummary(p.input) }}</span>
             <span class="k">image</span><span>{{ p.transform && p.transform.image || "—" }}</span>

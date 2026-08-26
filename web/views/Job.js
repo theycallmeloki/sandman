@@ -146,26 +146,26 @@ export default {
         <h2>Progress
           <span class="muted" style="text-transform:none;letter-spacing:0">— {{ prog().done }}/{{ prog().total }} datums</span>
         </h2>
-        <div class="card">
+        <div class="card" :class="{ running: live }">
           <div class="progressbar" :title="prog().done + '/' + prog().total + ' done, ' + prog().failed + ' failed'">
             <div class="fill ok" :style="{ width: pct('ok') + '%' }"></div>
             <div class="fill bad" :style="{ width: pct('failed') + '%', left: pct('ok') + '%' }"></div>
           </div>
           <div class="keyvals">
             <span class="k">done</span>
-              <span><span class="chip success">{{ prog().done }}</span> <span class="chip failure">{{ prog().failed }} failed</span></span>
+              <span><span :key="prog().done" class="chip success tick">{{ prog().done }}</span> <span :key="'f' + prog().failed" class="chip failure tick">{{ prog().failed }} failed</span></span>
             <span class="k">in progress</span>
-              <span><span class="chip running">{{ prog().running }} running</span> <span class="chip queued">{{ prog().queued }} queued</span></span>
+              <span><span :key="'r' + prog().running" class="chip running tick">{{ prog().running }} running</span> <span :key="'q' + prog().queued" class="chip queued tick">{{ prog().queued }} queued</span></span>
             <span class="k">avg / datum</span><span>{{ prog().avgProcessTime ? prog().avgProcessTime.toFixed(1) + "s" : "—" }}</span>
             <span class="k">eta</span><span>{{ etaText() }}</span>
-            <span v-if="live" class="k">workers</span><span v-if="live" class="workers">
+            <span v-if="live" class="workers">
               <span v-for="w in workerList()" :key="w.worker" class="worker"
+                    :class="{ working: w.datum }"
                     :title="w.datum ? 'processing ' + w.datum + (w.started ? ' since ' + w.started : '') : 'idle'">
-                w{{ w.worker }}<span v-if="w.datum" class="muted"> · {{ shortID(w.datum) }}</span><span v-if="w.queue > 0" class="muted"> · {{ w.queue }} queued</span>
+                <span v-if="w.datum" class="eq"><i></i><i></i><i></i><i></i></span>w{{ w.worker }}<span v-if="w.datum" class="muted"> · {{ shortID(w.datum) }}</span><span v-if="w.queue > 0" class="muted"> · {{ w.queue }} queued</span>
               </span>
               <span v-if="!workerList().length" class="muted">—</span>
             </span>
-          </div>
         </div>
       </section>
       <section>
