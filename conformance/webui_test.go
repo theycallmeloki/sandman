@@ -35,12 +35,16 @@ func TestWebUIDashboard(t *testing.T) {
 		t.Fatalf("GET / body lacks the dashboard mount point")
 	}
 
-	// assets resolve with the right content types
+	// assets resolve with the right content types — every question-first
+	// view ships with the page
 	for _, p := range []string{
 		"/ui/app.js",
 		"/ui/shared.js",
 		"/ui/style.css",
-		"/ui/views/Overview.js",
+		"/ui/views/Flow.js",
+		"/ui/views/Attention.js",
+		"/ui/views/Jobs.js",
+		"/ui/views/Fleet.js",
 	} {
 		resp, body = get(p)
 		if resp.StatusCode != 200 {

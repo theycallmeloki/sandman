@@ -167,6 +167,14 @@ func (containerRunner) Run(spec JobSpec) RunResult {
 			args = append(args, "--cpus", fmt.Sprintf("%g", spec.ResourceLimits.CPU))
 		}
 	}
+	if spec.ResourceRequests != nil {
+		if spec.ResourceRequests.Memory != "" {
+			args = append(args, "--memory-reservation", spec.ResourceRequests.Memory)
+		}
+		if spec.ResourceRequests.CPU > 0 && (spec.ResourceLimits == nil || spec.ResourceLimits.CPU == 0) {
+			args = append(args, "--cpus", fmt.Sprintf("%g", spec.ResourceRequests.CPU))
+		}
+	}
 	if len(spec.Gpus) > 0 {
 		// GPU allocation is explicit per run: docker gets the concrete
 		// device indices, so a GPU job sees exactly its own device and
