@@ -16,15 +16,18 @@ spec:
   # v4 schema: the child rule list is `attachments` (childResources was
   # the pre-v4 name and is silently pruned — the controller then never
   # sees its own pods and tries to create them forever).
-  # updateStrategy: InPlace — the worker's args/env are pod-mutable, so
-  # label changes patch the pod in place. Recreate delete+recreates, but
-  # the auto-minted kube-api-access token volume (random suffix per
-  # create) made every dry-run differ, so the fleet churned forever.
+  # updateStrategy: Recreate — label changes delete+recreate the worker
+  # pod (k8s forbids pod updates to args, so InPlace cannot apply them;
+  # OnDelete never touches existing children). Convergence requires the
+  # desired spec to match the stored pod byte-for-byte: no auto-mounted
+  # service-account token volume (random suffix per create) and no empty
+  # env values (the API omits them). ignoreStatusChanges stops node
+  # heartbeats from re-syncing every worker pod.
   attachments:
   - apiVersion: v1
     resource: pods
     updateStrategy:
-      method: InPlace
+      method: Recreate
   hooks:
     sync:
       webhook:

@@ -133,8 +133,11 @@ test('plain node gets docker:dind sidecar, loopback-only, privileged', async () 
   assert.strictEqual(dind.image, 'docker:dind');
   assert.deepStrictEqual(dind.args, ['--host=unix:///var/run/docker.sock', '--host=tcp://127.0.0.1:2375']);
   assert.strictEqual(dind.securityContext.privileged, true);
-  // docker:dind enables TLS by default; the worker CLI is plain HTTP
-  assert.deepStrictEqual(dind.env, [{ name: 'DOCKER_TLS_CERTDIR', value: '' }]);
+  // docker:dind enables TLS by default; the worker CLI is plain HTTP.
+  // The env entry must NOT carry value:'' — the API omits empty values,
+  // so the stored pod would differ from the desired spec and Recreate
+  // would delete+recreate forever.
+  assert.deepStrictEqual(dind.env, [{ name: 'DOCKER_TLS_CERTDIR' }]);
 });
 
 test('scratch + docker-data volumes shared at identical paths', async () => {
@@ -206,14 +209,14 @@ test('decoratorcontroller.yaml uses the v4 attachments field', () => {
   assert.match(txt, /resource:\s*pods/, 'attachment resource must be pods');
 });
 
-test('decoratorcontroller.yaml patches pods in place (InPlace)', () => {
-  // InPlace updates the mutable worker args/env directly. Recreate
-  // delete+recreates, but the auto-minted kube-api-access token volume
-  // (random suffix per create) made every dry-run differ — the fleet
-  // churned forever. OnDelete never updates existing children at all.
+test('decoratorcontroller.yaml recreates worker pods on label change', () => {
+  // k8s forbids pod updates to args, so label changes need Recreate
+  // (delete+recreate). OnDelete never touches existing children; InPlace
+  // updates are rejected for args. Convergence needs the desired spec to
+  // match the stored pod byte-for-byte.
   const txt = fs.readFileSync(path.join(root, 'decoratorcontroller.yaml'), 'utf8');
-  assert.match(txt, /method:\s*InPlace/, 'updateStrategy must be InPlace');
-  assert.doesNotMatch(txt, /method:\s*(OnDelete|Recreate)/, 'OnDelete/Recreate break convergence');
+  assert.match(txt, /method:\s*Recreate/, 'updateStrategy must be Recreate');
+  assert.doesNotMatch(txt, /method:\s*(OnDelete|InPlace)/, 'OnDelete/InPlace cannot apply arg changes');
   assert.match(txt, /ignoreStatusChanges:\s*true/, 'node heartbeats must not re-sync every worker pod');
 });
 
