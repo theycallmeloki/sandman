@@ -21,229 +21,231 @@ data:
     : \"Hosts Registered\",\n      \"type\": \"stat\",\n      \"datasource\": {\n\
     \        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n\
     \      \"targets\": [\n        {\n          \"expr\": \"sandman_hosts_total\"\
-    ,\n          \"refId\": \"A\",\n          \"instant\": true\n        }\n     \
-    \ ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"color\":\
+    ,\n          \"legendFormat\": \"__auto\",\n          \"refId\": \"A\"\n     \
+    \   }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n         \
+    \ \"unit\": \"short\",\n          \"color\": {\n            \"mode\": \"thresholds\"\
+    \n          },\n          \"thresholds\": {\n            \"mode\": \"absolute\"\
+    ,\n            \"steps\": [\n              {\n                \"color\": \"green\"\
+    ,\n                \"value\": null\n              }\n            ]\n         \
+    \ }\n        }\n      },\n      \"options\": {\n        \"reduceOptions\": {\n\
+    \          \"calcs\": [\n            \"lastNotNull\"\n          ],\n         \
+    \ \"fields\": \"\",\n          \"values\": false\n        },\n        \"colorMode\"\
+    : \"value\",\n        \"graphMode\": \"area\",\n        \"justifyMode\": \"auto\"\
+    \n      },\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 0,\n     \
+    \   \"w\": 3,\n        \"h\": 3\n      },\n      \"links\": []\n    },\n    {\n\
+    \      \"id\": 2,\n      \"title\": \"Hosts with GPUs\",\n      \"type\": \"stat\"\
+    ,\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\"\
+    : \"prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\"\
+    : \"sandman_hosts_with_gpus_total\",\n          \"legendFormat\": \"__auto\",\n\
+    \          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\": {\n \
+    \       \"defaults\": {\n          \"unit\": \"short\",\n          \"color\":\
     \ {\n            \"mode\": \"thresholds\"\n          },\n          \"thresholds\"\
     : {\n            \"mode\": \"absolute\",\n            \"steps\": [\n         \
-    \     {\n                \"color\": \"blue\",\n                \"value\": 0\n\
-    \              }\n            ]\n          },\n          \"unit\": \"none\",\n\
-    \          \"mappings\": []\n        }\n      },\n      \"options\": {\n     \
-    \   \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\n\
-    \          ]\n        },\n        \"orientation\": \"auto\",\n        \"textMode\"\
-    : \"auto\",\n        \"colorMode\": \"background\"\n      },\n      \"gridPos\"\
-    : {\n        \"x\": 0,\n        \"y\": 0,\n        \"w\": 3,\n        \"h\": 3\n\
-    \      }\n    },\n    {\n      \"id\": 2,\n      \"title\": \"Hosts with GPUs\"\
+    \     {\n                \"color\": \"green\",\n                \"value\": null\n\
+    \              }\n            ]\n          }\n        }\n      },\n      \"options\"\
+    : {\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\
+    \n          ],\n          \"fields\": \"\",\n          \"values\": false\n   \
+    \     },\n        \"colorMode\": \"value\",\n        \"graphMode\": \"area\",\n\
+    \        \"justifyMode\": \"auto\"\n      },\n      \"gridPos\": {\n        \"\
+    x\": 3,\n        \"y\": 0,\n        \"w\": 3,\n        \"h\": 3\n      },\n  \
+    \    \"links\": []\n    },\n    {\n      \"id\": 3,\n      \"title\": \"GPUs Advertised\"\
     ,\n      \"type\": \"stat\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
     ,\n        \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n\
-    \          \"expr\": \"sandman_hosts_with_gpus_total\",\n          \"refId\":\
-    \ \"A\",\n          \"instant\": true\n        }\n      ],\n      \"fieldConfig\"\
-    : {\n        \"defaults\": {\n          \"color\": {\n            \"mode\": \"\
-    thresholds\"\n          },\n          \"thresholds\": {\n            \"mode\"\
-    : \"absolute\",\n            \"steps\": [\n              {\n                \"\
-    color\": \"blue\",\n                \"value\": 0\n              }\n          \
-    \  ]\n          },\n          \"unit\": \"none\",\n          \"mappings\": []\n\
-    \        }\n      },\n      \"options\": {\n        \"reduceOptions\": {\n   \
-    \       \"calcs\": [\n            \"lastNotNull\"\n          ]\n        },\n \
-    \       \"orientation\": \"auto\",\n        \"textMode\": \"auto\",\n        \"\
-    colorMode\": \"background\"\n      },\n      \"gridPos\": {\n        \"x\": 3,\n\
-    \        \"y\": 0,\n        \"w\": 3,\n        \"h\": 3\n      }\n    },\n   \
-    \ {\n      \"id\": 3,\n      \"title\": \"GPUs Advertised\",\n      \"type\":\
-    \ \"stat\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n    \
-    \    \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n    \
-    \      \"expr\": \"sandman_gpus_total\",\n          \"refId\": \"A\",\n      \
-    \    \"instant\": true\n        }\n      ],\n      \"fieldConfig\": {\n      \
-    \  \"defaults\": {\n          \"color\": {\n            \"mode\": \"thresholds\"\
-    \n          },\n          \"thresholds\": {\n            \"mode\": \"absolute\"\
-    ,\n            \"steps\": [\n              {\n                \"color\": \"blue\"\
-    ,\n                \"value\": 0\n              }\n            ]\n          },\n\
-    \          \"unit\": \"none\",\n          \"mappings\": []\n        }\n      },\n\
-    \      \"options\": {\n        \"reduceOptions\": {\n          \"calcs\": [\n\
-    \            \"lastNotNull\"\n          ]\n        },\n        \"orientation\"\
-    : \"auto\",\n        \"textMode\": \"auto\",\n        \"colorMode\": \"background\"\
-    \n      },\n      \"gridPos\": {\n        \"x\": 6,\n        \"y\": 0,\n     \
-    \   \"w\": 3,\n        \"h\": 3\n      }\n    },\n    {\n      \"id\": 4,\n  \
-    \    \"title\": \"Pipelines\",\n      \"type\": \"stat\",\n      \"datasource\"\
-    : {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n    \
-    \  },\n      \"targets\": [\n        {\n          \"expr\": \"sum(sandman_pipelines)\"\
-    ,\n          \"refId\": \"A\",\n          \"instant\": true\n        }\n     \
-    \ ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"color\":\
-    \ {\n            \"mode\": \"thresholds\"\n          },\n          \"thresholds\"\
+    \          \"expr\": \"sandman_gpus_total\",\n          \"legendFormat\": \"__auto\"\
+    ,\n          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\": {\n\
+    \        \"defaults\": {\n          \"unit\": \"short\",\n          \"color\"\
+    : {\n            \"mode\": \"thresholds\"\n          },\n          \"thresholds\"\
     : {\n            \"mode\": \"absolute\",\n            \"steps\": [\n         \
-    \     {\n                \"color\": \"blue\",\n                \"value\": 0\n\
-    \              }\n            ]\n          },\n          \"unit\": \"none\",\n\
-    \          \"mappings\": []\n        }\n      },\n      \"options\": {\n     \
-    \   \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\n\
-    \          ]\n        },\n        \"orientation\": \"auto\",\n        \"textMode\"\
-    : \"auto\",\n        \"colorMode\": \"background\"\n      },\n      \"gridPos\"\
-    : {\n        \"x\": 9,\n        \"y\": 0,\n        \"w\": 3,\n        \"h\": 3\n\
-    \      }\n    },\n    {\n      \"id\": 5,\n      \"title\": \"Spouts\",\n    \
-    \  \"type\": \"stat\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
+    \     {\n                \"color\": \"green\",\n                \"value\": null\n\
+    \              }\n            ]\n          }\n        }\n      },\n      \"options\"\
+    : {\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\
+    \n          ],\n          \"fields\": \"\",\n          \"values\": false\n   \
+    \     },\n        \"colorMode\": \"value\",\n        \"graphMode\": \"area\",\n\
+    \        \"justifyMode\": \"auto\"\n      },\n      \"gridPos\": {\n        \"\
+    x\": 6,\n        \"y\": 0,\n        \"w\": 3,\n        \"h\": 3\n      },\n  \
+    \    \"links\": []\n    },\n    {\n      \"id\": 4,\n      \"title\": \"Pipelines\"\
+    ,\n      \"type\": \"stat\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
     ,\n        \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n\
-    \          \"expr\": \"sandman_spouts_total\",\n          \"refId\": \"A\",\n\
-    \          \"instant\": true\n        }\n      ],\n      \"fieldConfig\": {\n\
-    \        \"defaults\": {\n          \"color\": {\n            \"mode\": \"thresholds\"\
+    \          \"expr\": \"sum(sandman_pipelines)\",\n          \"legendFormat\":\
+    \ \"__auto\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {\n          \"unit\": \"short\",\n          \"color\"\
+    : {\n            \"mode\": \"thresholds\"\n          },\n          \"thresholds\"\
+    : {\n            \"mode\": \"absolute\",\n            \"steps\": [\n         \
+    \     {\n                \"color\": \"green\",\n                \"value\": null\n\
+    \              }\n            ]\n          }\n        }\n      },\n      \"options\"\
+    : {\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\
+    \n          ],\n          \"fields\": \"\",\n          \"values\": false\n   \
+    \     },\n        \"colorMode\": \"value\",\n        \"graphMode\": \"area\",\n\
+    \        \"justifyMode\": \"auto\"\n      },\n      \"gridPos\": {\n        \"\
+    x\": 9,\n        \"y\": 0,\n        \"w\": 3,\n        \"h\": 3\n      },\n  \
+    \    \"links\": []\n    },\n    {\n      \"id\": 5,\n      \"title\": \"Spouts\"\
+    ,\n      \"type\": \"stat\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
+    ,\n        \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n\
+    \          \"expr\": \"sandman_spouts_total\",\n          \"legendFormat\": \"\
+    __auto\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {\n          \"unit\": \"short\",\n          \"color\"\
+    : {\n            \"mode\": \"thresholds\"\n          },\n          \"thresholds\"\
+    : {\n            \"mode\": \"absolute\",\n            \"steps\": [\n         \
+    \     {\n                \"color\": \"green\",\n                \"value\": null\n\
+    \              }\n            ]\n          }\n        }\n      },\n      \"options\"\
+    : {\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\
+    \n          ],\n          \"fields\": \"\",\n          \"values\": false\n   \
+    \     },\n        \"colorMode\": \"value\",\n        \"graphMode\": \"area\",\n\
+    \        \"justifyMode\": \"auto\"\n      },\n      \"gridPos\": {\n        \"\
+    x\": 0,\n        \"y\": 3,\n        \"w\": 3,\n        \"h\": 3\n      },\n  \
+    \    \"links\": []\n    },\n    {\n      \"id\": 6,\n      \"title\": \"Jobs Running\"\
+    ,\n      \"type\": \"stat\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
+    ,\n        \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n\
+    \          \"expr\": \"sandman_jobs{state=\\\"running\\\"}\",\n          \"legendFormat\"\
+    : \"__auto\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {\n          \"unit\": \"short\",\n          \"color\"\
+    : {\n            \"mode\": \"thresholds\"\n          },\n          \"thresholds\"\
+    : {\n            \"mode\": \"absolute\",\n            \"steps\": [\n         \
+    \     {\n                \"color\": \"green\",\n                \"value\": null\n\
+    \              }\n            ]\n          }\n        }\n      },\n      \"options\"\
+    : {\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\
+    \n          ],\n          \"fields\": \"\",\n          \"values\": false\n   \
+    \     },\n        \"colorMode\": \"value\",\n        \"graphMode\": \"area\",\n\
+    \        \"justifyMode\": \"auto\"\n      },\n      \"gridPos\": {\n        \"\
+    x\": 3,\n        \"y\": 3,\n        \"w\": 3,\n        \"h\": 3\n      },\n  \
+    \    \"links\": []\n    },\n    {\n      \"id\": 21,\n      \"title\": \"Jobs\
+    \ Queued\",\n      \"type\": \"stat\",\n      \"datasource\": {\n        \"type\"\
+    : \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"targets\"\
+    : [\n        {\n          \"expr\": \"sandman_jobs{state=\\\"queued\\\"}\",\n\
+    \          \"legendFormat\": \"__auto\",\n          \"refId\": \"A\"\n       \
+    \ }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"\
+    unit\": \"short\",\n          \"color\": {\n            \"mode\": \"thresholds\"\
     \n          },\n          \"thresholds\": {\n            \"mode\": \"absolute\"\
-    ,\n            \"steps\": [\n              {\n                \"color\": \"blue\"\
-    ,\n                \"value\": 0\n              }\n            ]\n          },\n\
-    \          \"unit\": \"none\",\n          \"mappings\": []\n        }\n      },\n\
-    \      \"options\": {\n        \"reduceOptions\": {\n          \"calcs\": [\n\
-    \            \"lastNotNull\"\n          ]\n        },\n        \"orientation\"\
-    : \"auto\",\n        \"textMode\": \"auto\",\n        \"colorMode\": \"background\"\
-    \n      },\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 3,\n     \
-    \   \"w\": 3,\n        \"h\": 3\n      }\n    },\n    {\n      \"id\": 6,\n  \
-    \    \"title\": \"Running Jobs\",\n      \"type\": \"stat\",\n      \"datasource\"\
-    : {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n    \
-    \  },\n      \"targets\": [\n        {\n          \"expr\": \"sandman_jobs{state=\\\
-    \"running\\\"}\",\n          \"refId\": \"A\",\n          \"instant\": true\n\
-    \        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n    \
-    \      \"color\": {\n            \"mode\": \"thresholds\"\n          },\n    \
-    \      \"thresholds\": {\n            \"mode\": \"absolute\",\n            \"\
-    steps\": [\n              {\n                \"color\": \"green\",\n         \
-    \       \"value\": 0\n              }\n            ]\n          },\n         \
-    \ \"unit\": \"none\",\n          \"mappings\": []\n        }\n      },\n     \
-    \ \"options\": {\n        \"reduceOptions\": {\n          \"calcs\": [\n     \
-    \       \"lastNotNull\"\n          ]\n        },\n        \"orientation\": \"\
-    auto\",\n        \"textMode\": \"auto\",\n        \"colorMode\": \"background\"\
-    \n      },\n      \"gridPos\": {\n        \"x\": 3,\n        \"y\": 3,\n     \
-    \   \"w\": 3,\n        \"h\": 3\n      }\n    },\n    {\n      \"id\": 7,\n  \
-    \    \"title\": \"Failed Jobs\",\n      \"type\": \"stat\",\n      \"datasource\"\
-    : {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n    \
-    \  },\n      \"targets\": [\n        {\n          \"expr\": \"sandman_jobs{state=\\\
-    \"failure\\\"}\",\n          \"refId\": \"A\",\n          \"instant\": true\n\
-    \        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n    \
-    \      \"color\": {\n            \"mode\": \"thresholds\"\n          },\n    \
-    \      \"thresholds\": {\n            \"mode\": \"absolute\",\n            \"\
-    steps\": [\n              {\n                \"color\": \"green\",\n         \
-    \       \"value\": 0\n              },\n              {\n                \"color\"\
-    : \"red\",\n                \"value\": 1\n              }\n            ]\n   \
-    \       },\n          \"unit\": \"none\",\n          \"mappings\": []\n      \
-    \  }\n      },\n      \"options\": {\n        \"reduceOptions\": {\n         \
-    \ \"calcs\": [\n            \"lastNotNull\"\n          ]\n        },\n       \
-    \ \"orientation\": \"auto\",\n        \"textMode\": \"auto\",\n        \"colorMode\"\
-    : \"background\"\n      },\n      \"gridPos\": {\n        \"x\": 6,\n        \"\
-    y\": 3,\n        \"w\": 3,\n        \"h\": 3\n      }\n    },\n    {\n      \"\
-    id\": 8,\n      \"title\": \"File Ops / sec\",\n      \"type\": \"timeseries\"\
-    ,\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\"\
-    : \"prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\"\
-    : \"sum(rate(sandman_file_read_total[$__rate_interval]))\",\n          \"legendFormat\"\
-    : \"reads\",\n          \"refId\": \"A\"\n        },\n        {\n          \"\
-    expr\": \"sum(rate(sandman_file_write_total[$__rate_interval]))\",\n         \
-    \ \"legendFormat\": \"writes\",\n          \"refId\": \"B\"\n        }\n     \
-    \ ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"\
-    ops\",\n          \"custom\": {\n            \"drawStyle\": \"line\",\n      \
-    \      \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n         \
-    \ }\n        }\n      },\n      \"options\": {},\n      \"gridPos\": {\n     \
-    \   \"x\": 9,\n        \"y\": 3,\n        \"w\": 3,\n        \"h\": 3\n      }\n\
-    \    },\n    {\n      \"id\": 9,\n      \"title\": \"Hosts over time\",\n    \
-    \  \"type\": \"timeseries\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
-    ,\n        \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n\
-    \          \"expr\": \"sandman_hosts_total\",\n          \"legendFormat\": \"\
-    hosts\",\n          \"refId\": \"A\"\n        },\n        {\n          \"expr\"\
-    : \"sandman_hosts_with_gpus_total\",\n          \"legendFormat\": \"with gpus\"\
-    ,\n          \"refId\": \"B\"\n        }\n      ],\n      \"fieldConfig\": {\n\
-    \        \"defaults\": {\n          \"unit\": \"none\",\n          \"custom\"\
-    : {\n            \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n\
-    \            \"showPoints\": \"never\"\n          }\n        }\n      },\n   \
-    \   \"options\": {},\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\":\
-    \ 6,\n        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\"\
-    : 10,\n      \"title\": \"Jobs by state\",\n      \"type\": \"timeseries\",\n\
-    \      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\":\
-    \ \"prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\"\
-    : \"sandman_jobs\",\n          \"legendFormat\": \"{{state}}\",\n          \"\
-    refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\": {\n        \"defaults\"\
-    : {\n          \"unit\": \"none\",\n          \"custom\": {\n            \"drawStyle\"\
-    : \"bars\",\n            \"fillOpacity\": 60,\n            \"showPoints\": \"\
-    never\"\n          }\n        }\n      },\n      \"options\": {},\n      \"gridPos\"\
-    : {\n        \"x\": 6,\n        \"y\": 6,\n        \"w\": 6,\n        \"h\": 8\n\
-    \      }\n    },\n    {\n      \"id\": 11,\n      \"title\": \"Pipelines by state\"\
+    ,\n            \"steps\": [\n              {\n                \"color\": \"green\"\
+    ,\n                \"value\": null\n              }\n            ]\n         \
+    \ }\n        }\n      },\n      \"options\": {\n        \"reduceOptions\": {\n\
+    \          \"calcs\": [\n            \"lastNotNull\"\n          ],\n         \
+    \ \"fields\": \"\",\n          \"values\": false\n        },\n        \"colorMode\"\
+    : \"value\",\n        \"graphMode\": \"area\",\n        \"justifyMode\": \"auto\"\
+    \n      },\n      \"gridPos\": {\n        \"x\": 6,\n        \"y\": 3,\n     \
+    \   \"w\": 3,\n        \"h\": 3\n      },\n      \"links\": []\n    },\n    {\n\
+    \      \"id\": 7,\n      \"title\": \"Jobs Failed (all-time)\",\n      \"type\"\
+    : \"stat\",\n      \"datasource\": {\n        \"type\": \"prometheus\",\n    \
+    \    \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n    \
+    \      \"expr\": \"sandman_jobs{state=\\\"failure\\\"}\",\n          \"legendFormat\"\
+    : \"__auto\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {\n          \"unit\": \"short\",\n          \"color\"\
+    : {\n            \"mode\": \"thresholds\"\n          },\n          \"thresholds\"\
+    : {\n            \"mode\": \"absolute\",\n            \"steps\": [\n         \
+    \     {\n                \"color\": \"green\",\n                \"value\": null\n\
+    \              }\n            ]\n          }\n        }\n      },\n      \"options\"\
+    : {\n        \"reduceOptions\": {\n          \"calcs\": [\n            \"lastNotNull\"\
+    \n          ],\n          \"fields\": \"\",\n          \"values\": false\n   \
+    \     },\n        \"colorMode\": \"value\",\n        \"graphMode\": \"area\",\n\
+    \        \"justifyMode\": \"auto\"\n      },\n      \"gridPos\": {\n        \"\
+    x\": 9,\n        \"y\": 3,\n        \"w\": 3,\n        \"h\": 3\n      },\n  \
+    \    \"links\": []\n    },\n    {\n      \"id\": 9,\n      \"title\": \"Hosts\
+    \ over time\",\n      \"type\": \"timeseries\",\n      \"datasource\": {\n   \
+    \     \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n \
+    \     \"targets\": [\n        {\n          \"expr\": \"sandman_hosts_total\",\n\
+    \          \"legendFormat\": \"hosts\",\n          \"refId\": \"A\"\n        },\n\
+    \        {\n          \"expr\": \"sandman_hosts_with_gpus_total\",\n         \
+    \ \"legendFormat\": \"with GPUs\",\n          \"refId\": \"B\"\n        }\n  \
+    \    ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\"\
+    : \"short\",\n          \"custom\": {\n            \"drawStyle\": \"line\",\n\
+    \            \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n   \
+    \       }\n        }\n      },\n      \"options\": {},\n      \"gridPos\": {\n\
+    \        \"x\": 0,\n        \"y\": 6,\n        \"w\": 6,\n        \"h\": 8\n \
+    \     }\n    },\n    {\n      \"id\": 10,\n      \"title\": \"Jobs by state\"\
     ,\n      \"type\": \"timeseries\",\n      \"datasource\": {\n        \"type\"\
     : \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"targets\"\
-    : [\n        {\n          \"expr\": \"sandman_pipelines\",\n          \"legendFormat\"\
+    : [\n        {\n          \"expr\": \"sandman_jobs\",\n          \"legendFormat\"\
     : \"{{state}}\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\"\
-    : {\n        \"defaults\": {\n          \"unit\": \"none\",\n          \"custom\"\
+    : {\n        \"defaults\": {\n          \"unit\": \"short\",\n          \"custom\"\
     : {\n            \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n\
     \            \"showPoints\": \"never\"\n          }\n        }\n      },\n   \
-    \   \"options\": {},\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\":\
-    \ 14,\n        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\"\
-    : 12,\n      \"title\": \"API requests / sec by verb\",\n      \"type\": \"timeseries\"\
+    \   \"options\": {},\n      \"gridPos\": {\n        \"x\": 6,\n        \"y\":\
+    \ 6,\n        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\"\
+    : 11,\n      \"title\": \"Pipelines by state\",\n      \"type\": \"timeseries\"\
     ,\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\"\
     : \"prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\"\
-    : \"topk(8, sum by (op) (rate(sandman_api_requests_total[$__rate_interval])))\"\
-    ,\n          \"legendFormat\": \"{{op}}\",\n          \"refId\": \"A\"\n     \
+    : \"sandman_pipelines\",\n          \"legendFormat\": \"{{state}}\",\n       \
+    \   \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\": {\n        \"\
+    defaults\": {\n          \"unit\": \"short\",\n          \"custom\": {\n     \
+    \       \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n         \
+    \   \"showPoints\": \"never\"\n          }\n        }\n      },\n      \"options\"\
+    : {},\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 14,\n        \"\
+    w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 8,\n      \"\
+    title\": \"File Ops / sec\",\n      \"type\": \"timeseries\",\n      \"datasource\"\
+    : {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n    \
+    \  },\n      \"targets\": [\n        {\n          \"expr\": \"sum(rate(sandman_file_read_total[$__rate_interval]))\"\
+    ,\n          \"legendFormat\": \"reads\",\n          \"refId\": \"A\"\n      \
+    \  },\n        {\n          \"expr\": \"sum(rate(sandman_file_write_total[$__rate_interval]))\"\
+    ,\n          \"legendFormat\": \"writes\",\n          \"refId\": \"B\"\n     \
     \   }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n         \
-    \ \"unit\": \"reqps\",\n          \"custom\": {\n            \"drawStyle\": \"\
+    \ \"unit\": \"short\",\n          \"custom\": {\n            \"drawStyle\": \"\
     line\",\n            \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\
     \n          }\n        }\n      },\n      \"options\": {},\n      \"gridPos\"\
     : {\n        \"x\": 6,\n        \"y\": 14,\n        \"w\": 6,\n        \"h\":\
-    \ 8\n      }\n    },\n    {\n      \"id\": 13,\n      \"title\": \"API latency\
-    \ by verb (avg)\",\n      \"type\": \"timeseries\",\n      \"datasource\": {\n\
+    \ 8\n      }\n    },\n    {\n      \"id\": 12,\n      \"title\": \"API requests\
+    \ / sec by verb\",\n      \"type\": \"timeseries\",\n      \"datasource\": {\n\
     \        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n\
+    \      \"targets\": [\n        {\n          \"expr\": \"topk(8, sum by (op) (rate(sandman_api_requests_total[$__rate_interval])))\"\
+    ,\n          \"legendFormat\": \"{{op}}\",\n          \"refId\": \"A\"\n     \
+    \   }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n         \
+    \ \"unit\": \"short\",\n          \"custom\": {\n            \"drawStyle\": \"\
+    line\",\n            \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\
+    \n          }\n        }\n      },\n      \"options\": {},\n      \"gridPos\"\
+    : {\n        \"x\": 0,\n        \"y\": 22,\n        \"w\": 6,\n        \"h\":\
+    \ 8\n      }\n    },\n    {\n      \"id\": 14,\n      \"title\": \"API error rate\
+    \ by verb\",\n      \"type\": \"timeseries\",\n      \"datasource\": {\n     \
+    \   \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n   \
+    \   \"targets\": [\n        {\n          \"expr\": \"sum by (op) (rate(sandman_api_request_errors_total[$__rate_interval]))\
+    \ / sum by (op) (rate(sandman_api_requests_total[$__rate_interval]))\",\n    \
+    \      \"legendFormat\": \"{{op}}\",\n          \"refId\": \"A\"\n        }\n\
+    \      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\"\
+    : \"short\",\n          \"custom\": {\n            \"drawStyle\": \"line\",\n\
+    \            \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n   \
+    \       }\n        }\n      },\n      \"options\": {},\n      \"gridPos\": {\n\
+    \        \"x\": 6,\n        \"y\": 22,\n        \"w\": 6,\n        \"h\": 8\n\
+    \      }\n    },\n    {\n      \"id\": 13,\n      \"title\": \"API latency by\
+    \ verb (avg)\",\n      \"type\": \"timeseries\",\n      \"datasource\": {\n  \
+    \      \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n\
     \      \"targets\": [\n        {\n          \"expr\": \"sum(rate(sandman_api_request_seconds_sum{op=~\\\
     \"$op\\\"}[$__rate_interval])) / sum(rate(sandman_api_request_seconds_count{op=~\\\
-    \"$op\\\"}[$__rate_interval]))\",\n          \"legendFormat\": \"{{op}}\",\n \
-    \         \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\": {\n  \
-    \      \"defaults\": {\n          \"unit\": \"s\",\n          \"custom\": {\n\
-    \            \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n    \
-    \        \"showPoints\": \"never\"\n          }\n        }\n      },\n      \"\
-    options\": {},\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 22,\n\
-    \        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 14,\n\
-    \      \"title\": \"API error rate by verb\",\n      \"type\": \"timeseries\"\
-    ,\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\"\
-    : \"prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\"\
-    : \"sum by (op) (rate(sandman_api_request_errors_total[$__rate_interval])) / sum\
-    \ by (op) (rate(sandman_api_requests_total[$__rate_interval]))\",\n          \"\
-    legendFormat\": \"{{op}}\",\n          \"refId\": \"A\"\n        }\n      ],\n\
-    \      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\": \"percentunit\"\
-    ,\n          \"custom\": {\n            \"drawStyle\": \"line\",\n           \
-    \ \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n          }\n \
-    \       }\n      },\n      \"options\": {},\n      \"gridPos\": {\n        \"\
-    x\": 6,\n        \"y\": 22,\n        \"w\": 6,\n        \"h\": 8\n      }\n  \
-    \  },\n    {\n      \"id\": 15,\n      \"title\": \"Avg Read Latency\",\n    \
-    \  \"type\": \"timeseries\",\n      \"datasource\": {\n        \"type\": \"prometheus\"\
-    ,\n        \"uid\": \"prometheus\"\n      },\n      \"targets\": [\n        {\n\
-    \          \"expr\": \"sum(rate(sandman_file_read_seconds_sum{outcome=\\\"success\\\
-    \"}[$__rate_interval])) / sum(rate(sandman_file_read_seconds_count{outcome=\\\"\
-    success\\\"}[$__rate_interval]))\",\n          \"legendFormat\": \"success\",\n\
-    \          \"refId\": \"A\"\n        },\n        {\n          \"expr\": \"sum(rate(sandman_file_read_seconds_sum{outcome=\\\
-    \"error\\\"}[$__rate_interval])) / sum(rate(sandman_file_read_seconds_count{outcome=\\\
-    \"error\\\"}[$__rate_interval]))\",\n          \"legendFormat\": \"error\",\n\
-    \          \"refId\": \"B\"\n        }\n      ],\n      \"fieldConfig\": {\n \
+    \"$op\\\"}[$__rate_interval]))\",\n          \"legendFormat\": \"avg\",\n    \
+    \      \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\": {\n     \
+    \   \"defaults\": {\n          \"unit\": \"s\",\n          \"custom\": {\n   \
+    \         \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n       \
+    \     \"showPoints\": \"never\"\n          }\n        }\n      },\n      \"options\"\
+    : {},\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 30,\n        \"\
+    w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 17,\n      \"\
+    title\": \"API latency percentiles (op)\",\n      \"type\": \"timeseries\",\n\
+    \      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\":\
+    \ \"prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\"\
+    : \"histogram_quantile(0.50, sum by (le) (rate(sandman_api_request_seconds_bucket{op=~\\\
+    \"$op\\\"}[$__rate_interval])))\",\n          \"legendFormat\": \"p50\",\n   \
+    \       \"refId\": \"A\"\n        },\n        {\n          \"expr\": \"histogram_quantile(0.95,\
+    \ sum by (le) (rate(sandman_api_request_seconds_bucket{op=~\\\"$op\\\"}[$__rate_interval])))\"\
+    ,\n          \"legendFormat\": \"p95\",\n          \"refId\": \"B\"\n        },\n\
+    \        {\n          \"expr\": \"histogram_quantile(0.99, sum by (le) (rate(sandman_api_request_seconds_bucket{op=~\\\
+    \"$op\\\"}[$__rate_interval])))\",\n          \"legendFormat\": \"p99\",\n   \
+    \       \"refId\": \"C\"\n        }\n      ],\n      \"fieldConfig\": {\n    \
+    \    \"defaults\": {\n          \"unit\": \"s\",\n          \"custom\": {\n  \
+    \          \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n      \
+    \      \"showPoints\": \"never\"\n          }\n        }\n      },\n      \"options\"\
+    : {},\n      \"gridPos\": {\n        \"x\": 6,\n        \"y\": 30,\n        \"\
+    w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 15,\n      \"\
+    title\": \"Avg Read Latency\",\n      \"type\": \"timeseries\",\n      \"datasource\"\
+    : {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n    \
+    \  },\n      \"targets\": [\n        {\n          \"expr\": \"sum(rate(sandman_file_read_seconds_sum{outcome=\\\
+    \"success\\\"}[$__rate_interval])) / sum(rate(sandman_file_read_seconds_count{outcome=\\\
+    \"success\\\"}[$__rate_interval]))\",\n          \"legendFormat\": \"avg\",\n\
+    \          \"refId\": \"A\"\n        }\n      ],\n      \"fieldConfig\": {\n \
     \       \"defaults\": {\n          \"unit\": \"s\",\n          \"custom\": {\n\
     \            \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n    \
     \        \"showPoints\": \"never\"\n          }\n        }\n      },\n      \"\
-    options\": {},\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 30,\n\
-    \        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 16,\n\
-    \      \"title\": \"Read Error Ratio\",\n      \"type\": \"timeseries\",\n   \
-    \   \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"\
-    prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\": \"\
-    sum(rate(sandman_file_read_seconds_count{outcome=\\\"error\\\"}[$__rate_interval]))\
-    \ / sum(rate(sandman_file_read_seconds_count{}[$__rate_interval]))\",\n      \
-    \    \"legendFormat\": \"errors/total\",\n          \"refId\": \"A\"\n       \
-    \ }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"\
-    unit\": \"percentunit\",\n          \"custom\": {\n            \"drawStyle\":\
-    \ \"line\",\n            \"fillOpacity\": 10,\n            \"showPoints\": \"\
-    never\"\n          }\n        }\n      },\n      \"options\": {},\n      \"gridPos\"\
-    : {\n        \"x\": 6,\n        \"y\": 30,\n        \"w\": 6,\n        \"h\":\
-    \ 8\n      }\n    },\n    {\n      \"id\": 17,\n      \"title\": \"API latency\
-    \ percentiles (op)\",\n      \"type\": \"timeseries\",\n      \"datasource\":\
-    \ {\n        \"type\": \"prometheus\",\n        \"uid\": \"prometheus\"\n    \
-    \  },\n      \"targets\": [\n        {\n          \"expr\": \"histogram_quantile(0.50,\
-    \ sum by (le) (rate(sandman_api_request_seconds_bucket{op=~\\\"$op\\\"}[$__rate_interval])))\"\
-    ,\n          \"legendFormat\": \"p50\",\n          \"refId\": \"A\"\n        },\n\
-    \        {\n          \"expr\": \"histogram_quantile(0.95, sum by (le) (rate(sandman_api_request_seconds_bucket{op=~\\\
-    \"$op\\\"}[$__rate_interval])))\",\n          \"legendFormat\": \"p95\",\n   \
-    \       \"refId\": \"B\"\n        },\n        {\n          \"expr\": \"histogram_quantile(0.99,\
-    \ sum by (le) (rate(sandman_api_request_seconds_bucket{op=~\\\"$op\\\"}[$__rate_interval])))\"\
-    ,\n          \"legendFormat\": \"p99\",\n          \"refId\": \"C\"\n        }\n\
-    \      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"unit\"\
-    : \"s\",\n          \"custom\": {\n            \"drawStyle\": \"line\",\n    \
-    \        \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n       \
-    \   }\n        }\n      },\n      \"options\": {},\n      \"gridPos\": {\n   \
-    \     \"x\": 0,\n        \"y\": 38,\n        \"w\": 6,\n        \"h\": 8\n   \
-    \   }\n    },\n    {\n      \"id\": 18,\n      \"title\": \"Read latency percentiles\"\
-    ,\n      \"type\": \"timeseries\",\n      \"datasource\": {\n        \"type\"\
-    : \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"targets\"\
-    : [\n        {\n          \"expr\": \"histogram_quantile(0.95, sum by (le) (rate(sandman_file_read_seconds_bucket{outcome=\\\
+    options\": {},\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 38,\n\
+    \        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 18,\n\
+    \      \"title\": \"Read latency percentiles\",\n      \"type\": \"timeseries\"\
+    ,\n      \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\"\
+    : \"prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\"\
+    : \"histogram_quantile(0.95, sum by (le) (rate(sandman_file_read_seconds_bucket{outcome=\\\
     \"success\\\"}[$__rate_interval])))\",\n          \"legendFormat\": \"success\
     \ p95\",\n          \"refId\": \"A\"\n        },\n        {\n          \"expr\"\
     : \"histogram_quantile(0.50, sum by (le) (rate(sandman_file_read_seconds_bucket{outcome=\\\
@@ -256,11 +258,22 @@ data:
     \            \"drawStyle\": \"line\",\n            \"fillOpacity\": 10,\n    \
     \        \"showPoints\": \"never\"\n          }\n        }\n      },\n      \"\
     options\": {},\n      \"gridPos\": {\n        \"x\": 6,\n        \"y\": 38,\n\
-    \        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 19,\n\
-    \      \"title\": \"Write latency p95\",\n      \"type\": \"timeseries\",\n  \
-    \    \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"\
+    \        \"w\": 6,\n        \"h\": 8\n      }\n    },\n    {\n      \"id\": 16,\n\
+    \      \"title\": \"Read Error Ratio\",\n      \"type\": \"timeseries\",\n   \
+    \   \"datasource\": {\n        \"type\": \"prometheus\",\n        \"uid\": \"\
     prometheus\"\n      },\n      \"targets\": [\n        {\n          \"expr\": \"\
-    histogram_quantile(0.95, sum by (le) (rate(sandman_file_write_seconds_bucket[$__rate_interval])))\"\
+    sum(rate(sandman_file_read_seconds_count{outcome=\\\"error\\\"}[$__rate_interval]))\
+    \ / sum(rate(sandman_file_read_seconds_count{}[$__rate_interval])) or vector(0)\"\
+    ,\n          \"legendFormat\": \"ratio\",\n          \"refId\": \"A\"\n      \
+    \  }\n      ],\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"\
+    unit\": \"short\",\n          \"custom\": {\n            \"drawStyle\": \"line\"\
+    ,\n            \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n \
+    \         }\n        }\n      },\n      \"options\": {},\n      \"gridPos\": {\n\
+    \        \"x\": 0,\n        \"y\": 46,\n        \"w\": 4,\n        \"h\": 8\n\
+    \      }\n    },\n    {\n      \"id\": 19,\n      \"title\": \"Write latency p95\"\
+    ,\n      \"type\": \"timeseries\",\n      \"datasource\": {\n        \"type\"\
+    : \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"targets\"\
+    : [\n        {\n          \"expr\": \"histogram_quantile(0.95, sum by (le) (rate(sandman_file_write_seconds_bucket[$__rate_interval])))\"\
     ,\n          \"legendFormat\": \"p95\",\n          \"refId\": \"A\"\n        },\n\
     \        {\n          \"expr\": \"histogram_quantile(0.50, sum by (le) (rate(sandman_file_write_seconds_bucket[$__rate_interval])))\"\
     ,\n          \"legendFormat\": \"p50\",\n          \"refId\": \"B\"\n        }\n\
@@ -268,7 +281,7 @@ data:
     : \"s\",\n          \"custom\": {\n            \"drawStyle\": \"line\",\n    \
     \        \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n       \
     \   }\n        }\n      },\n      \"options\": {},\n      \"gridPos\": {\n   \
-    \     \"x\": 0,\n        \"y\": 46,\n        \"w\": 6,\n        \"h\": 8\n   \
+    \     \"x\": 4,\n        \"y\": 46,\n        \"w\": 4,\n        \"h\": 8\n   \
     \   }\n    },\n    {\n      \"id\": 20,\n      \"title\": \"Job list latency p95\"\
     ,\n      \"type\": \"timeseries\",\n      \"datasource\": {\n        \"type\"\
     : \"prometheus\",\n        \"uid\": \"prometheus\"\n      },\n      \"targets\"\
@@ -280,5 +293,5 @@ data:
     : \"s\",\n          \"custom\": {\n            \"drawStyle\": \"line\",\n    \
     \        \"fillOpacity\": 10,\n            \"showPoints\": \"never\"\n       \
     \   }\n        }\n      },\n      \"options\": {},\n      \"gridPos\": {\n   \
-    \     \"x\": 6,\n        \"y\": 46,\n        \"w\": 6,\n        \"h\": 8\n   \
+    \     \"x\": 8,\n        \"y\": 46,\n        \"w\": 4,\n        \"h\": 8\n   \
     \   }\n    }\n  ]\n}"

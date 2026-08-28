@@ -99,6 +99,26 @@ func TestMetricsEndpoint(t *testing.T) {
 			t.Fatalf("metrics missing histogram bucket %q", want)
 		}
 	}
+	// state gauges are 0-filled: every known state is present even when
+	// there are no jobs/pipelines, so dashboards read zero instead of
+	// "no data" and never lose a series when a state empties
+	// the trailing space keeps the match value-agnostic (the shared
+	// daemon may legitimately hold finished jobs from other tests)
+	for _, want := range []string{
+		`sandman_jobs{state="running"} `,
+		`sandman_jobs{state="queued"} `,
+		`sandman_jobs{state="failure"} `,
+		`sandman_jobs{state="crashed"} `,
+		`sandman_jobs{state="success"} `,
+		`sandman_pipelines{state="running"} `,
+		`sandman_pipelines{state="stopped"} `,
+		`sandman_pipelines{state="failure"} `,
+		`sandman_pipelines{state="crashed"} `,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing 0-filled state series %q", want)
+		}
+	}
 }
 
 func TestGarbageCollection(t *testing.T) {

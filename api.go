@@ -648,12 +648,15 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	fmt.Fprintf(w, "# HELP sandman_hosts_with_gpus_total Registered hosts advertising GPUs.\n# TYPE sandman_hosts_with_gpus_total gauge\nsandman_hosts_with_gpus_total %d\n", hostsGPU)
 	fmt.Fprintf(w, "# HELP sandman_gpus_total GPUs advertised across the fleet.\n# TYPE sandman_gpus_total gauge\nsandman_gpus_total %d\n", gpus)
 	fmt.Fprintf(w, "# HELP sandman_spouts_total Spout pipelines.\n# TYPE sandman_spouts_total gauge\nsandman_spouts_total %d\n", spouts)
+	// every known state is emitted (0-filled) so dashboards never lose a
+	// series when a state empties; absent states would otherwise vanish
+	// from scrapes and read as "no data" instead of zero
 	fmt.Fprintf(w, "# HELP sandman_jobs Jobs by state.\n# TYPE sandman_jobs gauge\n")
-	for _, st := range sortedKeysI64(jobs) {
+	for _, st := range []string{stateRunning, stateQueued, stateFailure, stateCrashed, stateSuccess} {
 		fmt.Fprintf(w, "sandman_jobs{state=%q} %d\n", st, jobs[st])
 	}
 	fmt.Fprintf(w, "# HELP sandman_pipelines Pipelines by state.\n# TYPE sandman_pipelines gauge\n")
-	for _, st := range sortedKeysI64(pipes) {
+	for _, st := range []string{stateRunning, stateFailure, stateCrashed, "stopped"} {
 		fmt.Fprintf(w, "sandman_pipelines{state=%q} %d\n", st, pipes[st])
 	}
 	return nil
