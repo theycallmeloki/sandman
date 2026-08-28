@@ -206,12 +206,15 @@ test('decoratorcontroller.yaml uses the v4 attachments field', () => {
   assert.match(txt, /resource:\s*pods/, 'attachment resource must be pods');
 });
 
-test('decoratorcontroller.yaml uses Recreate, not OnDelete', () => {
-  // OnDelete in v4 means "never touch existing children" — label-driven
-  // arg changes would never apply. Recreate delete+recreates on diff.
+test('decoratorcontroller.yaml patches pods in place (InPlace)', () => {
+  // InPlace updates the mutable worker args/env directly. Recreate
+  // delete+recreates, but the auto-minted kube-api-access token volume
+  // (random suffix per create) made every dry-run differ — the fleet
+  // churned forever. OnDelete never updates existing children at all.
   const txt = fs.readFileSync(path.join(root, 'decoratorcontroller.yaml'), 'utf8');
-  assert.match(txt, /method:\s*Recreate/, 'updateStrategy must be Recreate');
-  assert.doesNotMatch(txt, /method:\s*OnDelete/, 'OnDelete never updates existing children');
+  assert.match(txt, /method:\s*InPlace/, 'updateStrategy must be InPlace');
+  assert.doesNotMatch(txt, /method:\s*(OnDelete|Recreate)/, 'OnDelete/Recreate break convergence');
+  assert.match(txt, /ignoreStatusChanges:\s*true/, 'node heartbeats must not re-sync every worker pod');
 });
 
 test('decoratorcontroller.yaml hooks point at the served sync endpoint', () => {

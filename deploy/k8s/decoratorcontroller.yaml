@@ -10,18 +10,21 @@ spec:
   resources:
   - apiVersion: v1
     resource: nodes
+    # kubelet heartbeats update node status every few seconds; without
+    # this every heartbeat re-synced every worker pod
+    ignoreStatusChanges: true
   # v4 schema: the child rule list is `attachments` (childResources was
   # the pre-v4 name and is silently pruned — the controller then never
   # sees its own pods and tries to create them forever).
-  # updateStrategy: Recreate — OnDelete means "never touch existing
-  # children" (the controller only recreates pods someone else deleted),
-  # so label-driven arg changes would never apply. Recreate dry-runs the
-  # desired state and delete+recreates on any difference.
+  # updateStrategy: InPlace — the worker's args/env are pod-mutable, so
+  # label changes patch the pod in place. Recreate delete+recreates, but
+  # the auto-minted kube-api-access token volume (random suffix per
+  # create) made every dry-run differ, so the fleet churned forever.
   attachments:
   - apiVersion: v1
     resource: pods
     updateStrategy:
-      method: Recreate
+      method: InPlace
   hooks:
     sync:
       webhook:
