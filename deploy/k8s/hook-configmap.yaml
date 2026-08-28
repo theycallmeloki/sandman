@@ -106,6 +106,11 @@ data:
         spec: {
           hostNetwork: true,
           nodeName: node.metadata.name,
+          // no k8s API access needed: the worker talks to the daemon on
+          // the LAN. Also prevents the Recreate loop — each pod gets a
+          // random-suffixed kube-api-access token volume, so every
+          // dry-run sees a different name and delete+recreates forever.
+          automountServiceAccountToken: false,
           containers: [
             {
               name: 'worker',

@@ -107,6 +107,10 @@ test('worker node produces exactly one pinned hostNetwork pod', async () => {
   assert.strictEqual(pod.metadata.labels.app, 'sandman-worker');
   assert.strictEqual(pod.spec.hostNetwork, true);
   assert.strictEqual(pod.spec.nodeName, 'talos-ga5-yk4');
+  // must not auto-mount a service-account token: the random-suffixed
+  // kube-api-access volume makes every Recreate dry-run differ
+  // (infinite delete/recreate loop)
+  assert.strictEqual(pod.spec.automountServiceAccountToken, false);
 });
 
 test('worker args: name/control/advertise/port, no labels when none set', async () => {
