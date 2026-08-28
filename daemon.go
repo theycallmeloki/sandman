@@ -95,6 +95,10 @@ type daemon struct {
 	// metrics accumulates the instrumented operations' runtime
 	// observability.
 	metrics metricsStore
+	// metricCounts caches the fleet state gauges (jobs/pipelines by
+	// state, hosts, GPUs) so scrapes don't rescan the state directory on
+	// every poll.
+	metricCounts countsCache
 
 	// cronTickers are the live cron-input schedules, keyed by the cron
 	// repository (so pipeline updates never restart the clock); the

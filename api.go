@@ -113,70 +113,70 @@ func routeConn(c net.Conn, apiConns chan<- net.Conn, text func(net.Conn, *bufio.
 
 func (d *daemon) apiHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/v1/repos", hErr(d.createRepoH))
-	mux.HandleFunc("GET /api/v1/repos", hErr(d.listReposH))
-	mux.HandleFunc("GET /api/v1/repos/{name}", hErr(d.inspectRepoH))
-	mux.HandleFunc("DELETE /api/v1/repos/{name}", hErr(d.deleteRepoH))
-	mux.HandleFunc("POST /api/v1/repos/{name}/commits", hErr(d.startCommitH))
-	mux.HandleFunc("GET /api/v1/repos/{name}/branches/{branch}/head", hErr(d.headCommitH))
-	mux.HandleFunc("GET /api/v1/repos/{name}/branches", hErr(d.listBranchesH))
-	mux.HandleFunc("GET /api/v1/repos/{name}/branches/{branch}", hErr(d.inspectBranchH))
-	mux.HandleFunc("DELETE /api/v1/repos/{name}/branches/{branch}", hErr(d.deleteBranchH))
-	mux.HandleFunc("POST /api/v1/repos/{name}/branches/{branch}", hErr(d.createBranchH))
-	mux.HandleFunc("POST /api/v1/commits/{id}/finish", hErr(d.finishCommitH))
-	mux.HandleFunc("GET /api/v1/commits/{id}", hErr(d.inspectCommitH))
-	mux.HandleFunc("PUT /api/v1/commits/{id}/files/{path...}", d.instrument("write", hErr(d.putFileH)))
-	mux.HandleFunc("POST /api/v1/commits/{id}/files/{path...}", hErr(d.copyFileH))
-	mux.HandleFunc("DELETE /api/v1/commits/{id}/files/{path...}", hErr(d.deleteFileH))
-	mux.HandleFunc("GET /api/v1/commits/{id}/files/{path...}", d.instrument("read", hErr(d.getFileH)))
-	mux.HandleFunc("GET /api/v1/commits/{id}/files", hErr(d.listFilesH))
-	mux.HandleFunc("DELETE /api/v1/commits/{id}", hErr(d.deleteCommitH))
-	mux.HandleFunc("POST /api/v1/secrets", hErr(d.createSecretH))
-	mux.HandleFunc("GET /api/v1/secrets", hErr(d.listSecretsH))
-	mux.HandleFunc("GET /api/v1/secrets/{name}", hErr(d.inspectSecretH))
-	mux.HandleFunc("DELETE /api/v1/secrets/{name}", hErr(d.deleteSecretH))
-	mux.HandleFunc("POST /api/v1/hosts", hErr(d.registerHostH))
-	mux.HandleFunc("GET /api/v1/hosts", hErr(d.listHostsH))
-	mux.HandleFunc("DELETE /api/v1/hosts/{name}", hErr(d.deleteHostH))
+	mux.HandleFunc("POST /api/v1/repos", d.instrument("repos.create", hErr(d.createRepoH)))
+	mux.HandleFunc("GET /api/v1/repos", d.instrument("repos.list", hErr(d.listReposH)))
+	mux.HandleFunc("GET /api/v1/repos/{name}", d.instrument("repos.inspect", hErr(d.inspectRepoH)))
+	mux.HandleFunc("DELETE /api/v1/repos/{name}", d.instrument("repos.delete", hErr(d.deleteRepoH)))
+	mux.HandleFunc("POST /api/v1/repos/{name}/commits", d.instrument("commits.start", hErr(d.startCommitH)))
+	mux.HandleFunc("GET /api/v1/repos/{name}/branches/{branch}/head", d.instrument("commits.head", hErr(d.headCommitH)))
+	mux.HandleFunc("GET /api/v1/repos/{name}/branches", d.instrument("branches.list", hErr(d.listBranchesH)))
+	mux.HandleFunc("GET /api/v1/repos/{name}/branches/{branch}", d.instrument("branches.inspect", hErr(d.inspectBranchH)))
+	mux.HandleFunc("DELETE /api/v1/repos/{name}/branches/{branch}", d.instrument("branches.delete", hErr(d.deleteBranchH)))
+	mux.HandleFunc("POST /api/v1/repos/{name}/branches/{branch}", d.instrument("branches.create", hErr(d.createBranchH)))
+	mux.HandleFunc("POST /api/v1/commits/{id}/finish", d.instrument("commits.finish", hErr(d.finishCommitH)))
+	mux.HandleFunc("GET /api/v1/commits/{id}", d.instrument("commits.inspect", hErr(d.inspectCommitH)))
+	mux.HandleFunc("PUT /api/v1/commits/{id}/files/{path...}", d.instrument("files.put", hErr(d.putFileH)))
+	mux.HandleFunc("POST /api/v1/commits/{id}/files/{path...}", d.instrument("files.copy", hErr(d.copyFileH)))
+	mux.HandleFunc("DELETE /api/v1/commits/{id}/files/{path...}", d.instrument("files.delete", hErr(d.deleteFileH)))
+	mux.HandleFunc("GET /api/v1/commits/{id}/files/{path...}", d.instrument("files.get", hErr(d.getFileH)))
+	mux.HandleFunc("GET /api/v1/commits/{id}/files", d.instrument("files.list", hErr(d.listFilesH)))
+	mux.HandleFunc("DELETE /api/v1/commits/{id}", d.instrument("commits.delete", hErr(d.deleteCommitH)))
+	mux.HandleFunc("POST /api/v1/secrets", d.instrument("secrets.create", hErr(d.createSecretH)))
+	mux.HandleFunc("GET /api/v1/secrets", d.instrument("secrets.list", hErr(d.listSecretsH)))
+	mux.HandleFunc("GET /api/v1/secrets/{name}", d.instrument("secrets.inspect", hErr(d.inspectSecretH)))
+	mux.HandleFunc("DELETE /api/v1/secrets/{name}", d.instrument("secrets.delete", hErr(d.deleteSecretH)))
+	mux.HandleFunc("POST /api/v1/hosts", d.instrument("hosts.register", hErr(d.registerHostH)))
+	mux.HandleFunc("GET /api/v1/hosts", d.instrument("hosts.list", hErr(d.listHostsH)))
+	mux.HandleFunc("DELETE /api/v1/hosts/{name}", d.instrument("hosts.delete", hErr(d.deleteHostH)))
 	mux.HandleFunc("GET /api/v1/metrics", hErr(d.metricsH))
-	mux.HandleFunc("GET /api/v1/version", hErr(d.versionH))
-	mux.HandleFunc("GET /api/v1/backup", hErr(d.backupH))
-	mux.HandleFunc("POST /api/v1/gc", hErr(d.collectGarbageH))
-	mux.HandleFunc("POST /api/v1/check", hErr(d.checkH))
-	mux.HandleFunc("POST /api/v1/pipelines", hErr(d.createPipelineH))
-	mux.HandleFunc("GET /api/v1/pipelines", hErr(d.listPipelinesH))
-	mux.HandleFunc("GET /api/v1/pipelines/{name}", hErr(d.inspectPipelineH))
-	mux.HandleFunc("DELETE /api/v1/pipelines/{name}", hErr(d.deletePipelineH))
-	mux.HandleFunc("POST /api/v1/pipelines/{name}/stop", hErr(d.stopPipelineH))
-	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", hErr(d.startPipelineH))
-	mux.HandleFunc("POST /api/v1/pipelines/{name}/run", hErr(d.runPipelineH))
-	mux.HandleFunc("POST /api/v1/pipelines/{name}/trigger", hErr(d.triggerCronH))
-	mux.HandleFunc("GET /api/v1/jobs", d.instrument("listJobs", hErr(d.listJobsH)))
-	mux.HandleFunc("GET /api/v1/jobs/{id}", hErr(d.inspectJobH))
-	mux.HandleFunc("GET /api/v1/jobs/{id}/datums", hErr(d.listDatumsH))
-	mux.HandleFunc("GET /api/v1/jobs/{id}/datums/{datumID}", hErr(d.inspectDatumH))
-	mux.HandleFunc("POST /api/v1/jobs/{id}/datums/{datumID}/restart", hErr(d.restartDatumH))
-	mux.HandleFunc("POST /api/v1/git/push", hErr(d.gitPushH))
-	mux.HandleFunc("POST /api/v1/flush", hErr(d.flushH))
-	mux.HandleFunc("GET /api/v1/jobs/{id}/wait", hErr(d.jobWaitH))
-	mux.HandleFunc("GET /api/v1/services", hErr(d.listServicesH))
-	mux.HandleFunc("GET /api/v1/services/{name}", hErr(d.inspectServiceH))
-	mux.HandleFunc("GET /api/v1/services/{pipeline}/{path...}", hErr(d.serviceProxyH))
-	mux.HandleFunc("GET /api/v1/logs", hErr(d.logsH))
-	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", hErr(d.cancelJobH))
-	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", hErr(d.cancelJobH))
-	mux.HandleFunc("DELETE /api/v1/jobs/{id}", hErr(d.deleteJobH))
-	mux.HandleFunc("POST /api/v1/transactions", hErr(d.startTransactionH))
-	mux.HandleFunc("GET /api/v1/transactions", hErr(d.listTransactionsH))
-	mux.HandleFunc("GET /api/v1/transactions/{id}", hErr(d.inspectTransactionH))
-	mux.HandleFunc("POST /api/v1/transactions/{id}/finish", hErr(d.finishTransactionH))
-	mux.HandleFunc("DELETE /api/v1/transactions/{id}", hErr(d.deleteTransactionH))
-	mux.HandleFunc("POST /api/v1/datums", hErr(d.enumerateDatumsH))
-	mux.HandleFunc("POST /api/v1/reset", hErr(d.resetH))
-	mux.HandleFunc("PUT /api/v1/tags/{name}", hErr(d.putTagH))
-	mux.HandleFunc("GET /api/v1/tags/{name}", hErr(d.getTagH))
-	mux.HandleFunc("DELETE /api/v1/tags/{name}", hErr(d.deleteTagH))
-	mux.HandleFunc("GET /api/v1/tags", hErr(d.listTagsH))
+	mux.HandleFunc("GET /api/v1/version", d.instrument("version.get", hErr(d.versionH)))
+	mux.HandleFunc("GET /api/v1/backup", d.instrument("backup", hErr(d.backupH)))
+	mux.HandleFunc("POST /api/v1/gc", d.instrument("gc", hErr(d.collectGarbageH)))
+	mux.HandleFunc("POST /api/v1/check", d.instrument("check", hErr(d.checkH)))
+	mux.HandleFunc("POST /api/v1/pipelines", d.instrument("pipelines.create", hErr(d.createPipelineH)))
+	mux.HandleFunc("GET /api/v1/pipelines", d.instrument("pipelines.list", hErr(d.listPipelinesH)))
+	mux.HandleFunc("GET /api/v1/pipelines/{name}", d.instrument("pipelines.inspect", hErr(d.inspectPipelineH)))
+	mux.HandleFunc("DELETE /api/v1/pipelines/{name}", d.instrument("pipelines.delete", hErr(d.deletePipelineH)))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/stop", d.instrument("pipelines.stop", hErr(d.stopPipelineH)))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/start", d.instrument("pipelines.start", hErr(d.startPipelineH)))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/run", d.instrument("pipelines.run", hErr(d.runPipelineH)))
+	mux.HandleFunc("POST /api/v1/pipelines/{name}/trigger", d.instrument("pipelines.trigger", hErr(d.triggerCronH)))
+	mux.HandleFunc("GET /api/v1/jobs", d.instrument("jobs.list", hErr(d.listJobsH)))
+	mux.HandleFunc("GET /api/v1/jobs/{id}", d.instrument("jobs.inspect", hErr(d.inspectJobH)))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/datums", d.instrument("jobs.datums", hErr(d.listDatumsH)))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/datums/{datumID}", d.instrument("jobs.datum", hErr(d.inspectDatumH)))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/datums/{datumID}/restart", d.instrument("jobs.restart", hErr(d.restartDatumH)))
+	mux.HandleFunc("POST /api/v1/git/push", d.instrument("git.push", hErr(d.gitPushH)))
+	mux.HandleFunc("POST /api/v1/flush", d.instrument("flush", hErr(d.flushH)))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/wait", d.instrument("jobs.wait", hErr(d.jobWaitH)))
+	mux.HandleFunc("GET /api/v1/services", d.instrument("services.list", hErr(d.listServicesH)))
+	mux.HandleFunc("GET /api/v1/services/{name}", d.instrument("services.inspect", hErr(d.inspectServiceH)))
+	mux.HandleFunc("GET /api/v1/services/{pipeline}/{path...}", d.instrument("services.proxy", hErr(d.serviceProxyH)))
+	mux.HandleFunc("GET /api/v1/logs", d.instrument("logs.get", hErr(d.logsH)))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", d.instrument("jobs.cancel", hErr(d.cancelJobH)))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/stop", d.instrument("jobs.stop", hErr(d.cancelJobH)))
+	mux.HandleFunc("DELETE /api/v1/jobs/{id}", d.instrument("jobs.delete", hErr(d.deleteJobH)))
+	mux.HandleFunc("POST /api/v1/transactions", d.instrument("transactions.start", hErr(d.startTransactionH)))
+	mux.HandleFunc("GET /api/v1/transactions", d.instrument("transactions.list", hErr(d.listTransactionsH)))
+	mux.HandleFunc("GET /api/v1/transactions/{id}", d.instrument("transactions.inspect", hErr(d.inspectTransactionH)))
+	mux.HandleFunc("POST /api/v1/transactions/{id}/finish", d.instrument("transactions.finish", hErr(d.finishTransactionH)))
+	mux.HandleFunc("DELETE /api/v1/transactions/{id}", d.instrument("transactions.delete", hErr(d.deleteTransactionH)))
+	mux.HandleFunc("POST /api/v1/datums", d.instrument("datums.enumerate", hErr(d.enumerateDatumsH)))
+	mux.HandleFunc("POST /api/v1/reset", d.instrument("reset", hErr(d.resetH)))
+	mux.HandleFunc("PUT /api/v1/tags/{name}", d.instrument("tags.put", hErr(d.putTagH)))
+	mux.HandleFunc("GET /api/v1/tags/{name}", d.instrument("tags.get", hErr(d.getTagH)))
+	mux.HandleFunc("DELETE /api/v1/tags/{name}", d.instrument("tags.delete", hErr(d.deleteTagH)))
+	mux.HandleFunc("GET /api/v1/tags", d.instrument("tags.list", hErr(d.listTagsH)))
 	// the embedded read-only dashboard: index at /, assets under /ui/.
 	// The API owns every /api/v1/... path; Go's ServeMux prefers the
 	// more specific registered patterns, so these never shadow it, and
@@ -476,35 +476,58 @@ type metricsStore struct {
 	writeTotal int64
 	list       hist
 	listTotal  int64
+	// ops accumulates per-API-verb invocation counters and latency
+	// aggregates for every instrumented route (repos.list, jobs.inspect,
+	// pipelines.create, ...); ok/err split by response status.
+	ops map[string]*opMetrics
 }
 
-func (m *metricsStore) observeRead(dur float64, err bool) {
+type opMetrics struct {
+	total int64
+	ok    hist
+	err   hist
+}
+
+func (m *metricsStore) observe(op string, dur float64, err bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.readTotal++
-	if err {
-		m.readErr.sum += dur
-		m.readErr.count++
-	} else {
-		m.readOK.sum += dur
-		m.readOK.count++
+	// the three legacy families stay emitted for compatibility; every
+	// op also lands in the generic per-verb series
+	switch op {
+	case "files.get":
+		m.readTotal++
+		if err {
+			m.readErr.sum += dur
+			m.readErr.count++
+		} else {
+			m.readOK.sum += dur
+			m.readOK.count++
+		}
+	case "files.put":
+		m.writeTotal++
+		m.write.sum += dur
+		m.write.count++
+	case "jobs.list":
+		m.listTotal++
+		m.list.sum += dur
+		m.list.count++
 	}
-}
-
-func (m *metricsStore) observeWrite(dur float64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.writeTotal++
-	m.write.sum += dur
-	m.write.count++
-}
-
-func (m *metricsStore) observeList(dur float64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.listTotal++
-	m.list.sum += dur
-	m.list.count++
+	om := m.ops[op]
+	if om == nil {
+		om = &opMetrics{}
+		if m.ops == nil {
+			m.ops = make(map[string]*opMetrics)
+		}
+		m.ops[op] = om
+	}
+	om.total++
+	if err {
+		om.err.sum += dur
+		om.err.count++
+	} else {
+		om.ok.sum += dur
+		om.ok.count++
+	}
 }
 
 // statusRecorder captures the response status so instrumentation can tell
@@ -526,15 +549,7 @@ func (d *daemon) instrument(op string, h http.HandlerFunc) http.HandlerFunc {
 		start := time.Now()
 		sw := &statusRecorder{ResponseWriter: w, status: 200}
 		h(sw, r)
-		dur := time.Since(start).Seconds()
-		switch op {
-		case "read":
-			d.metrics.observeRead(dur, sw.status >= 400)
-		case "write":
-			d.metrics.observeWrite(dur)
-		case "listJobs":
-			d.metrics.observeList(dur)
-		}
+		d.metrics.observe(op, time.Since(start).Seconds(), sw.status >= 400)
 	}
 }
 
@@ -558,6 +573,15 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	readOK, readErr := d.metrics.readOK, d.metrics.readErr
 	writeTotal, writeH := d.metrics.writeTotal, d.metrics.write
 	listTotal, listH := d.metrics.listTotal, d.metrics.list
+	ops := make([]string, 0, len(d.metrics.ops))
+	for op := range d.metrics.ops {
+		ops = append(ops, op)
+	}
+	sort.Strings(ops)
+	opsCopy := make(map[string]opMetrics, len(d.metrics.ops))
+	for op, om := range d.metrics.ops {
+		opsCopy[op] = *om
+	}
 	d.metrics.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	fmt.Fprintf(w, "# HELP sandman_file_read_total File read invocations.\n# TYPE sandman_file_read_total counter\nsandman_file_read_total %d\n", readTotal)
@@ -574,7 +598,118 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	fmt.Fprintf(w, "# TYPE sandman_job_list_seconds histogram\n")
 	fmt.Fprintf(w, "sandman_job_list_seconds_sum %g\n", listH.sum)
 	fmt.Fprintf(w, "sandman_job_list_seconds_count %d\n", listH.count)
+	// per-verb API series: one counter, one latency sum/count pair, and
+	// one error counter per instrumented route (repos.list, jobs.inspect,
+	// pipelines.create, ...)
+	fmt.Fprintf(w, "# HELP sandman_api_requests_total API invocations by verb.\n# TYPE sandman_api_requests_total counter\n")
+	fmt.Fprintf(w, "# HELP sandman_api_request_seconds API latency by verb.\n# TYPE sandman_api_request_seconds histogram\n")
+	fmt.Fprintf(w, "# HELP sandman_api_request_errors_total API invocations returning >=400 by verb.\n# TYPE sandman_api_request_errors_total counter\n")
+	for _, op := range ops {
+		om := opsCopy[op]
+		fmt.Fprintf(w, "sandman_api_requests_total{op=%q} %d\n", op, om.total)
+		fmt.Fprintf(w, "sandman_api_request_seconds_sum{op=%q} %g\n", op, om.ok.sum+om.err.sum)
+		fmt.Fprintf(w, "sandman_api_request_seconds_count{op=%q} %d\n", op, om.ok.count+om.err.count)
+		fmt.Fprintf(w, "sandman_api_request_errors_total{op=%q} %d\n", op, om.err.count)
+	}
+	// fleet state gauges (TTL-cached)
+	jobs, pipes, hosts, hostsGPU, gpus, spouts := d.fleetCounts()
+	fmt.Fprintf(w, "# HELP sandman_hosts_total Registered execution hosts.\n# TYPE sandman_hosts_total gauge\nsandman_hosts_total %d\n", hosts)
+	fmt.Fprintf(w, "# HELP sandman_hosts_with_gpus_total Registered hosts advertising GPUs.\n# TYPE sandman_hosts_with_gpus_total gauge\nsandman_hosts_with_gpus_total %d\n", hostsGPU)
+	fmt.Fprintf(w, "# HELP sandman_gpus_total GPUs advertised across the fleet.\n# TYPE sandman_gpus_total gauge\nsandman_gpus_total %d\n", gpus)
+	fmt.Fprintf(w, "# HELP sandman_spouts_total Spout pipelines.\n# TYPE sandman_spouts_total gauge\nsandman_spouts_total %d\n", spouts)
+	fmt.Fprintf(w, "# HELP sandman_jobs Jobs by state.\n# TYPE sandman_jobs gauge\n")
+	for _, st := range sortedKeysI64(jobs) {
+		fmt.Fprintf(w, "sandman_jobs{state=%q} %d\n", st, jobs[st])
+	}
+	fmt.Fprintf(w, "# HELP sandman_pipelines Pipelines by state.\n# TYPE sandman_pipelines gauge\n")
+	for _, st := range sortedKeysI64(pipes) {
+		fmt.Fprintf(w, "sandman_pipelines{state=%q} %d\n", st, pipes[st])
+	}
 	return nil
+}
+
+// countsCache holds the TTL-cached fleet gauges.
+type countsCache struct {
+	mu       sync.Mutex
+	at       time.Time
+	jobs     map[string]int64
+	pipes    map[string]int64
+	hosts    int64
+	hostsGPU int64
+	gpus     int64
+	spout    int64
+}
+
+// sortedKeysI64 returns a map's keys in sorted order for stable exposition.
+func sortedKeysI64(m map[string]int64) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// fleetCounts computes (or returns cached) jobs by state, pipelines by
+// state, registered hosts, hosts with GPUs, advertised GPUs, and spout
+// pipelines. The state scan walks the jobs/pipelines directories, so it is
+// cached for a few seconds between scrapes.
+func (d *daemon) fleetCounts() (jobs, pipes map[string]int64, hosts, hostsGPU, gpus, spouts int64) {
+	d.metricCounts.mu.Lock()
+	defer d.metricCounts.mu.Unlock()
+	if time.Since(d.metricCounts.at) < 5*time.Second && d.metricCounts.jobs != nil {
+		return d.metricCounts.jobs, d.metricCounts.pipes, d.metricCounts.hosts, d.metricCounts.hostsGPU, d.metricCounts.gpus, d.metricCounts.spout
+	}
+	jobs = map[string]int64{}
+	entries, err := os.ReadDir(filepath.Join(d.state, "jobs"))
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(d.state, "jobs", e.Name(), "job.json"))
+			if err != nil {
+				continue
+			}
+			var rec jobRec
+			if json.Unmarshal(b, &rec) != nil {
+				continue
+			}
+			jobs[rec.State]++
+		}
+	}
+	pipes = map[string]int64{}
+	pents, err := os.ReadDir(filepath.Join(d.state, "pipelines"))
+	if err == nil {
+		for _, e := range pents {
+			if !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			rec, err := d.loadPipeline(strings.TrimSuffix(e.Name(), ".json"))
+			if err != nil {
+				continue
+			}
+			st := rec.State
+			if rec.Stopped {
+				st = "stopped"
+			}
+			pipes[st]++
+			if rec.Pipeline.Spout != nil {
+				spouts++
+			}
+		}
+	}
+	for _, h := range d.hosts.list() {
+		hosts++
+		if len(h.Gpus) > 0 {
+			hostsGPU++
+		}
+		gpus += int64(len(h.Gpus))
+	}
+	d.metricCounts.jobs, d.metricCounts.pipes = jobs, pipes
+	d.metricCounts.hosts, d.metricCounts.hostsGPU, d.metricCounts.gpus, d.metricCounts.spout = hosts, hostsGPU, gpus, spouts
+	d.metricCounts.at = time.Now()
+	return
 }
 
 // ---- garbage collection ----
