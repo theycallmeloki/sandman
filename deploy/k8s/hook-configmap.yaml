@@ -24,7 +24,7 @@ data:
     // {status, body, headers} with the desired children in body.
     const controlPlane = 'http://192.168.1.15:4242';
     const workerPort = 9595;
-    const workerImage = 'ogmiladyloki/sandman:worker-v0.2.37';
+    const workerImage = 'ogmiladyloki/sandman:worker-v0.2.40';
     const dindImage = 'docker:dind';
     const gpuDindImage = 'nvidia/docker:dind';
 
