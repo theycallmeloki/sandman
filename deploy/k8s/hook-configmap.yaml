@@ -47,11 +47,12 @@ data:
 
     module.exports = async function (context) {
       const input = context.request.body;
-      const node = input.parent;
+      // decorator sync requests name the decorated object `object`
+      const node = input.object;
       // control-plane nodes never run job containers (nodeName-pinned
       // pods bypass scheduler taint checks, so skip them here)
       if (isControlPlane(node)) {
-        return { status: 200, body: { children: [] }, headers: { 'Content-Type': 'application/json' } };
+        return { status: 200, body: { attachments: [] }, headers: { 'Content-Type': 'application/json' } };
       }
 
       const labels = [];
@@ -129,5 +130,5 @@ data:
         },
       };
 
-      return { status: 200, body: { children: [pod] }, headers: { 'Content-Type': 'application/json' } };
+      return { status: 200, body: { attachments: [pod] }, headers: { 'Content-Type': 'application/json' } };
     };

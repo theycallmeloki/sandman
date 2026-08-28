@@ -4,7 +4,7 @@
 GO ?= go
 PREFIX ?= /usr/local
 
-.PHONY: build install install-release uninstall clean daemon worker
+.PHONY: build install install-release uninstall clean daemon worker test-k8s smoke-k8s
 
 # Role selection: `make install daemon` (default) vs `make install worker`
 # picks the post-install enable hint only — do-install always writes both
@@ -19,6 +19,16 @@ endif
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w$(if $(VERSION), -X main.Version=$(VERSION),)" -o sandman .
+# test-k8s: unit-test the metacontroller worker-fleet hook (deploy/k8s)
+# without a cluster — requires node on PATH.
+test-k8s:
+	node --test deploy/k8s/test/sync.test.js
+
+# smoke-k8s: cluster-backed check that the worker fleet is up and
+# registered (requires kubectl; SANDMAN_ADDR + sandman on PATH for the
+# registration check).
+smoke-k8s:
+	bash deploy/k8s/test/smoke.sh
 
 # install: build from source, then install the binary + the unit for the
 # chosen role. `systemctl enable --now sandman` (daemon) or

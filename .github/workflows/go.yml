@@ -58,6 +58,8 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
+      - name: Test metacontroller worker hook
+        run: node --test deploy/k8s/test/sync.test.js
 
       - name: Build
         run: go build -v ./...
