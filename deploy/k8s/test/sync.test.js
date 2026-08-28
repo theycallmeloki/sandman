@@ -193,13 +193,19 @@ test('node without InternalIP advertises the port with empty host (documented)',
   const worker = res.body.attachments[0].spec.containers.find((c) => c.name === 'worker');
   assert.ok(worker.args.includes(':9595'));
 });
-// --- manifest shape guards (schema drift silently breaks the fleet) ---
-
 test('decoratorcontroller.yaml uses the v4 attachments field', () => {
   const txt = fs.readFileSync(path.join(root, 'decoratorcontroller.yaml'), 'utf8');
   assert.match(txt, /^\s+attachments:/m, 'DecoratorController must list children under `attachments` (v4); childResources is pruned and the controller never sees its pods');
   assert.doesNotMatch(txt, /childResources:/, 'childResources is the pre-v4 field name and gets silently dropped');
   assert.match(txt, /resource:\s*pods/, 'attachment resource must be pods');
+});
+
+test('decoratorcontroller.yaml uses Recreate, not OnDelete', () => {
+  // OnDelete in v4 means "never touch existing children" — label-driven
+  // arg changes would never apply. Recreate delete+recreates on diff.
+  const txt = fs.readFileSync(path.join(root, 'decoratorcontroller.yaml'), 'utf8');
+  assert.match(txt, /method:\s*Recreate/, 'updateStrategy must be Recreate');
+  assert.doesNotMatch(txt, /method:\s*OnDelete/, 'OnDelete never updates existing children');
 });
 
 test('decoratorcontroller.yaml hooks point at the served sync endpoint', () => {

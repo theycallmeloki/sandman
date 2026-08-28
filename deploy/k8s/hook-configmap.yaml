@@ -130,5 +130,8 @@ data:
         },
       };
 
+      const obs = (input.attachments && input.attachments['Pod.v1']) || {};
+      console.log('DEBUG observed pod names:', JSON.stringify(Object.keys(obs)));
+      console.log('DEBUG responding with attachments:', JSON.stringify([pod.metadata.name]));
       return { status: 200, body: { attachments: [pod] }, headers: { 'Content-Type': 'application/json' } };
     };

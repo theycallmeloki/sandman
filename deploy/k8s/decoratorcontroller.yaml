@@ -13,11 +13,15 @@ spec:
   # v4 schema: the child rule list is `attachments` (childResources was
   # the pre-v4 name and is silently pruned — the controller then never
   # sees its own pods and tries to create them forever).
+  # updateStrategy: Recreate — OnDelete means "never touch existing
+  # children" (the controller only recreates pods someone else deleted),
+  # so label-driven arg changes would never apply. Recreate dry-runs the
+  # desired state and delete+recreates on any difference.
   attachments:
   - apiVersion: v1
     resource: pods
     updateStrategy:
-      method: OnDelete
+      method: Recreate
   hooks:
     sync:
       webhook:
