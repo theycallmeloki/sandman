@@ -1,0 +1,162 @@
+# Sandman control-plane dashboard. Grafana (kube-prometheus-stack's
+# dashboard sidecar) auto-provisions any ConfigMap in the monitoring
+# namespace carrying the grafana_dashboard label — the same mechanism
+# that loads the smart-socket energy dashboard.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandman-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  sandman-dashboard.json: |
+    {
+      "title": "Sandman Control Plane",
+      "uid": "sandman-control-plane",
+      "tags": ["sandman", "fleet", "data-plane"],
+      "timezone": "browser",
+      "schemaVersion": 37,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": { "list": [] },
+      "panels": [
+        {
+          "id": 1,
+          "title": "File Reads",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(sandman_file_read_total)", "refId": "A", "instant": true }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": 0 } ] },
+              "unit": "none",
+              "mappings": []
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "background"
+          },
+          "gridPos": { "x": 0, "y": 0, "w": 4, "h": 3 }
+        },
+        {
+          "id": 2,
+          "title": "File Writes",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(sandman_file_write_total)", "refId": "A", "instant": true }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": 0 } ] },
+              "unit": "none",
+              "mappings": []
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "background"
+          },
+          "gridPos": { "x": 4, "y": 0, "w": 4, "h": 3 }
+        },
+        {
+          "id": 3,
+          "title": "Job List Ops",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(sandman_job_list_total)", "refId": "A", "instant": true }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": 0 } ] },
+              "unit": "none",
+              "mappings": []
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "background"
+          },
+          "gridPos": { "x": 8, "y": 0, "w": 4, "h": 3 }
+        },
+        {
+          "id": 4,
+          "title": "File Ops / sec",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(rate(sandman_file_read_total[$__rate_interval]))", "legendFormat": "reads", "refId": "A" },
+            { "expr": "sum(rate(sandman_file_write_total[$__rate_interval]))", "legendFormat": "writes", "refId": "B" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+            }
+          },
+          "options": {},
+          "gridPos": { "x": 0, "y": 3, "w": 12, "h": 8 }
+        },
+        {
+          "id": 5,
+          "title": "Avg Read Latency",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(sandman_file_read_seconds_sum{outcome=\"success\"}[$__rate_interval])) / sum(rate(sandman_file_read_seconds_count{outcome=\"success\"}[$__rate_interval]))",
+              "legendFormat": "success",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(sandman_file_read_seconds_sum{outcome=\"error\"}[$__rate_interval])) / sum(rate(sandman_file_read_seconds_count{outcome=\"error\"}[$__rate_interval]))",
+              "legendFormat": "error",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+            }
+          },
+          "options": {},
+          "gridPos": { "x": 0, "y": 11, "w": 12, "h": 8 }
+        },
+        {
+          "id": 6,
+          "title": "Read Error Ratio",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(sandman_file_read_seconds_count{outcome=\"error\"}[$__rate_interval])) / sum(rate(sandman_file_read_seconds_count{}[$__rate_interval]))",
+              "legendFormat": "errors/total",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
+            }
+          },
+          "options": {},
+          "gridPos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+        }
+      ]
+    }

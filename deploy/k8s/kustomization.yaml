@@ -6,3 +6,4 @@ resources:
 - hook-server.yaml
 - decoratorcontroller.yaml
 - sandmand-monitor.yaml
+- sandman-dashboard.yaml
