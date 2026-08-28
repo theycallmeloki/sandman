@@ -2,6 +2,10 @@
 # dashboard sidecar) auto-provisions any ConfigMap in the monitoring
 # namespace carrying the grafana_dashboard label — the same mechanism
 # that loads the smart-socket energy dashboard.
+#
+# Covers everything the daemon exposes: fleet state (hosts, GPUs,
+# pipelines, jobs, spouts), per-verb API activity and latency, and the
+# data-plane file read/write operations.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,16 +23,27 @@ data:
       "schemaVersion": 37,
       "refresh": "30s",
       "time": { "from": "now-1h", "to": "now" },
-      "templating": { "list": [] },
+      "templating": {
+        "list": [
+          {
+            "name": "op",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "definition": "label_values(sandman_api_requests_total, op)",
+            "query": { "query": "label_values(sandman_api_requests_total, op)", "refId": "StandardVariableQuery" },
+            "includeAll": true,
+            "allValue": ".*",
+            "sort": 3
+          }
+        ]
+      },
       "panels": [
         {
           "id": 1,
-          "title": "File Reads",
+          "title": "Hosts Registered",
           "type": "stat",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
-            { "expr": "sum(sandman_file_read_total)", "refId": "A", "instant": true }
-          ],
+          "targets": [ { "expr": "sandman_hosts_total", "refId": "A", "instant": true } ],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -37,22 +52,15 @@ data:
               "mappings": []
             }
           },
-          "options": {
-            "reduceOptions": { "calcs": ["lastNotNull"] },
-            "orientation": "auto",
-            "textMode": "auto",
-            "colorMode": "background"
-          },
-          "gridPos": { "x": 0, "y": 0, "w": 4, "h": 3 }
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "gridPos": { "x": 0, "y": 0, "w": 3, "h": 3 }
         },
         {
           "id": 2,
-          "title": "File Writes",
+          "title": "Hosts with GPUs",
           "type": "stat",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
-            { "expr": "sum(sandman_file_write_total)", "refId": "A", "instant": true }
-          ],
+          "targets": [ { "expr": "sandman_hosts_with_gpus_total", "refId": "A", "instant": true } ],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -61,22 +69,15 @@ data:
               "mappings": []
             }
           },
-          "options": {
-            "reduceOptions": { "calcs": ["lastNotNull"] },
-            "orientation": "auto",
-            "textMode": "auto",
-            "colorMode": "background"
-          },
-          "gridPos": { "x": 4, "y": 0, "w": 4, "h": 3 }
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "gridPos": { "x": 3, "y": 0, "w": 3, "h": 3 }
         },
         {
           "id": 3,
-          "title": "Job List Ops",
+          "title": "GPUs Advertised",
           "type": "stat",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
-            { "expr": "sum(sandman_job_list_total)", "refId": "A", "instant": true }
-          ],
+          "targets": [ { "expr": "sandman_gpus_total", "refId": "A", "instant": true } ],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -85,16 +86,79 @@ data:
               "mappings": []
             }
           },
-          "options": {
-            "reduceOptions": { "calcs": ["lastNotNull"] },
-            "orientation": "auto",
-            "textMode": "auto",
-            "colorMode": "background"
-          },
-          "gridPos": { "x": 8, "y": 0, "w": 4, "h": 3 }
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "gridPos": { "x": 6, "y": 0, "w": 3, "h": 3 }
         },
         {
           "id": 4,
+          "title": "Pipelines",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "expr": "sum(sandman_pipelines)", "refId": "A", "instant": true } ],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": 0 } ] },
+              "unit": "none",
+              "mappings": []
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "gridPos": { "x": 9, "y": 0, "w": 3, "h": 3 }
+        },
+        {
+          "id": 5,
+          "title": "Spouts",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "expr": "sandman_spouts_total", "refId": "A", "instant": true } ],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": 0 } ] },
+              "unit": "none",
+              "mappings": []
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "gridPos": { "x": 0, "y": 3, "w": 3, "h": 3 }
+        },
+        {
+          "id": 6,
+          "title": "Running Jobs",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "expr": "sandman_jobs{state=\"running\"}", "refId": "A", "instant": true } ],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 } ] },
+              "unit": "none",
+              "mappings": []
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "gridPos": { "x": 3, "y": 3, "w": 3, "h": 3 }
+        },
+        {
+          "id": 7,
+          "title": "Failed Jobs",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "expr": "sandman_jobs{state=\"failure\"}", "refId": "A", "instant": true } ],
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "red", "value": 1 } ] },
+              "unit": "none",
+              "mappings": []
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
+          "gridPos": { "x": 6, "y": 3, "w": 3, "h": 3 }
+        },
+        {
+          "id": 8,
           "title": "File Ops / sec",
           "type": "timeseries",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -102,17 +166,87 @@ data:
             { "expr": "sum(rate(sandman_file_read_total[$__rate_interval]))", "legendFormat": "reads", "refId": "A" },
             { "expr": "sum(rate(sandman_file_write_total[$__rate_interval]))", "legendFormat": "writes", "refId": "B" }
           ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "ops",
-              "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
-            }
-          },
+          "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
           "options": {},
-          "gridPos": { "x": 0, "y": 3, "w": 12, "h": 8 }
+          "gridPos": { "x": 9, "y": 3, "w": 3, "h": 3 }
         },
         {
-          "id": 5,
+          "id": 9,
+          "title": "Hosts over time",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sandman_hosts_total", "legendFormat": "hosts", "refId": "A" },
+            { "expr": "sandman_hosts_with_gpus_total", "legendFormat": "with gpus", "refId": "B" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
+          "options": {},
+          "gridPos": { "x": 0, "y": 6, "w": 6, "h": 8 }
+        },
+        {
+          "id": 10,
+          "title": "Jobs by state",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "expr": "sandman_jobs", "legendFormat": "{{state}}", "refId": "A" } ],
+          "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "bars", "fillOpacity": 60, "showPoints": "never" } } },
+          "options": {},
+          "gridPos": { "x": 6, "y": 6, "w": 6, "h": 8 }
+        },
+        {
+          "id": 11,
+          "title": "Pipelines by state",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "expr": "sandman_pipelines", "legendFormat": "{{state}}", "refId": "A" } ],
+          "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
+          "options": {},
+          "gridPos": { "x": 0, "y": 14, "w": 6, "h": 8 }
+        },
+        {
+          "id": 12,
+          "title": "API requests / sec by verb",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "expr": "topk(8, sum by (op) (rate(sandman_api_requests_total[$__rate_interval])))", "legendFormat": "{{op}}", "refId": "A" } ],
+          "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
+          "options": {},
+          "gridPos": { "x": 6, "y": 14, "w": 6, "h": 8 }
+        },
+        {
+          "id": 13,
+          "title": "API latency by verb (avg)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(sandman_api_request_seconds_sum{op=~\"$op\"}[$__rate_interval])) / sum(rate(sandman_api_request_seconds_count{op=~\"$op\"}[$__rate_interval]))",
+              "legendFormat": "{{op}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
+          "options": {},
+          "gridPos": { "x": 0, "y": 22, "w": 6, "h": 8 }
+        },
+        {
+          "id": 14,
+          "title": "API error rate by verb",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (op) (rate(sandman_api_request_errors_total[$__rate_interval])) / sum by (op) (rate(sandman_api_requests_total[$__rate_interval]))",
+              "legendFormat": "{{op}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
+          "options": {},
+          "gridPos": { "x": 6, "y": 22, "w": 6, "h": 8 }
+        },
+        {
+          "id": 15,
           "title": "Avg Read Latency",
           "type": "timeseries",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -128,17 +262,12 @@ data:
               "refId": "B"
             }
           ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "s",
-              "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
-            }
-          },
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
           "options": {},
-          "gridPos": { "x": 0, "y": 11, "w": 12, "h": 8 }
+          "gridPos": { "x": 0, "y": 30, "w": 6, "h": 8 }
         },
         {
-          "id": 6,
+          "id": 16,
           "title": "Read Error Ratio",
           "type": "timeseries",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -149,14 +278,9 @@ data:
               "refId": "A"
             }
           ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percentunit",
-              "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" }
-            }
-          },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } } },
           "options": {},
-          "gridPos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+          "gridPos": { "x": 6, "y": 30, "w": 6, "h": 8 }
         }
       ]
     }
