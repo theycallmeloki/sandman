@@ -13,6 +13,11 @@ spec:
     # kubelet heartbeats update node status every few seconds; without
     # this every heartbeat re-synced every worker pod
     ignoreStatusChanges: true
+  # periodic resync: without it, and with ignoreStatusChanges on, a
+  # ConfigMap-only change (e.g. a worker image bump) never re-triggers a
+  # node sync — the fleet would stay on the old image until a label
+  # change. 300s converges any desired-state drift within five minutes.
+  resyncPeriodSeconds: 300
   # v4 schema: the child rule list is `attachments` (childResources was
   # the pre-v4 name and is silently pruned — the controller then never
   # sees its own pods and tries to create them forever).

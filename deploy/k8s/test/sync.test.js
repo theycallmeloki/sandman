@@ -226,7 +226,7 @@ test('decoratorcontroller.yaml recreates worker pods on label change', () => {
   const txt = fs.readFileSync(path.join(root, 'decoratorcontroller.yaml'), 'utf8');
   assert.match(txt, /method:\s*Recreate/, 'updateStrategy must be Recreate');
   assert.doesNotMatch(txt, /method:\s*(OnDelete|InPlace)/, 'OnDelete/InPlace cannot apply arg changes');
-  assert.match(txt, /ignoreStatusChanges:\s*true/, 'node heartbeats must not re-sync every worker pod');
+  assert.match(txt, /resyncPeriodSeconds:\s*300/, 'periodic resync must converge CM-only drift (image bumps)');
 });
 
 test('decoratorcontroller.yaml hooks point at the served sync endpoint', () => {
