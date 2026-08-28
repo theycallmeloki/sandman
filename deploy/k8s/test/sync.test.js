@@ -123,7 +123,9 @@ test('worker env: DOCKER_HOST loopback dind + TMPDIR scratch', async () => {
   const res = await sync(workerNode);
   const worker = res.body.attachments[0].spec.containers.find((c) => c.name === 'worker');
   const env = Object.fromEntries(worker.env.map((e) => [e.name, e.value]));
-  assert.strictEqual(env.DOCKER_HOST, 'tcp://127.0.0.1:2375');
+  // unix socket on a shared volume: no TCP listener, so dockerd's
+  // per-restart port state can never block startup
+  assert.strictEqual(env.DOCKER_HOST, 'unix:///var/run/docker/docker.sock');
   assert.strictEqual(env.TMPDIR, '/scratch');
 });
 
@@ -131,7 +133,7 @@ test('plain node gets docker:dind sidecar, loopback-only, privileged', async () 
   const res = await sync(workerNode);
   const dind = res.body.attachments[0].spec.containers.find((c) => c.name === 'dind');
   assert.strictEqual(dind.image, 'docker:dind');
-  assert.deepStrictEqual(dind.args, ['--host=unix:///var/run/docker.sock', '--host=tcp://127.0.0.1:2375']);
+  assert.deepStrictEqual(dind.args, ['--host=unix:///var/run/docker/docker.sock']);
   assert.strictEqual(dind.securityContext.privileged, true);
   // docker:dind enables TLS by default; the worker CLI is plain HTTP.
   // The env entry must NOT carry value:'' — the API omits empty values,
@@ -144,11 +146,14 @@ test('scratch + docker-data volumes shared at identical paths', async () => {
   const res = await sync(workerNode);
   const pod = res.body.attachments[0];
   const names = pod.spec.volumes.map((v) => v.name).sort();
-  assert.deepStrictEqual(names, ['docker-data', 'scratch']);
+  assert.deepStrictEqual(names, ['docker-data', 'docker-sock', 'scratch']);
   for (const c of pod.spec.containers) {
     const scratch = c.volumeMounts.find((m) => m.name === 'scratch');
     assert.ok(scratch, `${c.name} mounts scratch`);
     assert.strictEqual(scratch.mountPath, '/scratch');
+    const sock = c.volumeMounts.find((m) => m.name === 'docker-sock');
+    assert.ok(sock, `${c.name} mounts docker-sock`);
+    assert.strictEqual(sock.mountPath, '/var/run/docker');
   }
   const dind = pod.spec.containers.find((c) => c.name === 'dind');
   assert.strictEqual(dind.volumeMounts.find((m) => m.name === 'docker-data').mountPath, '/var/lib/docker');

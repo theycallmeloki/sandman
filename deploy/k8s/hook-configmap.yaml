@@ -76,14 +76,19 @@ data:
       ];
       for (const l of labels) { args.push('-label', l); }
 
-      const workerMounts = [{ name: 'scratch', mountPath: '/scratch' }];
+      const workerMounts = [
+        { name: 'scratch', mountPath: '/scratch' },
+        { name: 'docker-sock', mountPath: '/var/run/docker' },
+      ];
       const dindMounts = [
         { name: 'scratch', mountPath: '/scratch' },
         { name: 'docker-data', mountPath: '/var/lib/docker' },
+        { name: 'docker-sock', mountPath: '/var/run/docker' },
       ];
       const volumes = [
         { name: 'scratch', emptyDir: {} },
         { name: 'docker-data', emptyDir: {} },
+        { name: 'docker-sock', emptyDir: {} },
       ];
 
       if (gpu) {
@@ -117,8 +122,11 @@ data:
               image: workerImage,
               command: ['/usr/local/bin/sandman'],
               args: args,
+              // DOCKER_HOST is a unix socket on a shared volume — no TCP
+              // listener, so dockerd's per-restart port-state can never
+              // block startup (and nothing is exposed on the node)
               env: [
-                { name: 'DOCKER_HOST', value: 'tcp://127.0.0.1:2375' },
+                { name: 'DOCKER_HOST', value: 'unix:///var/run/docker/docker.sock' },
                 { name: 'TMPDIR', value: '/scratch' },
               ],
               volumeMounts: workerMounts,
@@ -126,7 +134,7 @@ data:
             {
               name: 'dind',
               image: gpu ? gpuDindImage : dindImage,
-              args: ['--host=unix:///var/run/docker.sock', '--host=tcp://127.0.0.1:2375'],
+              args: ['--host=unix:///var/run/docker/docker.sock'],
               // the docker:dind entrypoint enables TLS by default
               // (DOCKER_TLS_CERTDIR=/certs); the worker CLI speaks plain
               // HTTP to 127.0.0.1:2375, so TLS must be off. No value: ''
