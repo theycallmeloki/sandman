@@ -458,11 +458,53 @@ func (d *daemon) deleteCommitH(w http.ResponseWriter, r *http.Request) error {
 
 // ---- runtime metrics ----
 
-// hist is a latency histogram's aggregate: a sum and a count, so an
-// average is computable.
+// latencyBuckets are the histogram upper bounds (seconds) for every
+// latency series; +Inf is implied. Fine-grained at the low end because
+// control-plane operations are mostly sub-millisecond local file/API
+// calls.
+var latencyBuckets = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+
+// hist is a Prometheus-style histogram: sum/count plus cumulative bucket
+// counts (buckets[i] = observations <= latencyBuckets[i]). A nil buckets
+// slice means no observations yet.
 type hist struct {
-	sum   float64
-	count int64
+	sum     float64
+	count   int64
+	buckets []uint64
+}
+
+// observe records one latency sample into the histogram.
+func (h *hist) observe(dur float64) {
+	h.sum += dur
+	h.count++
+	if h.buckets == nil {
+		h.buckets = make([]uint64, len(latencyBuckets))
+	}
+	for i, ub := range latencyBuckets {
+		if dur <= ub {
+			h.buckets[i]++
+			break
+		}
+	}
+}
+
+// add returns a histogram with the sums, counts, and bucket counts of two
+// histograms combined (used to merge a per-op success/error split back
+// into one series).
+func (a hist) add(b hist) hist {
+	out := hist{sum: a.sum + b.sum, count: a.count + b.count}
+	if a.buckets != nil || b.buckets != nil {
+		out.buckets = make([]uint64, len(latencyBuckets))
+		for i := range out.buckets {
+			if a.buckets != nil {
+				out.buckets[i] += a.buckets[i]
+			}
+			if b.buckets != nil {
+				out.buckets[i] += b.buckets[i]
+			}
+		}
+	}
+	return out
 }
 
 // metricsStore accumulates the instrumented operations' invocation counts
@@ -497,20 +539,16 @@ func (m *metricsStore) observe(op string, dur float64, err bool) {
 	case "files.get":
 		m.readTotal++
 		if err {
-			m.readErr.sum += dur
-			m.readErr.count++
+			m.readErr.observe(dur)
 		} else {
-			m.readOK.sum += dur
-			m.readOK.count++
+			m.readOK.observe(dur)
 		}
 	case "files.put":
 		m.writeTotal++
-		m.write.sum += dur
-		m.write.count++
+		m.write.observe(dur)
 	case "jobs.list":
 		m.listTotal++
-		m.list.sum += dur
-		m.list.count++
+		m.list.observe(dur)
 	}
 	om := m.ops[op]
 	if om == nil {
@@ -522,11 +560,9 @@ func (m *metricsStore) observe(op string, dur float64, err bool) {
 	}
 	om.total++
 	if err {
-		om.err.sum += dur
-		om.err.count++
+		om.err.observe(dur)
 	} else {
-		om.ok.sum += dur
-		om.ok.count++
+		om.ok.observe(dur)
 	}
 }
 
@@ -586,18 +622,14 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	fmt.Fprintf(w, "# HELP sandman_file_read_total File read invocations.\n# TYPE sandman_file_read_total counter\nsandman_file_read_total %d\n", readTotal)
 	fmt.Fprintf(w, "# TYPE sandman_file_read_seconds histogram\n")
-	fmt.Fprintf(w, "sandman_file_read_seconds_sum{outcome=\"success\"} %g\n", readOK.sum)
-	fmt.Fprintf(w, "sandman_file_read_seconds_count{outcome=\"success\"} %d\n", readOK.count)
-	fmt.Fprintf(w, "sandman_file_read_seconds_sum{outcome=\"error\"} %g\n", readErr.sum)
-	fmt.Fprintf(w, "sandman_file_read_seconds_count{outcome=\"error\"} %d\n", readErr.count)
+	emitHist(w, "sandman_file_read_seconds", `outcome="success"`, readOK)
+	emitHist(w, "sandman_file_read_seconds", `outcome="error"`, readErr)
 	fmt.Fprintf(w, "# HELP sandman_file_write_total File write invocations.\n# TYPE sandman_file_write_total counter\nsandman_file_write_total %d\n", writeTotal)
 	fmt.Fprintf(w, "# TYPE sandman_file_write_seconds histogram\n")
-	fmt.Fprintf(w, "sandman_file_write_seconds_sum %g\n", writeH.sum)
-	fmt.Fprintf(w, "sandman_file_write_seconds_count %d\n", writeH.count)
+	emitHist(w, "sandman_file_write_seconds", "", writeH)
 	fmt.Fprintf(w, "# HELP sandman_job_list_total Job listing invocations.\n# TYPE sandman_job_list_total counter\nsandman_job_list_total %d\n", listTotal)
 	fmt.Fprintf(w, "# TYPE sandman_job_list_seconds histogram\n")
-	fmt.Fprintf(w, "sandman_job_list_seconds_sum %g\n", listH.sum)
-	fmt.Fprintf(w, "sandman_job_list_seconds_count %d\n", listH.count)
+	emitHist(w, "sandman_job_list_seconds", "", listH)
 	// per-verb API series: one counter, one latency sum/count pair, and
 	// one error counter per instrumented route (repos.list, jobs.inspect,
 	// pipelines.create, ...)
@@ -607,8 +639,7 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 	for _, op := range ops {
 		om := opsCopy[op]
 		fmt.Fprintf(w, "sandman_api_requests_total{op=%q} %d\n", op, om.total)
-		fmt.Fprintf(w, "sandman_api_request_seconds_sum{op=%q} %g\n", op, om.ok.sum+om.err.sum)
-		fmt.Fprintf(w, "sandman_api_request_seconds_count{op=%q} %d\n", op, om.ok.count+om.err.count)
+		emitHist(w, "sandman_api_request_seconds", fmt.Sprintf("op=%q", op), om.ok.add(om.err))
 		fmt.Fprintf(w, "sandman_api_request_errors_total{op=%q} %d\n", op, om.err.count)
 	}
 	// fleet state gauges (TTL-cached)
@@ -626,6 +657,37 @@ func (d *daemon) metricsH(w http.ResponseWriter, r *http.Request) error {
 		fmt.Fprintf(w, "sandman_pipelines{state=%q} %d\n", st, pipes[st])
 	}
 	return nil
+}
+
+// emitHist renders one latency histogram's sum, count, and cumulative
+// bucket series in Prometheus exposition format. labels is the
+// comma-separated label list inside the braces ("" for a label-less
+// series); the le="+Inf" bucket carries the count, matching the
+// histogram convention so histogram_quantile works.
+func emitHist(w io.Writer, name, labels string, h hist) {
+	if labels == "" {
+		fmt.Fprintf(w, "%s_sum %g\n", name, h.sum)
+		fmt.Fprintf(w, "%s_count %d\n", name, h.count)
+	} else {
+		fmt.Fprintf(w, "%s_sum{%s} %g\n", name, labels, h.sum)
+		fmt.Fprintf(w, "%s_count{%s} %d\n", name, labels, h.count)
+	}
+	for i, ub := range latencyBuckets {
+		var b uint64
+		if i < len(h.buckets) {
+			b = h.buckets[i]
+		}
+		if labels == "" {
+			fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, fmt.Sprint(ub), b)
+		} else {
+			fmt.Fprintf(w, "%s_bucket{%s, le=%q} %d\n", name, labels, fmt.Sprint(ub), b)
+		}
+	}
+	if labels == "" {
+		fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, h.count)
+	} else {
+		fmt.Fprintf(w, "%s_bucket{%s, le=\"+Inf\"} %d\n", name, labels, h.count)
+	}
 }
 
 // countsCache holds the TTL-cached fleet gauges.

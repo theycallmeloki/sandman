@@ -88,6 +88,17 @@ func TestMetricsEndpoint(t *testing.T) {
 			t.Fatalf("missing counter %s", name)
 		}
 	}
+	// the latency histograms carry cumulative buckets so percentiles are
+	// computable (histogram_quantile needs _bucket series); the +Inf
+	// bucket must equal the count
+	for _, want := range []string{
+		`sandman_file_read_seconds_bucket{outcome="success", le="0.001"} `,
+		`sandman_api_request_seconds_bucket{op="repos.create", le="+Inf"} `,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing histogram bucket %q", want)
+		}
+	}
 }
 
 func TestGarbageCollection(t *testing.T) {
