@@ -1,0 +1,19 @@
+# sandman execution worker image for k8s (DaemonSet/decorator fleet).
+# Talos nodes have no host dockerd, so the worker container talks to a
+# dockerd-in-Docker sidecar via DOCKER_HOST; this image carries the docker
+# CLI next to the static sandman binary.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+ARG VERSION=dev
+COPY go.mod go.sum ./
+COPY client ./client
+COPY internal ./internal
+COPY web ./web
+COPY *.go ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o /out/sandman .
+
+FROM docker:cli AS cli
+FROM alpine:3.20
+COPY --from=cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=build /out/sandman /usr/local/bin/sandman
+ENTRYPOINT ["/usr/local/bin/sandman"]

@@ -1,0 +1,127 @@
+# sandman-worker sync hook (served by the hook-server Deployment).
+#
+# A DecoratorController attaches a worker Pod to every non-control-plane
+# node. Node labels prefixed `sandman/` become the worker's placement
+# labels (`-label <key>=<value>`), so:
+#
+#   kubectl label node talos-ga5-yk4 sandman/placement=k8s
+#
+# makes that node advertise placement label `placement=k8s`; pipelines
+# then place work with `"placement": "placement=k8s"` in their spec.
+# Nodes with nvidia.com/gpu capacity (or sandman/gpu=true) get the
+# nvidia/docker:dind sidecar + host driver mounts so the worker can
+# advertise its GPUs; the plain docker:dind sidecar runs jobs on the
+# rest.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandman-worker-hook
+  namespace: sandman
+data:
+  sync.js: |
+    const controlPlane = 'http://192.168.1.15:4242';
+    const workerPort = 9595;
+    const workerImage = 'ogmiladyloki/sandman:worker-v0.2.37';
+    const dindImage = 'docker:dind';
+    const gpuDindImage = 'nvidia/docker:dind';
+
+    function nodeIP(node) {
+      for (const a of (node.status.addresses || [])) {
+        if (a.type === 'InternalIP') return a.address;
+      }
+      return '';
+    }
+
+    function isControlPlane(node) {
+      if ((node.metadata.labels || {})['node-role.kubernetes.io/control-plane'] !== undefined) {
+        return true;
+      }
+      for (const t of (node.spec.taints || [])) {
+        if (t.key === 'node-role.kubernetes.io/control-plane') return true;
+      }
+      return false;
+    }
+
+    function sync(desired, input) {
+      const node = input.parent;
+      // control-plane nodes never run job containers (nodeName-pinned
+      // pods bypass scheduler taint checks, so skip them here)
+      if (isControlPlane(node)) return { children: [] };
+
+      const labels = [];
+      for (const k of Object.keys(node.metadata.labels || {})) {
+        if (k.startsWith('sandman/')) {
+          labels.push(k.slice('sandman/'.length) + '=' + node.metadata.labels[k]);
+        }
+      }
+
+      const cap = node.status.capacity || {};
+      const gpu = parseInt(cap['nvidia.com/gpu'] || 0, 10) > 0 ||
+        (node.metadata.labels || {})['sandman/gpu'] === 'true';
+
+      const ip = nodeIP(node);
+      const args = [
+        'worker',
+        '-name', node.metadata.name,
+        '-control', controlPlane,
+        '-advertise', ip + ':' + workerPort,
+        '-port', String(workerPort),
+      ];
+      for (const l of labels) { args.push('-label', l); }
+
+      const workerMounts = [{ name: 'scratch', mountPath: '/scratch' }];
+      const dindMounts = [
+        { name: 'scratch', mountPath: '/scratch' },
+        { name: 'docker-data', mountPath: '/var/lib/docker' },
+      ];
+      const volumes = [
+        { name: 'scratch', emptyDir: {} },
+        { name: 'docker-data', emptyDir: {} },
+      ];
+
+      if (gpu) {
+        // Talos nvidia-container-toolkit extension layout: nvidia-smi +
+        // driver libs under /usr/local/nvidia. The dockerd-in-Docker
+        // runtime needs them to run --gpus device=N containers.
+        workerMounts.push({ name: 'nvidia', mountPath: '/usr/local/nvidia', readOnly: true });
+        dindMounts.push({ name: 'nvidia', mountPath: '/usr/local/nvidia', readOnly: true });
+        volumes.push({ name: 'nvidia', hostPath: { path: '/usr/local/nvidia' } });
+      }
+
+      const pod = {
+        apiVersion: 'v1',
+        kind: 'Pod',
+        metadata: {
+          name: 'sandman-worker-' + node.metadata.name,
+          namespace: 'sandman',
+          labels: { app: 'sandman-worker' },
+        },
+        spec: {
+          hostNetwork: true,
+          nodeName: node.metadata.name,
+          containers: [
+            {
+              name: 'worker',
+              image: workerImage,
+              command: ['/usr/local/bin/sandman'],
+              args: args,
+              env: [
+                { name: 'DOCKER_HOST', value: 'tcp://127.0.0.1:2375' },
+                { name: 'TMPDIR', value: '/scratch' },
+              ],
+              volumeMounts: workerMounts,
+            },
+            {
+              name: 'dind',
+              image: gpu ? gpuDindImage : dindImage,
+              args: ['--host=unix:///var/run/docker.sock', '--host=tcp://127.0.0.1:2375'],
+              securityContext: { privileged: true },
+              volumeMounts: dindMounts,
+            },
+          ],
+          volumes: volumes,
+        },
+      };
+
+      return { children: [pod] };
+    }

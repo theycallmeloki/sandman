@@ -1,0 +1,21 @@
+# DecoratorController: one sandman worker pod per node, with the pod's
+# args derived from the node (name, IP, sandman/* labels, GPU capacity).
+# Label changes reconcile the pod (OnDelete -> recreate) without any
+# manifest change, fully declarative in-cluster.
+apiVersion: metacontroller.k8s.io/v1alpha1
+kind: DecoratorController
+metadata:
+  name: sandman-worker
+spec:
+  resources:
+  - apiVersion: v1
+    resource: nodes
+  childResources:
+  - apiVersion: v1
+    resource: pods
+    updateStrategy:
+      method: OnDelete
+  hooks:
+    sync:
+      webhook:
+        url: http://sandman-worker-hook.sandman/sync

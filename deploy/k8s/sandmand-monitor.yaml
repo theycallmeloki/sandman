@@ -1,0 +1,49 @@
+# Reverse direction: let the cluster's Prometheus (kube-prometheus-stack,
+# auto-discovers ServiceMonitors tagged release: monitoring) scrape the
+# sandmand control plane running on the LAN VM at 192.168.1.15:4242.
+# The daemon serves native Prometheus text at GET /api/v1/metrics.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandmand-metrics
+  namespace: monitoring
+  labels:
+    app: sandmand-metrics
+spec:
+  ports:
+  - name: metrics
+    port: 4242
+    targetPort: 4242
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: sandmand-metrics
+  namespace: monitoring
+  labels:
+    app: sandmand-metrics
+subsets:
+- addresses:
+  - ip: 192.168.1.15
+  ports:
+  - name: metrics
+    port: 4242
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sandmand
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: sandmand-metrics
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /api/v1/metrics
+  namespaceSelector:
+    matchNames:
+    - monitoring

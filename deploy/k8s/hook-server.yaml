@@ -1,0 +1,42 @@
+# Hook server for the sandman-worker DecoratorController: serves
+# sync.js from the ConfigMap at /sync (same pattern as the in-cluster
+# bluegreen controller).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandman-worker-hook
+  namespace: sandman
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sandman-worker-hook
+  template:
+    metadata:
+      labels:
+        app: sandman-worker-hook
+    spec:
+      containers:
+      - name: controller
+        image: metacontroller/nodejs-server:0.1
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: hooks
+          mountPath: /node/hooks
+      volumes:
+      - name: hooks
+        configMap:
+          name: sandman-worker-hook
+          defaultMode: 420
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandman-worker-hook
+  namespace: sandman
+spec:
+  selector:
+    app: sandman-worker-hook
+  ports:
+  - port: 80
+    targetPort: 80
