@@ -19,6 +19,9 @@ metadata:
   namespace: sandman
 data:
   sync.js: |
+    // the metacontroller/nodejs-server hook contract: the exported
+    // function is called with {request: {body: input}} and must return
+    // {status, body, headers} with the desired children in body.
     const controlPlane = 'http://192.168.1.15:4242';
     const workerPort = 9595;
     const workerImage = 'ogmiladyloki/sandman:worker-v0.2.37';
@@ -42,11 +45,14 @@ data:
       return false;
     }
 
-    function sync(desired, input) {
+    module.exports = async function (context) {
+      const input = context.request.body;
       const node = input.parent;
       // control-plane nodes never run job containers (nodeName-pinned
       // pods bypass scheduler taint checks, so skip them here)
-      if (isControlPlane(node)) return { children: [] };
+      if (isControlPlane(node)) {
+        return { status: 200, body: { children: [] }, headers: { 'Content-Type': 'application/json' } };
+      }
 
       const labels = [];
       for (const k of Object.keys(node.metadata.labels || {})) {
@@ -123,5 +129,5 @@ data:
         },
       };
 
-      return { children: [pod] };
-    }
+      return { status: 200, body: { children: [pod] }, headers: { 'Content-Type': 'application/json' } };
+    };
