@@ -129,6 +129,8 @@ test('plain node gets docker:dind sidecar, loopback-only, privileged', async () 
   assert.strictEqual(dind.image, 'docker:dind');
   assert.deepStrictEqual(dind.args, ['--host=unix:///var/run/docker.sock', '--host=tcp://127.0.0.1:2375']);
   assert.strictEqual(dind.securityContext.privileged, true);
+  // docker:dind enables TLS by default; the worker CLI is plain HTTP
+  assert.deepStrictEqual(dind.env, [{ name: 'DOCKER_TLS_CERTDIR', value: '' }]);
 });
 
 test('scratch + docker-data volumes shared at identical paths', async () => {

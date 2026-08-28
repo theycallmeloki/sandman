@@ -122,6 +122,10 @@ data:
               name: 'dind',
               image: gpu ? gpuDindImage : dindImage,
               args: ['--host=unix:///var/run/docker.sock', '--host=tcp://127.0.0.1:2375'],
+              // the docker:dind entrypoint enables TLS by default
+              // (DOCKER_TLS_CERTDIR=/certs); the worker CLI speaks plain
+              // HTTP to 127.0.0.1:2375, so TLS must be off
+              env: [{ name: 'DOCKER_TLS_CERTDIR', value: '' }],
               securityContext: { privileged: true },
               volumeMounts: dindMounts,
             },
