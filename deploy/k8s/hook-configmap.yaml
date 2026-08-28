@@ -133,13 +133,17 @@ data:
             },
             {
               name: 'dind',
-              image: gpu ? gpuDindImage : dindImage,
+              // command overrides the entrypoint: dockerd-entrypoint.sh
+              // appends its own defaults (unix:/var/run/docker.sock +
+              // tcp://0.0.0.0:2375) whenever TLS is off — that TCP
+              // listener exposed an unauthenticated daemon on the node
+              // and the default socket never reached the shared volume
+              command: ['dockerd'],
               args: ['--host=unix:///var/run/docker/docker.sock'],
-              // the docker:dind entrypoint enables TLS by default
-              // (DOCKER_TLS_CERTDIR=/certs); the worker CLI speaks plain
-              // HTTP to 127.0.0.1:2375, so TLS must be off. No value: ''
-              // — the API omits empty values, so the stored pod would
-              // differ from this desired spec and Recreate would churn.
+              image: gpu ? gpuDindImage : dindImage,
+              // env entry must NOT carry value:'' — the API omits empty
+              // values, so the stored pod would differ from this desired
+              // spec and Recreate would churn
               env: [{ name: 'DOCKER_TLS_CERTDIR' }],
               securityContext: { privileged: true },
               volumeMounts: dindMounts,

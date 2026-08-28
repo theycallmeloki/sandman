@@ -133,6 +133,10 @@ test('plain node gets docker:dind sidecar, loopback-only, privileged', async () 
   const res = await sync(workerNode);
   const dind = res.body.attachments[0].spec.containers.find((c) => c.name === 'dind');
   assert.strictEqual(dind.image, 'docker:dind');
+  // command bypasses dockerd-entrypoint.sh, which would append its own
+  // unix:/var/run/docker.sock + tcp://0.0.0.0:2375 defaults — the TCP
+  // listener would expose an unauthenticated daemon on the node
+  assert.deepStrictEqual(dind.command, ['dockerd']);
   assert.deepStrictEqual(dind.args, ['--host=unix:///var/run/docker/docker.sock']);
   assert.strictEqual(dind.securityContext.privileged, true);
   // docker:dind enables TLS by default; the worker CLI is plain HTTP.
