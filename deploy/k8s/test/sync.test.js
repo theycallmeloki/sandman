@@ -193,3 +193,22 @@ test('node without InternalIP advertises the port with empty host (documented)',
   const worker = res.body.attachments[0].spec.containers.find((c) => c.name === 'worker');
   assert.ok(worker.args.includes(':9595'));
 });
+// --- manifest shape guards (schema drift silently breaks the fleet) ---
+
+test('decoratorcontroller.yaml uses the v4 attachments field', () => {
+  const txt = fs.readFileSync(path.join(root, 'decoratorcontroller.yaml'), 'utf8');
+  assert.match(txt, /^\s+attachments:/m, 'DecoratorController must list children under `attachments` (v4); childResources is pruned and the controller never sees its pods');
+  assert.doesNotMatch(txt, /childResources:/, 'childResources is the pre-v4 field name and gets silently dropped');
+  assert.match(txt, /resource:\s*pods/, 'attachment resource must be pods');
+});
+
+test('decoratorcontroller.yaml hooks point at the served sync endpoint', () => {
+  const txt = fs.readFileSync(path.join(root, 'decoratorcontroller.yaml'), 'utf8');
+  assert.match(txt, /url:\s*http:\/\/sandman-worker-hook\.sandman\/sync/);
+});
+
+test('hook server serves /sync from the hook configmap', () => {
+  const server = fs.readFileSync(path.join(root, 'hook-server.yaml'), 'utf8');
+  assert.match(server, /image:\s*metacontroller\/nodejs-server:0\.1/);
+  assert.match(server, /configMap:\s*[\r\n]+\s+name:\s*sandman-worker-hook/);
+});

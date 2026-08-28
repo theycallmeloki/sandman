@@ -10,7 +10,10 @@ spec:
   resources:
   - apiVersion: v1
     resource: nodes
-  childResources:
+  # v4 schema: the child rule list is `attachments` (childResources was
+  # the pre-v4 name and is silently pruned — the controller then never
+  # sees its own pods and tries to create them forever).
+  attachments:
   - apiVersion: v1
     resource: pods
     updateStrategy:
