@@ -197,6 +197,18 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 		}
 	}
 	mounts := []string{"-v", outDir + ":/sandman/out", "-v", serveDir + ":/sandman/in"}
+	// secret bindings: env vars and/or mountPath file mounts, same contract
+	// as batch/spout jobs (execute.go) — a service must not start
+	// half-configured, so a missing or invalid binding fails the spawn
+	env, mounts, err := d.serviceSecretEnv(id, pl, env, mounts)
+	if err != nil {
+		rec.State = stateFailure
+		rec.Reason = "secrets: " + err.Error()
+		rec.Finished = now()
+		d.saveJob(rec)
+		d.markPipelineCrashed(pl.Pipeline.Name, rec.Reason)
+		return
+	}
 	// A LOCAL service container publishes its internal port on the host's
 	// loopback so the proxy's 127.0.0.1:<internal> dial reaches it — the
 	// remote path publishes on the worker host (worker.go), but without
@@ -327,6 +339,68 @@ func (d *daemon) runServiceJob(pl pipelineRec, id string, rj *runningJob) {
 			return
 		}
 	}
+}
+
+// serviceSecretEnv injects a service pipeline's transform secret bindings
+// into its env and mounts — the same contract as batch/spout jobs
+// (execute.go): each reference's key is injected as an env var and/or
+// written as a file at MountPath/<key>. References sharing a MountPath
+// merge into one bind mount; a key mounted twice on one path is
+// ambiguous and rejected (the same rule execute.go enforces). Any invalid
+// or missing binding is an error: the service must not start
+// half-configured.
+func (d *daemon) serviceSecretEnv(id string, pl pipelineRec, env, mounts []string) ([]string, []string, error) {
+	mountDirs := map[string]string{}            // mountPath -> host dir
+	mountKeys := map[string]map[string]string{} // host dir -> key -> secret name
+	for _, m := range pl.Pipeline.Transform.Secrets {
+		if !store.ValidName(m.Name) {
+			return nil, nil, fmt.Errorf("invalid secret name %q", m.Name)
+		}
+		srec, err := d.loadSecret(m.Name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("secret %q: %w", m.Name, err)
+		}
+		if m.EnvVar != "" {
+			v, ok := srec.Data[m.Key]
+			if !ok {
+				return nil, nil, fmt.Errorf("secret %q has no key %q", m.Name, m.Key)
+			}
+			env = append(env, m.EnvVar+"="+v)
+		}
+		if m.MountPath != "" {
+			dir, ok := mountDirs[m.MountPath]
+			if !ok {
+				dir = filepath.Join(d.jobDir(id), "secrets", strconv.Itoa(len(mountDirs)))
+				os.MkdirAll(dir, 0o755)
+				mountDirs[m.MountPath] = dir
+				mountKeys[dir] = map[string]string{}
+				mounts = append(mounts, "-v", dir+":"+m.MountPath)
+			}
+			mount := func(key, val string) error {
+				if owner, dup := mountKeys[dir][key]; dup {
+					return fmt.Errorf("secret mount: key %q at %q already mounted from secret %q", key, m.MountPath, owner)
+				}
+				mountKeys[dir][key] = m.Name
+				return os.WriteFile(filepath.Join(dir, key), []byte(val), 0o644)
+			}
+			if m.Key != "" {
+				v, ok := srec.Data[m.Key]
+				if !ok {
+					return nil, nil, fmt.Errorf("secret %q has no key %q", m.Name, m.Key)
+				}
+				if err := mount(m.Key, v); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				for k, v := range srec.Data {
+					if err := mount(k, v); err != nil {
+						return nil, nil, err
+					}
+				}
+			}
+		}
+	}
+	return env, mounts, nil
 }
 
 // syncServeDir re-materializes a commit's view into the served directory,
