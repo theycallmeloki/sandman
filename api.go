@@ -578,6 +578,16 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
+// Flush forwards to the underlying writer so streaming handlers (logs
+// follow) keep their flush capability. Embedding the ResponseWriter
+// interface alone drops it: w.(http.Flusher) fails on the wrapper, and
+// followLogs returns immediately with an empty stream.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // instrument wraps an HTTP handler with its operation's invocation counter
 // and latency histogram.
 func (d *daemon) instrument(op string, h http.HandlerFunc) http.HandlerFunc {
@@ -703,16 +713,6 @@ type countsCache struct {
 	hostsGPU int64
 	gpus     int64
 	spout    int64
-}
-
-// sortedKeysI64 returns a map's keys in sorted order for stable exposition.
-func sortedKeysI64(m map[string]int64) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // fleetCounts computes (or returns cached) jobs by state, pipelines by

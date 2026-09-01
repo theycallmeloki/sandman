@@ -81,7 +81,7 @@ func (c *countingWriter) Write(b []byte) (int, error) {
 // progressDone clears a progress line; a no-op when none was shown.
 func progressDone(out *os.File) {
 	if out != nil {
-		fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out)
 	}
 }
 
