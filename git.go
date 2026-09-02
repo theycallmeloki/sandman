@@ -387,12 +387,15 @@ func (d *daemon) gitDeltaH(w http.ResponseWriter, r *http.Request) error {
 // produces no commit and fails the bound pipelines with a reason naming
 // the expected and recorded revisions: the edit was made against a tree
 // the repository no longer holds, so applying it would silently overwrite
-// intervening work. A later delta with the matching base is the recovery
-// signal and clears that failure (a blind delta — no base — commits
-// against whatever the head is and clears it too, since the head moved).
-// A delta onto a repository with no head yet applies onto the empty tree
-// (it bootstraps a partial revision) unless a base is set, in which case
-// there is nothing to match and it fails like any stale base.
+// intervening work. The recorded revision is the head's .git/HEAD marker
+// when it carries one, otherwise the head commit id itself (a bootstrap
+// that materialized the head falls back to that id as its base). A later
+// delta with the matching base is the recovery signal and clears that
+// failure (a blind delta — no base — commits against whatever the head is
+// and clears it too, since the head moved). A delta onto a repository
+// with no head yet applies onto the empty tree (it bootstraps a partial
+// revision) unless a base is set, in which case there is nothing to match
+// and it fails like any stale base.
 func (d *daemon) gitDelta(ev gitDeltaEvent) {
 	bound, seen := d.gitBindings(ev.URL, ev.Branch)
 	if len(bound) == 0 {
@@ -461,11 +464,14 @@ func (d *daemon) gitDelta(ev gitDeltaEvent) {
 	}
 }
 
-// headRevisionMarker returns the external revision recorded at the
-// repository's head (.git/HEAD) and whether a finished head exists to
-// read it from. A finished head whose tree carries no marker yields
-// ("", true): the base check then fails, as it must — there is no
-// recorded revision to match.
+// headRevisionMarker returns the revision recorded at the repository's
+// head and whether a finished head exists to read it from. The recorded
+// revision is the external revision stored at the tree path .git/HEAD
+// when the head carries one; a finished head whose tree has no marker
+// records its own commit id instead — a bootstrap that materialized the
+// head tree falls back to the head id as its delta base (RepoDelta's
+// mapped_head does exactly this), so base == head id is a genuine
+// match, and a stale editor's base can never equal a moved head.
 func (d *daemon) headRevisionMarker(repo, branch string) (string, bool) {
 	head, err := d.store.HeadCommitRec(repo, branch)
 	if err != nil || !head.Finished {
@@ -477,7 +483,7 @@ func (d *daemon) headRevisionMarker(repo, branch string) (string, bool) {
 	}
 	e, ok := view[".git/HEAD"]
 	if !ok {
-		return "", true
+		return head.ID, true
 	}
 	b, err := e.Bytes(d.store)
 	if err != nil {

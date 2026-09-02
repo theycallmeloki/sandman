@@ -203,6 +203,70 @@ func TestGitDeltaOntoEmptyRepo(t *testing.T) {
 	}
 }
 
+// TestGitDeltaMarkerlessHeadRecordsItself — a head seeded through the
+// per-file commit API (StartCommit/PutFile/FinishCommit) carries no
+// .git/HEAD marker; the recorded revision is the head commit id itself,
+// which is exactly the base a bootstrap of that head falls back to. A
+// delta with base == head id applies (and clears any earlier base
+// failure); a delta with any other base is still refused.
+func TestGitDeltaMarkerlessHeadRecordsItself(t *testing.T) {
+	name := uniq(t)
+	url := gitURL(t)
+	gitPipeline(t, name, "", &client.GitInput{URL: url})
+	repo := gitSideName(url)
+
+	cm, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start seed commit: %v", err)
+	}
+	if err := c.PutFile(cm.ID, "f", []byte("1")); err != nil {
+		t.Fatalf("put seed file: %v", err)
+	}
+	if _, err := c.FinishCommit(cm.ID, "", false); err != nil {
+		t.Fatalf("finish seed commit: %v", err)
+	}
+	head := mustHead(t, repo)
+	if n := commitCount(t, repo, "master"); n != 1 {
+		t.Fatalf("repo has %d commits after seed, want 1", n)
+	}
+
+	// a base that is not the head id is refused even without a marker
+	stale := revHex("stale")
+	if err := c.PushGitDelta(url, "master", revHex("edit"), stale,
+		map[string]string{"f": "2"}, nil, false); err != nil {
+		t.Fatalf("stale-base delta: %v", err)
+	}
+	pollFor(t, "pipeline failed with delta base reason", 30*time.Second, func() bool {
+		info, err := c.InspectPipeline(name)
+		return err == nil && info.State == "failure" &&
+			strings.Contains(info.Reason, "delta base") && strings.Contains(info.Reason, stale)
+	})
+	if n := commitCount(t, repo, "master"); n != 1 {
+		t.Fatalf("stale-base delta committed: %d commits, want 1", n)
+	}
+
+	// base == head id matches the markerless head's recorded revision
+	r := revHex("edit2")
+	if err := c.PushGitDelta(url, "master", r, head,
+		map[string]string{"f": "2"}, nil, false); err != nil {
+		t.Fatalf("head-base delta: %v", err)
+	}
+	pollFor(t, "head-id-base delta commits and clears failure", 30*time.Second, func() bool {
+		info, err := c.InspectPipeline(name)
+		return err == nil && info.State != "failure" && info.Reason == ""
+	})
+	if n := commitCount(t, repo, "master"); n != 2 {
+		t.Fatalf("repo has %d commits after head-base delta, want 2", n)
+	}
+	got := mustHead(t, repo)
+	if hc := headContentOf(t, got, "f"); hc != "2" {
+		t.Fatalf("delta did not apply: f = %q, want 2", hc)
+	}
+	if hc := headContentOf(t, got, ".git/HEAD"); hc != r {
+		t.Fatalf(".git/HEAD after delta = %q, want %q", hc, r)
+	}
+}
+
 // mustHead returns the current head commit id of a repo, failing the test.
 func mustHead(t *testing.T, repo string) string {
 	t.Helper()
