@@ -133,6 +133,7 @@ func Commands() []*cobra.Command {
 	cmds := dataPlaneCommands()
 	cmds = append(cmds, getCmd())    // get [file] <ref> [-o dest]
 	cmds = append(cmds, putCmd())    // cp-like upload
+	cmds = append(cmds, patchCmd())  // deliver a checkout's edits as a delta
 	cmds = append(cmds, lsCmd())     // repos, or files in a repo
 	cmds = append(cmds, catCmd())    // files to stdout
 	cmds = append(cmds, psCmd())     // jobs, alias for `job list`

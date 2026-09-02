@@ -130,6 +130,7 @@ verbs:
   version / -version  print binary and daemon versions
 
   put                 upload files (cp-like: put <src>... <repo@branch:path>)
+  patch               deliver a git checkout's edits as a delta to a git-input repo
   get                 fetch files (repo@branch:path), -o writes to a file/dir
   ls                  list repos, or files in a repo
   cat                 fetch files to stdout

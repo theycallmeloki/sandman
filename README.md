@@ -807,9 +807,14 @@ processed normally.
   (`.git/HEAD`) or the delta produces no commit and fails the bound
   pipelines with a reason naming both revisions — a later delta with the
   matching base recovers. A delta onto a repository with no head yet
-  bootstraps a partial revision when no base is set. The delta receiver
-  keeps sandman's git inputs credential-free: edits arrive as patches
-  against the mirror, never as credentials or clones.
+  bootstraps a partial revision when no base is set. The `patch` verb
+  closes the edit loop from a real checkout: `sandman patch [dir]`
+  computes the worktree's changed/new/deleted paths against a base
+  (default HEAD — uncommitted edits, constant base for agent loops) and
+  delivers them as the delta, without staging, committing, or pushing
+  anything. The delta receiver keeps sandman's git inputs
+  credential-free: edits arrive as patches against the mirror, never as
+  credentials or clones.
 - **Spouts** — the insomniacs of the DAG: a pipeline with no input whose
   transform runs in the background, committing each data-bearing cycle to
   its own output branch (accumulating or replacing per the overwrite
@@ -1070,10 +1075,10 @@ curl -X POST localhost:4242/api/v1/repos/in/commits -d '{}'   # → commit id
 ```
 
 The CLI mirrors the same surface (`sandman repo`, `commit`, `branch`,
-`get`, `file`, `check`, `pipeline`, `job`, `datum`, `flush`, `secret`,
-`tag`, `logs`, `transaction`, `backup`, `reset`), so every operation in
-this document has a shell verb — and `sandman version` prints both the
-binary and daemon versions.
+`get`, `put`, `patch`, `file`, `check`, `pipeline`, `job`, `datum`,
+`flush`, `secret`, `tag`, `logs`, `transaction`, `backup`, `reset`), so
+every operation in this document has a shell verb — and `sandman
+version` prints both the binary and daemon versions.
 
 ## Development
 
