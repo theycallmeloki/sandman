@@ -427,7 +427,20 @@ func (d *daemon) gitDelta(ev gitDeltaEvent) {
 				continue
 			}
 		}
-		if d.commitRevision(repo, ev.Branch, func(commitID string) bool {
+		// the base matched (or the delta was blind): a previous
+		// base-mismatch failure on this repository is now stale and
+		// clears BEFORE the commit lands, mirroring the push recovery
+		// ordering (clear, then commit). Clearing after the commit would
+		// leave the recovery commit untriggered: triggerForCommit skips
+		// pipelines in the failure state, so the commit that resolves
+		// the failure would land with no job and no re-trigger until the
+		// next push.
+		for _, b := range bound {
+			if b.repo == repo {
+				d.clearPipelineFailure(b.pipeline, "delta base")
+			}
+		}
+		d.commitRevision(repo, ev.Branch, func(commitID string) bool {
 			for _, p := range ev.Deleted {
 				if err := d.store.DeleteFile(commitID, p); err != nil {
 					// a failed write abandons the edit rather than
@@ -451,16 +464,7 @@ func (d *daemon) gitDelta(ev gitDeltaEvent) {
 				}
 			}
 			return true
-		}, nil) {
-			// the head advanced (base matched, or the delta was blind):
-			// a previous base-mismatch failure on this repository is now
-			// stale and clears, mirroring the push clone-failure recovery
-			for _, b := range bound {
-				if b.repo == repo {
-					d.clearPipelineFailure(b.pipeline, "delta base")
-				}
-			}
-		}
+		}, nil)
 	}
 }
 

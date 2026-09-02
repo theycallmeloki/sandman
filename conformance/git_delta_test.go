@@ -137,6 +137,15 @@ func TestGitDeltaStaleBaseFailsThenRecovers(t *testing.T) {
 	if got := headContentOf(t, mustHead(t, repo), "f"); got != "2" {
 		t.Fatalf("recovery delta did not apply: f = %q, want 2", got)
 	}
+	// the recovery commit re-triggers the pipeline: the failure was
+	// cleared BEFORE the commit landed, so triggerForCommit sees a
+	// running pipeline and spawns a job for the commit that resolved the
+	// failure (a clear-after-commit ordering leaves it untriggered — the
+	// fix for the recovery-delta commit that built never)
+	pollFor(t, "recovery delta re-triggers the pipeline", 30*time.Second, func() bool {
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+		return err == nil && len(js) >= 2
+	})
 }
 
 // TestGitDeltaPrivateFailsNoCommit — a delta marked private is a repo the
@@ -201,6 +210,12 @@ func TestGitDeltaOntoEmptyRepo(t *testing.T) {
 	if got := headContentOf(t, head, "a"); got != "1" {
 		t.Fatalf("bootstrapped file = %q, want 1", got)
 	}
+	// the blind recovery commit re-triggers the pipeline too (the
+	// failure cleared before the commit, so the bootstrap spawns a job)
+	pollFor(t, "blind recovery delta re-triggers the pipeline", 30*time.Second, func() bool {
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+		return err == nil && len(js) >= 1
+	})
 }
 
 // TestGitDeltaMarkerlessHeadRecordsItself — a head seeded through the

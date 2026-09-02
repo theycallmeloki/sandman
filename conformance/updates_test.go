@@ -282,9 +282,20 @@ func TestUpdateStoppedPipeline(t *testing.T) {
 		t.Fatalf("output commits while stopped+updated: %d, want 1", got)
 	}
 
-	// input written while paused is accumulated, not processed: "bar"
-	// appends to the existing "foo", so the head holds "foobar"
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "bar"})
+	// input written while paused is accumulated, not processed: an
+	// explicit append of "bar" to the existing "foo", so the head holds
+	// "foobar" (a plain put would replace "foo" — appends are explicit)
+	cm, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start paused-input commit: %v", err)
+	}
+	if err := c.PutFileAppend(cm.ID, "file", []byte("bar")); err != nil {
+		t.Fatalf("append paused input: %v", err)
+	}
+	cm2, err := c.FinishCommit(cm.ID, "", false)
+	if err != nil {
+		t.Fatalf("finish paused-input commit: %v", err)
+	}
 	if err := c.StartPipeline(name); err != nil {
 		t.Fatalf("start: %v", err)
 	}

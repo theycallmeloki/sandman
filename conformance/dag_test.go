@@ -33,7 +33,20 @@ func TestFlushChainRepeated(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		cm := commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})
+		// each round explicitly appends another "foo\n" to the input
+		// file (a plain put would replace it — appends are explicit), so
+		// the content traversing the chain accumulates per commit
+		acm, err := c.StartCommit(repo, "master", "")
+		if err != nil {
+			t.Fatalf("commit %d: start: %v", i, err)
+		}
+		if err := c.PutFileAppend(acm.ID, "file", []byte("foo\n")); err != nil {
+			t.Fatalf("commit %d: append input: %v", i, err)
+		}
+		cm, err := c.FinishCommit(acm.ID, "", false)
+		if err != nil {
+			t.Fatalf("commit %d: finish: %v", i, err)
+		}
 		jobs := flushOK(t, cm.ID)
 		if len(jobs) != 5 {
 			t.Fatalf("commit %d: flush returned %d jobs, want 5 (one per stage)", i, len(jobs))

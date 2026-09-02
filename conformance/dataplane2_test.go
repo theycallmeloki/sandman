@@ -69,8 +69,9 @@ func TestHeadJobSeesAccumulatedContent(t *testing.T) {
 	pipe := uniq(t)
 	mustPipeline(t, client.Pipeline{Name: pipe, Transform: copyTransform(repo), Input: &client.Input{Repo: repo, Glob: "/*"}})
 
-	// commit 1 writes "foo\n"; commit 2 appends "bar\n" to the same path,
-	// so the input head accumulates to "foo\nbar\n"
+	// commit 1 writes "foo\n"; commit 2 explicitly appends "bar\n" to the
+	// same path, so the input head accumulates to "foo\nbar\n" (a plain
+	// put would replace "foo\n" — appends are explicit now)
 	cm1 := commitFiles(t, repo, "master", map[string]string{"file": "foo\n"})
 	jobs1 := flushOK(t, cm1.ID)
 	got, err := c.GetFile(jobs1[0].OutputCommit, "file")
@@ -81,7 +82,17 @@ func TestHeadJobSeesAccumulatedContent(t *testing.T) {
 		t.Fatalf("output 1 = %q, want %q", got, "foo\n")
 	}
 
-	cm2 := commitFiles(t, repo, "master", map[string]string{"file": "bar\n"})
+	acm, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start append commit: %v", err)
+	}
+	if err := c.PutFileAppend(acm.ID, "file", []byte("bar\n")); err != nil {
+		t.Fatalf("append input: %v", err)
+	}
+	cm2, err := c.FinishCommit(acm.ID, "", false)
+	if err != nil {
+		t.Fatalf("finish append commit: %v", err)
+	}
 	head, err := c.HeadCommit(repo, "master")
 	if err != nil {
 		t.Fatalf("input head: %v", err)
@@ -289,8 +300,10 @@ func TestNoPanicOnEmptyRequests(t *testing.T) {
 }
 
 // Files and directories can be copied from a pipeline's output
-// into an input repo; existing destination paths are protected on both copy
-// and put.
+// into an input repo; an existing destination path is protected on copy
+// (rejected without the overwrite flag). A plain put onto an existing
+// path REPLACES its content — the idempotent-PUT contract, not an
+// append — so the copy protection is copy-specific.
 func TestCopyOutToInWithOverwriteProtection(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
@@ -315,15 +328,15 @@ func TestCopyOutToInWithOverwriteProtection(t *testing.T) {
 	if err := c.CopyFile(dst.ID, "foo", srcCommit, "foo", false); err == nil {
 		t.Fatal("copy onto existing path succeeded, want error")
 	}
-	// a plain put onto an existing path appends to its content
-	// — "file2" was copied as "foo", so it becomes "foox")
+	// a plain put onto an existing path replaces its content — "file2"
+	// was copied as "foo", so the put leaves it as "x" alone
 	if err := c.PutFile(dst.ID, "file2", []byte("x")); err != nil {
 		t.Fatalf("put onto existing path: %v", err)
 	}
-	if b, err := c.GetFile(dst.ID, "file2"); err != nil || string(b) != "foox" {
-		t.Fatalf("file2 after put = %q (err %v), want appended foox", string(b), err)
+	if b, err := c.GetFile(dst.ID, "file2"); err != nil || string(b) != "x" {
+		t.Fatalf("file2 after put = %q (err %v), want x (replaced, not appended foox)", string(b), err)
 	}
-	// a copy with the overwrite flag replaces the accumulated content
+	// a copy with the overwrite flag replaces the content at the path
 	if err := c.CopyFile(dst.ID, "file2", srcCommit, "foo", true); err != nil {
 		t.Fatalf("overwrite copy: %v", err)
 	}
