@@ -157,6 +157,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/jobs/{id}/datums/{datumID}", d.instrument("jobs.datum", hErr(d.inspectDatumH)))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/datums/{datumID}/restart", d.instrument("jobs.restart", hErr(d.restartDatumH)))
 	mux.HandleFunc("POST /api/v1/git/push", d.instrument("git.push", hErr(d.gitPushH)))
+	mux.HandleFunc("POST /api/v1/git/delta", d.instrument("git.delta", hErr(d.gitDeltaH)))
 	mux.HandleFunc("POST /api/v1/flush", d.instrument("flush", hErr(d.flushH)))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/wait", d.instrument("jobs.wait", hErr(d.jobWaitH)))
 	mux.HandleFunc("GET /api/v1/services", d.instrument("services.list", hErr(d.listServicesH)))

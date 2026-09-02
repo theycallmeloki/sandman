@@ -983,6 +983,26 @@ func (c *Client) PushGitEvent(url, branch, revision string, files map[string]str
 	}, nil)
 }
 
+// PushGitDelta delivers an edit to a git-input mapped repository: files
+// holds the complete new content of every path the edit adds or changes,
+// deleted the paths it removes — both apply onto the repository's existing
+// tree, so unchanged paths are untouched. base is the external revision
+// the edit was made against ("" applies blindly onto the head); revision
+// is the edit's own external revision identifier. private marks a
+// repository the system cannot access (no credentials), mirroring
+// PushGitEvent.
+func (c *Client) PushGitDelta(url, branch, revision, base string, files map[string]string, deleted []string, private bool) error {
+	return c.do("POST", "/api/v1/git/delta", map[string]any{
+		"url":      url,
+		"branch":   branch,
+		"revision": revision,
+		"base":     base,
+		"files":    files,
+		"deleted":  deleted,
+		"private":  private,
+	}, nil)
+}
+
 // ---- Datums ----
 
 // Datum is one unit of a job's work: its identity and the input files it

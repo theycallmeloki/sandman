@@ -796,7 +796,20 @@ processed normally.
   revision into that repository and triggers the pipeline. Pushes to any
   other branch are ignored entirely. Git inputs need no repo or glob and
   share a single namespace (two git inputs with the same derived name are
-  rejected).
+  rejected). A revision is normally delivered as its full working tree,
+  but an edit can be delivered as a delta instead —
+  `POST /api/v1/git/delta` with the changed files' full contents plus the
+  deleted paths: the daemon applies the edit onto the repository's
+  existing tree as one new commit (unchanged paths untouched, resolved
+  through ancestry) and re-triggers exactly like a push. A delta
+  optionally names the external revision it was made against (`base`);
+  when set it must equal the revision recorded at the mapped head
+  (`.git/HEAD`) or the delta produces no commit and fails the bound
+  pipelines with a reason naming both revisions — a later delta with the
+  matching base recovers. A delta onto a repository with no head yet
+  bootstraps a partial revision when no base is set. The delta receiver
+  keeps sandman's git inputs credential-free: edits arrive as patches
+  against the mirror, never as credentials or clones.
 - **Spouts** — the insomniacs of the DAG: a pipeline with no input whose
   transform runs in the background, committing each data-bearing cycle to
   its own output branch (accumulating or replacing per the overwrite

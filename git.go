@@ -219,28 +219,21 @@ func (d *daemon) gitPushH(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// gitPush processes one push event: every pipeline whose git input binds
-// this URL and tracks this branch receives the revision — one commit per
-// mapped repository (pipelines sharing a mapped repository — a URL with
-// no custom names — share the commit; distinct custom names split it
-// into one repository per pipeline), each replacing the previous
-// revision's tree and carrying the revision identifier in .git/HEAD.
-// Each push produces exactly one new commit advancing the tracked
-// branch's head and re-triggers the pipeline, so the branch list never
-// grows beyond the tracked branch; a push to any other branch is a
-// complete no-op — no branch, no commit, no job. An uncloneable
-// repository produces no commit and fails the bound pipelines with a
-// reason naming the URL; a later successful push to the same URL clears
-// the clone-only failure and resumes triggering, while structural
-// failures stay failed until explicit repair.
-func (d *daemon) gitPush(ev gitPushEvent) {
-	// bind: pipeline name -> mapped repo + tracked branch
-	type binding struct{ pipeline, repo string }
-	var bound []binding
+// gitBinding binds one pipeline to the mapped repository its git input
+// derives for a url/branch pair: the input's custom name when declared,
+// else the URL-derived name.
+type gitBinding struct{ pipeline, repo string }
+
+// gitBindings returns every pipeline whose git input tracks (url, branch)
+// and the set of mapped repositories they fan out to — the shared bind
+// step of the push and delta receivers. It is a pure read: no pipelines
+// bound yields two empties and every caller no-ops.
+func (d *daemon) gitBindings(url, branch string) ([]gitBinding, map[string]bool) {
+	var bound []gitBinding
 	seen := map[string]bool{}
 	pipes, err := d.listPipelinesFiltered(nil, "", false)
 	if err != nil {
-		return
+		return bound, seen
 	}
 	for _, p := range pipes {
 		rec, err := d.loadPipeline(p.Name)
@@ -261,12 +254,12 @@ func (d *daemon) gitPush(ev gitPushEvent) {
 			for i := range in.Group {
 				walk(&in.Group[i])
 			}
-			if in.Git != nil && in.Git.URL == ev.URL && gitTrackedBranch(in.Git) == ev.Branch {
+			if in.Git != nil && in.Git.URL == url && gitTrackedBranch(in.Git) == branch {
 				repo := in.Repo
 				if repo == "" {
-					repo = gitRepoName(ev.URL)
+					repo = gitRepoName(url)
 				}
-				bound = append(bound, binding{pipeline: rec.Pipeline.Name, repo: repo})
+				bound = append(bound, gitBinding{pipeline: rec.Pipeline.Name, repo: repo})
 				seen[repo] = true
 			}
 		}
@@ -274,6 +267,25 @@ func (d *daemon) gitPush(ev gitPushEvent) {
 			walk(rec.Pipeline.Input)
 		}
 	}
+	return bound, seen
+}
+
+// gitPush processes one push event: every pipeline whose git input binds
+// this URL and tracks this branch receives the revision — one commit per
+// mapped repository (pipelines sharing a mapped repository — a URL with
+// no custom names — share the commit; distinct custom names split it
+// into one repository per pipeline), each replacing the previous
+// revision's tree and carrying the revision identifier in .git/HEAD.
+// Each push produces exactly one new commit advancing the tracked
+// branch's head and re-triggers the pipeline, so the branch list never
+// grows beyond the tracked branch; a push to any other branch is a
+// complete no-op — no branch, no commit, no job. An uncloneable
+// repository produces no commit and fails the bound pipelines with a
+// reason naming the URL; a later successful push to the same URL clears
+// the clone-only failure and resumes triggering, while structural
+// failures stay failed until explicit repair.
+func (d *daemon) gitPush(ev gitPushEvent) {
+	bound, seen := d.gitBindings(ev.URL, ev.Branch)
 	if len(bound) == 0 {
 		return
 	}
@@ -325,4 +337,151 @@ func (d *daemon) gitPush(ev gitPushEvent) {
 			return true
 		}, nil)
 	}
+}
+
+// gitDeltaEvent is the delta-receiver payload (POST /api/v1/git/delta): an
+// edit to the mapped repository rather than a full working-tree
+// replacement. files holds the complete new content of every path the edit
+// adds or changes; deleted lists the paths the edit removes. Both apply
+// onto the repository's existing tree — unchanged paths are untouched (a
+// delta commit carries only its changes; the store resolves the view
+// through the commit's ancestry). base is the external revision the edit
+// was made against: when set it must equal the revision recorded at the
+// mapped head (.git/HEAD), guarding against applying an edit made against
+// a stale tree onto a newer head; empty applies blindly onto whatever the
+// head is. revision is the edit's own external revision identifier,
+// recorded in .git/HEAD exactly as a push records its revision. private
+// has the same meaning as in gitPushEvent: a repository the control plane
+// cannot access, producing no commit and failing the bound pipelines.
+type gitDeltaEvent struct {
+	URL      string            `json:"url"`
+	Branch   string            `json:"branch"`
+	Revision string            `json:"revision"`
+	Base     string            `json:"base,omitempty"`
+	Files    map[string]string `json:"files,omitempty"`
+	Deleted  []string          `json:"deleted,omitempty"`
+	Private  bool              `json:"private,omitempty"`
+}
+
+// gitDeltaH is the delta receiver (POST /api/v1/git/delta). Delivery never
+// errors on the repository's behalf: an uncloneable repository or a base
+// that does not match the mapped head fails the bound pipelines
+// asynchronously, it does not reject the event.
+func (d *daemon) gitDeltaH(w http.ResponseWriter, r *http.Request) error {
+	var ev gitDeltaEvent
+	if err := decodeBody(r, &ev); err != nil {
+		return fmt.Errorf("invalid request body")
+	}
+	d.gitDelta(ev)
+	writeJSON(w, map[string]string{"ok": "true"})
+	return nil
+}
+
+// gitDelta processes one delta event. It binds, fails, and recovers
+// exactly like a push — one commit per mapped repository, the private
+// (uncloneable) failure semantics, a successful delivery clearing the
+// clone-only failure — but the commit it writes is the repository's
+// previous tree with the edit applied: deletions first, then the files (a
+// path in both is kept — files win), then the .git/HEAD marker. A delta
+// whose base does not equal the mapped repository's recorded revision
+// produces no commit and fails the bound pipelines with a reason naming
+// the expected and recorded revisions: the edit was made against a tree
+// the repository no longer holds, so applying it would silently overwrite
+// intervening work. A later delta with the matching base is the recovery
+// signal and clears that failure (a blind delta — no base — commits
+// against whatever the head is and clears it too, since the head moved).
+// A delta onto a repository with no head yet applies onto the empty tree
+// (it bootstraps a partial revision) unless a base is set, in which case
+// there is nothing to match and it fails like any stale base.
+func (d *daemon) gitDelta(ev gitDeltaEvent) {
+	bound, seen := d.gitBindings(ev.URL, ev.Branch)
+	if len(bound) == 0 {
+		return
+	}
+	if ev.Private {
+		for _, b := range bound {
+			d.markPipelineFailed(b.pipeline, fmt.Sprintf("unable to clone private repository (%s)", ev.URL))
+		}
+		return
+	}
+	for _, b := range bound {
+		d.clearPipelineFailure(b.pipeline, "unable to clone private repository")
+	}
+	repos := make([]string, 0, len(seen))
+	for repo := range seen {
+		repos = append(repos, repo)
+	}
+	sort.Strings(repos)
+	for _, repo := range repos {
+		if ev.Base != "" {
+			if marker, ok := d.headRevisionMarker(repo, ev.Branch); !ok || marker != ev.Base {
+				for _, b := range bound {
+					if b.repo == repo {
+						d.markPipelineFailed(b.pipeline,
+							fmt.Sprintf("delta base %q does not match mapped head of %s (recorded %q; deliver a full push or a delta with the current base)", ev.Base, ev.URL, marker))
+					}
+				}
+				continue
+			}
+		}
+		if d.commitRevision(repo, ev.Branch, func(commitID string) bool {
+			for _, p := range ev.Deleted {
+				if err := d.store.DeleteFile(commitID, p); err != nil {
+					// a failed write abandons the edit rather than
+					// publishing a partial revision
+					return false
+				}
+			}
+			paths := make([]string, 0, len(ev.Files)+1)
+			for p := range ev.Files {
+				paths = append(paths, p)
+			}
+			paths = append(paths, ".git/HEAD")
+			sort.Strings(paths)
+			for _, p := range paths {
+				content := ev.Files[p]
+				if p == ".git/HEAD" {
+					content = ev.Revision
+				}
+				if err := d.store.OverwriteFile(commitID, p, []byte(content)); err != nil {
+					return false
+				}
+			}
+			return true
+		}, nil) {
+			// the head advanced (base matched, or the delta was blind):
+			// a previous base-mismatch failure on this repository is now
+			// stale and clears, mirroring the push clone-failure recovery
+			for _, b := range bound {
+				if b.repo == repo {
+					d.clearPipelineFailure(b.pipeline, "delta base")
+				}
+			}
+		}
+	}
+}
+
+// headRevisionMarker returns the external revision recorded at the
+// repository's head (.git/HEAD) and whether a finished head exists to
+// read it from. A finished head whose tree carries no marker yields
+// ("", true): the base check then fails, as it must — there is no
+// recorded revision to match.
+func (d *daemon) headRevisionMarker(repo, branch string) (string, bool) {
+	head, err := d.store.HeadCommitRec(repo, branch)
+	if err != nil || !head.Finished {
+		return "", false
+	}
+	view, err := d.store.ResolveViewByID(head.ID)
+	if err != nil {
+		return "", false
+	}
+	e, ok := view[".git/HEAD"]
+	if !ok {
+		return "", true
+	}
+	b, err := e.Bytes(d.store)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
 }
