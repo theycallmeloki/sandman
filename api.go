@@ -1020,18 +1020,23 @@ func (d *daemon) deleteHostH(w http.ResponseWriter, r *http.Request) error {
 // ---- files ----
 
 // putFileH stores a file in an open commit; the request body becomes the
-// file's content and ?overwrite=1 replaces accumulated content at the
-// path. With fetch=URL the file is ingested from an HTTP(S) URL: the
-// URL's body becomes the content, redirects are not followed, and
-// link-local/broadcast/metadata ranges are rejected (loopback stays
-// allowed). With split=1&delimiter=X[&header=1] the upload is split into
-// records stored at path/<index>; a header chunk is replicated into every
-// record's file so each processing participant sees it exactly once, and
-// appending records under the same header leaves earlier records'
-// identity unchanged (they are skipped by the dedup, never reprocessed).
-// A changed header re-identifies every existing record, rewriting it with
-// the new header while keeping its path and record content, so all are
-// reprocessed — none skipped.
+// file's entire content at the path — a plain PUT is an idempotent
+// replace (REST semantics; repeated uploads of a file replace it, they do
+// not silently concatenate). Appending is an explicit ?append=1 opt-in
+// for log-style accumulation at a path; ?overwrite=1 is accepted and
+// means the same replace as the default (compat with clients that made
+// the replace explicit before it became the default). With fetch=URL the
+// file is ingested from an HTTP(S) URL: the URL's body becomes the
+// content, redirects are not followed, and link-local/broadcast/metadata
+// ranges are rejected (loopback stays allowed); the ingested file
+// replaces any prior content at the path. With split=1&delimiter=X
+// [&header=1] the upload is split into records stored at path/<index>; a
+// header chunk is replicated into every record's file so each processing
+// participant sees it exactly once, and appending records under the same
+// header leaves earlier records' identity unchanged (they are skipped by
+// the dedup, never reprocessed). A changed header re-identifies every
+// existing record, rewriting it with the new header while keeping its
+// path and record content, so all are reprocessed — none skipped.
 func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 	q := r.URL.Query()
 	// fetch=URL: ingest a remote file — the URL's body becomes
@@ -1082,7 +1087,8 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return internal("read fetch: %v", err)
 		}
-		if err := d.store.PutFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+		// an ingested file replaces any content already at the path
+		if err := d.store.OverwriteFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 			return err
 		}
 		writeJSON(w, map[string]string{"ok": "true"})
@@ -1166,21 +1172,27 @@ func (d *daemon) putFileH(w http.ResponseWriter, r *http.Request) error {
 			if header {
 				content = chunks[0] + delim + content
 			}
-			if err := d.store.PutFile(r.PathValue("id"), prefix+strconv.Itoa(off+i), []byte(content)); err != nil {
+			// each record lands on a fresh numbered path beyond the
+			// existing count, so a replace write is exact (a plain put
+			// would be identical at a new path, but the replace makes the
+			// no-accumulation intent explicit)
+			if err := d.store.OverwriteFile(r.PathValue("id"), prefix+strconv.Itoa(off+i), []byte(content)); err != nil {
 				return err
 			}
 		}
 		writeJSON(w, map[string]string{"ok": "true"})
 		return nil
 	}
-	if q.Get("overwrite") == "1" {
-		if err := d.store.OverwriteFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+	// plain PUT replaces; ?append=1 is the explicit accumulation opt-in;
+	// ?overwrite=1 is the historic spelling of the replace (still accepted)
+	if q.Get("append") == "1" {
+		if err := d.store.PutFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 			return err
 		}
 		writeJSON(w, map[string]string{"ok": "true"})
 		return nil
 	}
-	if err := d.store.PutFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
+	if err := d.store.OverwriteFile(r.PathValue("id"), r.PathValue("path"), data); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})

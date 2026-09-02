@@ -676,8 +676,11 @@ func (s *Store) StartCommit(repo, branch, description string) (client.Commit, er
 
 // putFile writes one file into an open commit as an append: a
 // path already holding content — in this commit or its ancestry — grows
-// by the new bytes at this revision. Replacing content is an explicit
-// overwrite(overwriteFile) or a delete-then-write.
+// by the new bytes at this revision. This is the accumulation
+// primitive: the API exposes it only through an explicit ?append=1 (or a
+// split upload's fresh numbered record paths) — a plain PUT is the
+// replace below, so a repeated upload never grows content nobody asked
+// to keep.
 func (s *Store) PutFile(commitID, p string, data []byte) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)
@@ -702,7 +705,8 @@ func (s *Store) PutFile(commitID, p string, data []byte) error {
 // overwriteFile writes one file into an open commit replacing any
 // accumulated content at the path: the path's prior content — in
 // this commit or its ancestry — is removed and the new bytes become the
-// entire content at this revision.
+// entire content at this revision. This is what a plain PUT of a file
+// means (idempotent replace); PutFile is the explicit-append opt-in.
 func (s *Store) OverwriteFile(commitID, p string, data []byte) error {
 	if !validPath(p) {
 		return fmt.Errorf("invalid file path %q", p)

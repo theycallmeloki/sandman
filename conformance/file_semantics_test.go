@@ -1,10 +1,13 @@
 package conformance
 
-// File-semantics contract: within-commit append, ancestry accumulation,
-// overwrite, tombstone deletion, job-output replacement with same-path
+// File-semantics contract: a plain put REPLACES content at the path
+// (idempotent PUT; repeated uploads never silently concatenate), an
+// explicit append (?append=1) accumulates within a commit and across
+// ancestry, ?overwrite=1 is the historic compat spelling of the default
+// replace, tombstone deletion, job-output replacement with same-path
 // datum concatenation, split-upload numbering, empty files, and
-// mid-commit visibility. Chunking never changes content — it is
-// N-A by design: sandman stores whole-file blobs.
+// mid-commit visibility are unchanged. Chunking never changes content —
+// it is N-A by design: sandman stores whole-file blobs.
 
 import (
 	"fmt"
@@ -15,24 +18,25 @@ import (
 	"sandman/client"
 )
 
-func TestAppendWithinCommit(t *testing.T) {
+func TestPutReplacesByDefaultWithinCommit(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	cm, err := c.StartCommit(repo, "master", "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	// two writes to the same path in one commit append in write order
+	// two plain puts to the same path in one commit: the second REPLACES
+	// the first (idempotent PUT — the historical append footgun)
 	if err := c.PutFile(cm.ID, "x", []byte("foo")); err != nil {
 		t.Fatalf("put 1: %v", err)
 	}
 	if err := c.PutFile(cm.ID, "x", []byte("foo")); err != nil {
 		t.Fatalf("put 2: %v", err)
 	}
-	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "foofoo" {
-		t.Fatalf("x after two puts = %q (err %v), want foofoo", string(b), err)
+	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "foo" {
+		t.Fatalf("x after two plain puts = %q (err %v), want foo (replaced, not foofoo)", string(b), err)
 	}
-	// an overwrite replaces even within the same commit
+	// the historic ?overwrite=1 spelling is the same replace
 	if err := c.PutFileOverwrite(cm.ID, "x", []byte("bar")); err != nil {
 		t.Fatalf("overwrite: %v", err)
 	}
@@ -52,19 +56,46 @@ func TestAppendWithinCommit(t *testing.T) {
 	}
 }
 
-func TestAccumulateAcrossCommits(t *testing.T) {
+func TestAppendWithinCommitIsExplicit(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// accumulation still exists — behind the explicit ?append=1 opt-in:
+	// appends to the same path in one commit grow it in write order
+	if err := c.PutFileAppend(cm.ID, "x", []byte("foo")); err != nil {
+		t.Fatalf("append 1: %v", err)
+	}
+	if err := c.PutFileAppend(cm.ID, "x", []byte("foo")); err != nil {
+		t.Fatalf("append 2: %v", err)
+	}
+	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "foofoo" {
+		t.Fatalf("x after two appends = %q (err %v), want foofoo", string(b), err)
+	}
+	// a plain put after appends replaces the accumulated content
+	if err := c.PutFile(cm.ID, "x", []byte("bar")); err != nil {
+		t.Fatalf("plain put after append: %v", err)
+	}
+	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "bar" {
+		t.Fatalf("x after plain put = %q (err %v), want bar (accumulation replaced)", string(b), err)
+	}
+}
+
+func TestPutReplacesAcrossCommits(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
-	// a child commit's plain write to the same path appends to the
-	// parent's content
+	// a child commit's plain write to the same path REPLACES the
+	// parent's content (idempotent PUT across revisions too)
 	commitFiles(t, repo, "master", map[string]string{"x": "bar"})
 	head, err := c.HeadCommit(repo, "master")
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if b, err := c.GetFile(head.ID, "x"); err != nil || string(b) != "foobar" {
-		t.Fatalf("head x = %q (err %v), want foobar", string(b), err)
+	if b, err := c.GetFile(head.ID, "x"); err != nil || string(b) != "bar" {
+		t.Fatalf("head x = %q (err %v), want bar (parent content replaced, not foobar)", string(b), err)
 	}
 	// reading an ancestor revision shows only that revision's own snapshot
 	if b, err := c.GetFile(c1.ID, "x"); err != nil || string(b) != "foo" {
@@ -78,8 +109,32 @@ func TestAccumulateAcrossCommits(t *testing.T) {
 	if _, err := c.FinishCommit(cm3.ID, "", false); err != nil {
 		t.Fatalf("finish empty-write commit: %v", err)
 	}
-	if b, err := c.GetFile(cm3.ID, "x"); err != nil || string(b) != "foobar" {
-		t.Fatalf("no-write commit x = %q (err %v), want inherited foobar", string(b), err)
+	if b, err := c.GetFile(cm3.ID, "x"); err != nil || string(b) != "bar" {
+		t.Fatalf("no-write commit x = %q (err %v), want inherited bar", string(b), err)
+	}
+}
+
+func TestAppendAccumulatesAcrossCommits(t *testing.T) {
+	repo := uniq(t)
+	mustRepo(t, repo)
+	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
+	// an explicit append in a child commit grows the parent's content
+	cm, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := c.PutFileAppend(cm.ID, "x", []byte("bar")); err != nil {
+		t.Fatalf("append x: %v", err)
+	}
+	if _, err := c.FinishCommit(cm.ID, "", false); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "foobar" {
+		t.Fatalf("head x = %q (err %v), want foobar (explicit append accumulates across commits)", string(b), err)
+	}
+	// the ancestor still shows only its own snapshot
+	if b, err := c.GetFile(c1.ID, "x"); err != nil || string(b) != "foo" {
+		t.Fatalf("c1 x = %q (err %v), want foo", string(b), err)
 	}
 }
 
@@ -87,8 +142,8 @@ func TestOverwriteReplaces(t *testing.T) {
 	repo := uniq(t)
 	mustRepo(t, repo)
 	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
-	// an explicit overwrite replaces the accumulated content; a
-	// plain put would append
+	// an explicit overwrite replaces the accumulated content — the
+	// ?overwrite=1 compat spelling of the plain-put replace default
 	cm, err := c.StartCommit(repo, "master", "")
 	if err != nil {
 		t.Fatalf("start: %v", err)

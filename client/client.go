@@ -397,15 +397,30 @@ type FileInfo struct {
 	Hash string `json:"hash,omitempty"`
 }
 
+// PutFile writes a file into an open commit replacing any content at the
+// path: a plain PUT is an idempotent replace, so uploading the same path
+// again overwrites it (it never accumulates). Appending to accumulated
+// content is explicit — see PutFileAppend.
 func (c *Client) PutFile(commitID, p string, data []byte) error {
 	_, err := c.doRaw("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p), data)
 	return err
 }
 
+// PutFileAppend writes a file into an open commit as an explicit append:
+// content already at the path — in this commit or its ancestry — grows
+// by the new bytes. This is the opt-in for log-style accumulation; the
+// plain PutFile replaces.
+func (c *Client) PutFileAppend(commitID, p string, data []byte) error {
+	_, err := c.doRaw("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+"?append=1", data)
+	return err
+}
+
 // PutFileStream uploads a file's content from r without buffering it
 // client-side: the request body streams (chunked), so a large local file
-// never sits in memory twice. overwrite has the same meaning as
-// PutFileOverwrite — replace content accumulated at the path.
+// never sits in memory twice. With overwrite it sends ?overwrite=1 (the
+// historic explicit spelling); without it the plain PUT already replaces
+// content at the path — a streamed upload is a replace either way, never
+// an append. See PutFileAppendStream for accumulation.
 func (c *Client) PutFileStream(commitID, p string, overwrite bool, r io.Reader) error {
 	u := "/api/v1/commits/" + url.PathEscape(commitID) + "/files/" + url.PathEscape(p)
 	if overwrite {
@@ -431,6 +446,9 @@ func (c *Client) PutFileStream(commitID, p string, overwrite bool, r io.Reader) 
 // PutFileOverwrite writes a file replacing any content accumulated at the
 // path: the prior content — in this commit or its ancestry — is
 // removed and the new bytes become the entire content at this revision.
+// This is the historic explicit spelling of what a plain PutFile already
+// does; kept for compatibility with callers that made the replace
+// explicit before it became the default.
 func (c *Client) PutFileOverwrite(commitID, p string, data []byte) error {
 	_, err := c.doRaw("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+"?overwrite=1", data)
 	return err
@@ -450,9 +468,31 @@ func (c *Client) PutFileSplit(commitID, p string, data []byte, delimiter string,
 	return err
 }
 
-// PutFileURL fetches a file from an HTTP URL and stores it in the commit.
+// PutFileURL fetches a file from an HTTP URL and stores it in the commit,
+// replacing any content already at the path.
 func (c *Client) PutFileURL(commitID, p, u string) error {
 	return c.do("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+"?fetch="+url.QueryEscape(u), nil, nil)
+}
+
+// PutFileAppendStream uploads bytes from r appending them to content
+// accumulated at the path (the explicit-append streaming form).
+func (c *Client) PutFileAppendStream(commitID, p string, r io.Reader) error {
+	u := "/api/v1/commits/" + url.PathEscape(commitID) + "/files/" + url.PathEscape(p) + "?append=1"
+	req, err := http.NewRequest("PUT", c.base+u, r)
+	if err != nil {
+		return err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return decodeError(resp.StatusCode, b)
+	}
+	_, err = io.Copy(io.Discard, resp.Body)
+	return err
 }
 
 // DeleteFile tombstones a path in an open commit: the path is removed from
