@@ -314,8 +314,8 @@ func overwriteCommit(t *testing.T, repo, branch string, files map[string]string)
 		t.Fatalf("start commit: %v", err)
 	}
 	for p, content := range files {
-		if err := c.PutFileOverwrite(cm.ID, p, []byte(content)); err != nil {
-			t.Fatalf("overwrite %s: %v", p, err)
+		if err := c.PutFile(cm.ID, p, []byte(content)); err != nil {
+			t.Fatalf("put %s: %v", p, err)
 		}
 	}
 	fin, err := c.FinishCommit(cm.ID, "", false)

@@ -677,10 +677,9 @@ func newFileCmd() *cobra.Command {
 			}
 			// shared upload: `put` uses the cp-like order, `file put`
 			// keeps the reference's <ref> <src> order — same machinery
-			putRun([]string{args[1]}, args[0], fileOverwrite, fileAppend, true, "file put")
+			putRun([]string{args[1]}, args[0], fileAppend, true, "file put")
 		},
 	}
-	put.Flags().BoolVarP(&fileOverwrite, "overwrite", "o", false, "replace content at the path (the default; kept for compat)")
 	put.Flags().BoolVarP(&fileAppend, "append", "a", false, "append to content accumulated at the path")
 	cmd.AddCommand(put)
 

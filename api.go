@@ -1023,9 +1023,10 @@ func (d *daemon) deleteHostH(w http.ResponseWriter, r *http.Request) error {
 // file's entire content at the path — a plain PUT is an idempotent
 // replace (REST semantics; repeated uploads of a file replace it, they do
 // not silently concatenate). Appending is an explicit ?append=1 opt-in
-// for log-style accumulation at a path; ?overwrite=1 is accepted and
-// means the same replace as the default (compat with clients that made
-// the replace explicit before it became the default). With fetch=URL the
+// for log-style accumulation at a path. A ?overwrite=1 query parameter is
+// ignored (no code path reads it): replace was the historic explicit
+// spelling's meaning and is the default, so the parameter is a no-op kept
+// only so pre-v0.2.46 clients that sent it keep working. With fetch=URL the
 // file is ingested from an HTTP(S) URL: the URL's body becomes the
 // content, redirects are not followed, and link-local/broadcast/metadata
 // ranges are rejected (loopback stays allowed); the ingested file

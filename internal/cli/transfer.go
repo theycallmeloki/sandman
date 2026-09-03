@@ -95,7 +95,7 @@ func joinPath(prefix, rel string) string {
 // ---- put ----
 
 func putCmd() *cobra.Command {
-	var overwrite, append_, noProgress bool
+	var append_, noProgress bool
 	cmd := &cobra.Command{
 		Use:   "put [flags] <src>... <repo[@branch][:path]>",
 		Short: "upload local files to a repo (cp-like; directories upload recursively)",
@@ -116,10 +116,9 @@ path (cp semantics); --append grows accumulated content instead.`,
 		Args: cobra.MinimumNArgs(2),
 		Run: func(_ *cobra.Command, args []string) {
 			srcs, dst := args[:len(args)-1], args[len(args)-1]
-			putRun(srcs, dst, overwrite, append_, noProgress, "put")
+			putRun(srcs, dst, append_, noProgress, "put")
 		},
 	}
-	cmd.Flags().BoolVarP(&overwrite, "overwrite", "o", false, "replace content at each destination path (the default; kept for compat)")
 	cmd.Flags().BoolVarP(&append_, "append", "a", false, "append to content accumulated at each destination path")
 	cmd.Flags().BoolVar(&noProgress, "no-progress", false, "disable the transfer progress display")
 	return cmd
@@ -127,10 +126,7 @@ path (cp semantics); --append grows accumulated content instead.`,
 
 // putRun is the shared upload: `file put <ref> <src>` (reference order)
 // and `put <src>... <ref>` (cp order) both land here.
-func putRun(srcs []string, dst string, overwrite, append_, noProgress bool, verb string) {
-	if overwrite && append_ {
-		die(fmt.Sprintf("%s: --overwrite and --append are mutually exclusive", verb), 2)
-	}
+func putRun(srcs []string, dst string, append_, noProgress bool, verb string) {
 	c := cliClient()
 	repo, branch, dstPath := "", "", ""
 	// a bare commit-id destination (<commit-id>:path) writes into that
@@ -272,7 +268,7 @@ func putRun(srcs []string, dst string, overwrite, append_, noProgress bool, verb
 		if append_ {
 			err = c.PutFileAppendStream(cmID, u.target, r)
 		} else {
-			err = c.PutFileStream(cmID, u.target, overwrite, r)
+			err = c.PutFileStream(cmID, u.target, r)
 		}
 		progressDone(out)
 		closeSrc()

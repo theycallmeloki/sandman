@@ -417,15 +417,11 @@ func (c *Client) PutFileAppend(commitID, p string, data []byte) error {
 
 // PutFileStream uploads a file's content from r without buffering it
 // client-side: the request body streams (chunked), so a large local file
-// never sits in memory twice. With overwrite it sends ?overwrite=1 (the
-// historic explicit spelling); without it the plain PUT already replaces
-// content at the path — a streamed upload is a replace either way, never
-// an append. See PutFileAppendStream for accumulation.
-func (c *Client) PutFileStream(commitID, p string, overwrite bool, r io.Reader) error {
+// never sits in memory twice. A streamed upload replaces content at the
+// path exactly like a plain PutFile — it never appends. See
+// PutFileAppendStream for accumulation.
+func (c *Client) PutFileStream(commitID, p string, r io.Reader) error {
 	u := "/api/v1/commits/" + url.PathEscape(commitID) + "/files/" + url.PathEscape(p)
-	if overwrite {
-		u += "?overwrite=1"
-	}
 	req, err := http.NewRequest("PUT", c.base+u, r)
 	if err != nil {
 		return err
@@ -440,17 +436,6 @@ func (c *Client) PutFileStream(commitID, p string, overwrite bool, r io.Reader) 
 		return decodeError(resp.StatusCode, b)
 	}
 	_, err = io.Copy(io.Discard, resp.Body)
-	return err
-}
-
-// PutFileOverwrite writes a file replacing any content accumulated at the
-// path: the prior content — in this commit or its ancestry — is
-// removed and the new bytes become the entire content at this revision.
-// This is the historic explicit spelling of what a plain PutFile already
-// does; kept for compatibility with callers that made the replace
-// explicit before it became the default.
-func (c *Client) PutFileOverwrite(commitID, p string, data []byte) error {
-	_, err := c.doRaw("PUT", "/api/v1/commits/"+url.PathEscape(commitID)+"/files/"+url.PathEscape(p)+"?overwrite=1", data)
 	return err
 }
 

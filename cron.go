@@ -37,14 +37,7 @@ func cronDuration(schedule string) (time.Duration, error) {
 // created, and the side gets the default glob — the stored spec's sides
 // then carry real repos for triggering, pairing, and enumeration.
 func (d *daemon) deriveCronRepos(p *client.Pipeline) {
-	var walk func(in *client.Input)
-	walk = func(in *client.Input) {
-		for i := range in.Cross {
-			walk(&in.Cross[i])
-		}
-		for i := range in.Union {
-			walk(&in.Union[i])
-		}
+	walkInputs(p.Input, func(in *client.Input) {
 		if in.Cron != "" {
 			in.Repo = cronRepo(p.Name, in.Name)
 			if in.Glob == "" {
@@ -52,10 +45,7 @@ func (d *daemon) deriveCronRepos(p *client.Pipeline) {
 			}
 			d.store.CreateRepo(in.Repo)
 		}
-	}
-	if p.Input != nil {
-		walk(p.Input)
-	}
+	})
 }
 
 // cronTicker is one pipeline's cron schedule: the owning pipeline and

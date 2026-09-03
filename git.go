@@ -68,28 +68,40 @@ func gitTrackedBranch(g *client.GitInput) string {
 	return "master"
 }
 
+// walkInputs visits every input node of a pipeline's input tree,
+// depth-first: each combiner's members (cross, union, join, group, in
+// declaration order) are visited before the node itself. Every input
+// derivation shares this single walker so a side nested under any
+// combiner is seen by every derivation — the git, cron, and trigger
+// derivations used to maintain separate copies of this recursion and
+// drifted apart (cron/trigger derivation never descended into join or
+// group, so a tick or size-trigger side nested there was invisible
+// while its enumeration twin listed it).
+func walkInputs(in *client.Input, visit func(*client.Input)) {
+	if in == nil {
+		return
+	}
+	for i := range in.Cross {
+		walkInputs(&in.Cross[i], visit)
+	}
+	for i := range in.Union {
+		walkInputs(&in.Union[i], visit)
+	}
+	for i := range in.Join {
+		walkInputs(&in.Join[i], visit)
+	}
+	for i := range in.Group {
+		walkInputs(&in.Group[i], visit)
+	}
+	visit(in)
+}
+
 // gitSideRepos returns the mapped repo names of every git input in the
 // spec (deep walk — git sides can be nested in cross/union/join/group):
 // the custom name if declared, else the URL-derived name.
 func gitSideRepos(in *client.Input) []string {
 	var out []string
-	var walk func(n *client.Input)
-	walk = func(n *client.Input) {
-		if n == nil {
-			return
-		}
-		for i := range n.Cross {
-			walk(&n.Cross[i])
-		}
-		for i := range n.Union {
-			walk(&n.Union[i])
-		}
-		for i := range n.Join {
-			walk(&n.Join[i])
-		}
-		for i := range n.Group {
-			walk(&n.Group[i])
-		}
+	walkInputs(in, func(n *client.Input) {
 		if n.Git != nil {
 			if n.Repo != "" {
 				out = append(out, n.Repo)
@@ -97,8 +109,7 @@ func gitSideRepos(in *client.Input) []string {
 				out = append(out, gitRepoName(n.Git.URL))
 			}
 		}
-	}
-	walk(in)
+	})
 	return out
 }
 
@@ -106,28 +117,11 @@ func gitSideRepos(in *client.Input) []string {
 // spec: the per-pipeline repo derived from the side name.
 func cronSideRepos(pipeline string, in *client.Input) []string {
 	var out []string
-	var walk func(n *client.Input)
-	walk = func(n *client.Input) {
-		if n == nil {
-			return
-		}
-		for i := range n.Cross {
-			walk(&n.Cross[i])
-		}
-		for i := range n.Union {
-			walk(&n.Union[i])
-		}
-		for i := range n.Join {
-			walk(&n.Join[i])
-		}
-		for i := range n.Group {
-			walk(&n.Group[i])
-		}
+	walkInputs(in, func(n *client.Input) {
 		if n.Cron != "" {
 			out = append(out, cronRepo(pipeline, n.Name)) // mirrors deriveCronRepos
 		}
-	}
-	walk(in)
+	})
 	return out
 }
 
@@ -158,20 +152,7 @@ func (d *daemon) repoReferencedByOther(repo, except string) bool {
 // stored spec's sides then carry real repos for triggering, pairing, and
 // enumeration (mirroring deriveCronRepos).
 func (d *daemon) deriveGitRepos(p *client.Pipeline) {
-	var walk func(in *client.Input)
-	walk = func(in *client.Input) {
-		for i := range in.Cross {
-			walk(&in.Cross[i])
-		}
-		for i := range in.Union {
-			walk(&in.Union[i])
-		}
-		for i := range in.Join {
-			walk(&in.Join[i])
-		}
-		for i := range in.Group {
-			walk(&in.Group[i])
-		}
+	walkInputs(p.Input, func(in *client.Input) {
 		if in.Git != nil {
 			// the mapped repository is named by the input's own name
 			// or derived from the URL when unnamed
@@ -189,10 +170,7 @@ func (d *daemon) deriveGitRepos(p *client.Pipeline) {
 			in.Branch = gitTrackedBranch(in.Git)
 			d.store.CreateRepo(name)
 		}
-	}
-	if p.Input != nil {
-		walk(p.Input)
-	}
+	})
 }
 
 // gitPushEvent is the push-receiver payload (the sandman's git-input
@@ -254,20 +232,7 @@ func (d *daemon) gitBindings(url, branch string) ([]gitBinding, map[string]bool)
 		if err != nil {
 			continue
 		}
-		var walk func(in *client.Input)
-		walk = func(in *client.Input) {
-			for i := range in.Cross {
-				walk(&in.Cross[i])
-			}
-			for i := range in.Union {
-				walk(&in.Union[i])
-			}
-			for i := range in.Join {
-				walk(&in.Join[i])
-			}
-			for i := range in.Group {
-				walk(&in.Group[i])
-			}
+		walkInputs(rec.Pipeline.Input, func(in *client.Input) {
 			if in.Git != nil && gitTrackedBranch(in.Git) == branch &&
 				(in.Git.URL == url || (in.Repo != "" && in.Repo == gitRepoName(url))) {
 				repo := in.Repo
@@ -277,10 +242,7 @@ func (d *daemon) gitBindings(url, branch string) ([]gitBinding, map[string]bool)
 				bound = append(bound, gitBinding{pipeline: rec.Pipeline.Name, repo: repo})
 				seen[repo] = true
 			}
-		}
-		if rec.Pipeline.Input != nil {
-			walk(rec.Pipeline.Input)
-		}
+		})
 	}
 	return bound, seen
 }

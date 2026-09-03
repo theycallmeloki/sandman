@@ -3,8 +3,7 @@ package conformance
 // File-semantics contract: a plain put REPLACES content at the path
 // (idempotent PUT; repeated uploads never silently concatenate), an
 // explicit append (?append=1) accumulates within a commit and across
-// ancestry, ?overwrite=1 is the historic compat spelling of the default
-// replace, tombstone deletion, job-output replacement with same-path
+// ancestry, tombstone deletion, job-output replacement with same-path
 // datum concatenation, split-upload numbering, empty files, and
 // mid-commit visibility are unchanged. Chunking never changes content —
 // it is N-A by design: sandman stores whole-file blobs.
@@ -36,12 +35,12 @@ func TestPutReplacesByDefaultWithinCommit(t *testing.T) {
 	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "foo" {
 		t.Fatalf("x after two plain puts = %q (err %v), want foo (replaced, not foofoo)", string(b), err)
 	}
-	// the historic ?overwrite=1 spelling is the same replace
-	if err := c.PutFileOverwrite(cm.ID, "x", []byte("bar")); err != nil {
-		t.Fatalf("overwrite: %v", err)
+	// a third plain put still replaces (three puts, one content)
+	if err := c.PutFile(cm.ID, "x", []byte("bar")); err != nil {
+		t.Fatalf("put 3: %v", err)
 	}
 	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "bar" {
-		t.Fatalf("x after overwrite = %q (err %v), want bar", string(b), err)
+		t.Fatalf("x after three plain puts = %q (err %v), want bar", string(b), err)
 	}
 	// a path that is both a file and a directory prefix is a type
 	// conflict; finishing fails
@@ -133,34 +132,6 @@ func TestAppendAccumulatesAcrossCommits(t *testing.T) {
 		t.Fatalf("head x = %q (err %v), want foobar (explicit append accumulates across commits)", string(b), err)
 	}
 	// the ancestor still shows only its own snapshot
-	if b, err := c.GetFile(c1.ID, "x"); err != nil || string(b) != "foo" {
-		t.Fatalf("c1 x = %q (err %v), want foo", string(b), err)
-	}
-}
-
-func TestOverwriteReplaces(t *testing.T) {
-	repo := uniq(t)
-	mustRepo(t, repo)
-	c1 := commitFiles(t, repo, "master", map[string]string{"x": "foo"})
-	// an explicit overwrite replaces the accumulated content — the
-	// ?overwrite=1 compat spelling of the plain-put replace default
-	cm, err := c.StartCommit(repo, "master", "")
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	if err := c.PutFileOverwrite(cm.ID, "x", []byte("bar")); err != nil {
-		t.Fatalf("overwrite x: %v", err)
-	}
-	if err := c.PutFile(cm.ID, "y", []byte("fresh")); err != nil {
-		t.Fatalf("put y: %v", err)
-	}
-	if _, err := c.FinishCommit(cm.ID, "", false); err != nil {
-		t.Fatalf("finish: %v", err)
-	}
-	if b, err := c.GetFile(cm.ID, "x"); err != nil || string(b) != "bar" {
-		t.Fatalf("head x = %q (err %v), want the overwritten bar", string(b), err)
-	}
-	// the parent revision still shows the pre-overwrite content
 	if b, err := c.GetFile(c1.ID, "x"); err != nil || string(b) != "foo" {
 		t.Fatalf("c1 x = %q (err %v), want foo", string(b), err)
 	}

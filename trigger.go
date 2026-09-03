@@ -31,14 +31,7 @@ func triggerBranch(pipeline string, pos int) string {
 // the watched branch (default master).
 func (d *daemon) deriveTriggerBranches(p *client.Pipeline) {
 	pos := 0
-	var walk func(in *client.Input)
-	walk = func(in *client.Input) {
-		for i := range in.Cross {
-			walk(&in.Cross[i])
-		}
-		for i := range in.Union {
-			walk(&in.Union[i])
-		}
+	walkInputs(p.Input, func(in *client.Input) {
 		if in.Trigger != nil && in.Trigger.SizeBytes > 0 {
 			if in.Trigger.Branch == "" {
 				in.Trigger.Branch = inputBranch(*in)
@@ -46,10 +39,7 @@ func (d *daemon) deriveTriggerBranches(p *client.Pipeline) {
 			in.Branch = triggerBranch(p.Name, pos)
 		}
 		pos++
-	}
-	if p.Input != nil {
-		walk(p.Input)
-	}
+	})
 }
 
 // triggerLedgerPath is a trigger's durable accumulation state: the bytes
@@ -120,24 +110,16 @@ func (d *daemon) accumulateTriggers(cm client.Commit) {
 			continue
 		}
 		pos := 0
-		var walk func(in *client.Input)
-		walk = func(in *client.Input) {
-			for i := range in.Cross {
-				walk(&in.Cross[i])
-			}
-			for i := range in.Union {
-				// union members carry no size triggers (rejected at
-				// creation); the walk keeps the position counter in lock
-				// step with deriveTriggerBranches, whose numbering the
-				// trigger ledgers and accumulation branches depend on
-				walk(&in.Union[i])
-			}
+		// union members carry no size triggers (rejected at creation);
+		// walkInputs keeps the position counter in lock step with
+		// deriveTriggerBranches, whose numbering the trigger ledgers and
+		// accumulation branches depend on
+		walkInputs(rec.Pipeline.Input, func(in *client.Input) {
 			if in.Trigger != nil && in.Trigger.SizeBytes > 0 && in.Repo == cm.Repo && in.Trigger.Branch == cm.Branch {
 				d.fireTrigger(rec.Pipeline.Name, pos, *in, cm)
 			}
 			pos++
-		}
-		walk(rec.Pipeline.Input)
+		})
 	}
 }
 
