@@ -1043,6 +1043,35 @@ func (c *Client) PushGitDelta(url, branch, revision, base string, files map[stri
 	}, nil)
 }
 
+// GitDeltaResult is the delta receiver's delivery report: applied is false
+// when the edit bound no pipeline (URL spelling drift, untracked branch)
+// or failed every repository's base check, with reason naming the refusal;
+// head is the resulting head commit id when the edit landed. (The wire's
+// "ok" field is the delivery-accepted string "true" — this report is about
+// whether the edit LANDED, which is "applied".)
+type GitDeltaResult struct {
+	Applied bool   `json:"applied"`
+	Reason  string `json:"reason,omitempty"`
+	Head    string `json:"head,omitempty"`
+}
+
+// PushGitDeltaReport delivers a delta like PushGitDelta and decodes the
+// receiver's outcome report, so a caller can learn immediately that its
+// edit was not applied instead of discovering a silent no-op later.
+func (c *Client) PushGitDeltaReport(url, branch, revision, base string, files map[string]string, deleted []string, private bool) (GitDeltaResult, error) {
+	var out GitDeltaResult
+	err := c.do("POST", "/api/v1/git/delta", map[string]any{
+		"url":      url,
+		"branch":   branch,
+		"revision": revision,
+		"base":     base,
+		"files":    files,
+		"deleted":  deleted,
+		"private":  private,
+	}, &out)
+	return out, err
+}
+
 // ---- Datums ----
 
 // Datum is one unit of a job's work: its identity and the input files it

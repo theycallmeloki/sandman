@@ -282,6 +282,168 @@ func TestGitDeltaMarkerlessHeadRecordsItself(t *testing.T) {
 	}
 }
 
+// TestGitDeltaSpellingDriftStillBinds — a git input wired with one URL
+// spelling (a hyphenated repo key) and a mapped repo named by the env-safe
+// mirror spelling still receives deltas addressed to the mirror URL: the
+// binding falls back to the mapped repository name, so a harness workspace
+// (which records the mirror URL it bootstrapped from) is never silently
+// dropped because the stored input URL drifted from the emitter's.
+func TestGitDeltaSpellingDriftStillBinds(t *testing.T) {
+	name := uniq(t)
+	// the wiring-time URL carries the raw upstream name; the mirror and
+	// the emitters use the env-safe spelling (bus-wire rewires names
+	// hyphen -> underscore; the two URLs name the same repository)
+	stem := uniq(t)
+	envSafe := strings.ReplaceAll(stem, "-", "_")
+	wiredURL := "https://github.com/example/" + stem + ".git"
+	mirrorURL := "https://github.com/example/" + envSafe + ".git"
+	gitPipeline(t, name, envSafe, &client.GitInput{URL: wiredURL})
+	repo := envSafe
+
+	// seed the mapped repo through the per-file commit API (no push)
+	cm, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start seed: %v", err)
+	}
+	if err := c.PutFile(cm.ID, "f", []byte("1")); err != nil {
+		t.Fatalf("put seed file: %v", err)
+	}
+	if _, err := c.FinishCommit(cm.ID, "", false); err != nil {
+		t.Fatalf("finish seed: %v", err)
+	}
+	head := mustHead(t, repo)
+
+	// a delta addressed to the MIRROR url (what every workspace emits):
+	// the stored input URL differs, but the mapped repo is the repo the
+	// event URL names, so the edit binds, commits, and triggers
+	r := revHex("edit")
+	if err := c.PushGitDelta(mirrorURL, "master", r, head,
+		map[string]string{"f": "2"}, nil, false); err != nil {
+		t.Fatalf("mirror-url delta: %v", err)
+	}
+	if got := mustHead(t, repo); got == head {
+		t.Fatalf("delta produced no commit (head still %s)", got)
+	}
+	if got := headContentOf(t, mustHead(t, repo), "f"); got != "2" {
+		t.Fatalf("delta did not apply: f = %q, want 2", got)
+	}
+	if got := headContentOf(t, mustHead(t, repo), ".git/HEAD"); got != r {
+		t.Fatalf(".git/HEAD = %q, want the delta revision %q", got, r)
+	}
+	pollFor(t, "spelling-drift delta triggers the pipeline", 30*time.Second, func() bool {
+		js, err := c.ListJobsFiltered(client.JobFilter{Pipeline: name})
+		return err == nil && len(js) >= 1
+	})
+}
+
+// TestGitDeltaUnboundURLReportsNotApplied — a delta addressed to a URL no
+// pipeline binds is no longer a silent 200 no-op: the response reports
+// applied=false with a reason naming the URL, so the emitter learns the
+// edit never landed (this is the harness deploy that vanished: the watch
+// keyed on a different URL spelling and the workspace delta dropped).
+func TestGitDeltaUnboundURLReportsNotApplied(t *testing.T) {
+	name := uniq(t)
+	url := gitURL(t)
+	gitPipeline(t, name, "", &client.GitInput{URL: url})
+	repo := gitSideName(url)
+	if err := c.PushGitEvent(url, "master", revHex("base"),
+		map[string]string{"f": "1"}, false); err != nil {
+		t.Fatalf("push base: %v", err)
+	}
+	_ = repo
+
+	// a delta to a URL nothing watches: applied=false, reason names it,
+	// and no pipeline is failed (nothing was bound to fail)
+	ghost := "https://github.com/example/" + uniq(t) + ".git"
+	res, err := c.PushGitDeltaReport(ghost, "master", revHex("edit"), "",
+		map[string]string{"f": "2"}, nil, false)
+	if err != nil {
+		t.Fatalf("unbound delta: %v", err)
+	}
+	if res.Applied {
+		t.Fatalf("unbound delta reported applied=true")
+	}
+	if !strings.Contains(res.Reason, "no pipeline is bound") || !strings.Contains(res.Reason, ghost) {
+		t.Fatalf("reason = %q, want it to name the unbound url", res.Reason)
+	}
+	info, err := c.InspectPipeline(name)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if info.State == "failure" {
+		t.Fatalf("unbound delta failed a pipeline that never bound it: %q", info.Reason)
+	}
+}
+
+// TestGitDeltaAuthoredHeadResetsMarker — a commit authored over a pushed
+// head (per-file commit API, no explicit revision) records its OWN id as
+// the head's revision, not the inherited push marker. A delta based on
+// the pre-authoring revision — a workspace bootstrapped before the
+// authoring — is then refused instead of silently overwriting the
+// authored work; a delta based on the authored head applies.
+func TestGitDeltaAuthoredHeadResetsMarker(t *testing.T) {
+	name := uniq(t)
+	url := gitURL(t)
+	gitPipeline(t, name, "", &client.GitInput{URL: url})
+	repo := gitSideName(url)
+
+	r1 := revHex("base")
+	if err := c.PushGitEvent(url, "master", r1, map[string]string{"f": "1"}, false); err != nil {
+		t.Fatalf("push base: %v", err)
+	}
+	pushed := mustHead(t, repo)
+
+	// author a seed commit on top of the pushed head (no .git/HEAD op)
+	cm, err := c.StartCommit(repo, "master", "")
+	if err != nil {
+		t.Fatalf("start seed: %v", err)
+	}
+	if err := c.PutFile(cm.ID, "g", []byte("authored")); err != nil {
+		t.Fatalf("put seed file: %v", err)
+	}
+	seed, err := c.FinishCommit(cm.ID, "", false)
+	if err != nil {
+		t.Fatalf("finish seed: %v", err)
+	}
+	if seed.ID == pushed {
+		t.Fatalf("seed did not advance the head")
+	}
+	// the authored head records ITSELF, not the inherited push revision
+	if got := headContentOf(t, mustHead(t, repo), ".git/HEAD"); got != seed.ID {
+		t.Fatalf(".git/HEAD after authored seed = %q, want the seed head id %q (inherited marker %q must not survive the authoring)", got, seed.ID, r1)
+	}
+
+	// a delta based on the pre-authoring push revision is stale: without
+	// the reset the inherited marker made that base look current and the
+	// edit would have overwritten the authored work
+	if err := c.PushGitDelta(url, "master", revHex("edit"), r1,
+		map[string]string{"f": "2"}, nil, false); err != nil {
+		t.Fatalf("stale-base delta: %v", err)
+	}
+	pollFor(t, "pipeline failed with delta base reason", 30*time.Second, func() bool {
+		info, err := c.InspectPipeline(name)
+		return err == nil && info.State == "failure" &&
+			strings.Contains(info.Reason, "delta base") && strings.Contains(info.Reason, r1)
+	})
+	if got := headContentOf(t, mustHead(t, repo), "g"); got != "authored" {
+		t.Fatalf("authored file lost to a stale delta: g = %q", got)
+	}
+
+	// a delta based on the authored head applies
+	r3 := revHex("edit2")
+	if err := c.PushGitDelta(url, "master", r3, seed.ID,
+		map[string]string{"f": "2"}, nil, false); err != nil {
+		t.Fatalf("authored-head-base delta: %v", err)
+	}
+	pollFor(t, "authored-head-base delta clears the failure", 30*time.Second, func() bool {
+		info, err := c.InspectPipeline(name)
+		return err == nil && info.State != "failure"
+	})
+	if got := headContentOf(t, mustHead(t, repo), "f"); got != "2" {
+		t.Fatalf("delta did not apply: f = %q, want 2", got)
+	}
+}
+
 // mustHead returns the current head commit id of a repo, failing the test.
 func mustHead(t *testing.T, repo string) string {
 	t.Helper()

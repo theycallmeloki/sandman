@@ -228,6 +228,20 @@ type gitBinding struct{ pipeline, repo string }
 // and the set of mapped repositories they fan out to — the shared bind
 // step of the push and delta receivers. It is a pure read: no pipelines
 // bound yields two empties and every caller no-ops.
+//
+// An input binds when its tracked branch matches AND either its declared
+// URL equals the event URL (the exact spelling it was wired with) or its
+// mapped repository is the repository the event URL names. The fallback
+// is the drift guard: a git input's URL is a binding key stored at wire
+// time, while the events a repo receives are addressed by the mirror URL
+// the emitters record — a spelling drift between the two (a hyphenated
+// repo rewired to its env-safe underscore mirror, a .git suffix or
+// trailing-slash mismatch) must not silently unbind the pipeline. The
+// mapped repository is the stable identity: bus-wire points an input's
+// name and the mirror URL at the same env-safe repo, so the URL-derived
+// name matches exactly when the spellings agree, and an input whose
+// custom name maps a DIFFERENT repo is never swept in (its repo != the
+// URL-derived name).
 func (d *daemon) gitBindings(url, branch string) ([]gitBinding, map[string]bool) {
 	var bound []gitBinding
 	seen := map[string]bool{}
@@ -254,7 +268,8 @@ func (d *daemon) gitBindings(url, branch string) ([]gitBinding, map[string]bool)
 			for i := range in.Group {
 				walk(&in.Group[i])
 			}
-			if in.Git != nil && in.Git.URL == url && gitTrackedBranch(in.Git) == branch {
+			if in.Git != nil && gitTrackedBranch(in.Git) == branch &&
+				(in.Git.URL == url || (in.Repo != "" && in.Repo == gitRepoName(url))) {
 				repo := in.Repo
 				if repo == "" {
 					repo = gitRepoName(url)
@@ -363,17 +378,41 @@ type gitDeltaEvent struct {
 	Private  bool              `json:"private,omitempty"`
 }
 
+// gitDeltaOutcome reports what a delta event did to the mapped
+// repositories: applied is true when at least one repository committed the
+// edit (zero-bound and base-mismatch events commit nothing); reason names
+// the refusal when nothing applied; head is the resulting head commit id
+// of the first repository that committed ("" when nothing applied). The
+// response never carries a hard error — delivery semantics — but a
+// sender that reads it learns immediately whether the edit landed, instead
+// of discovering a silent no-op later.
+type gitDeltaOutcome struct {
+	Applied bool   `json:"applied"`
+	Reason  string `json:"reason,omitempty"`
+	Head    string `json:"head,omitempty"`
+}
+
 // gitDeltaH is the delta receiver (POST /api/v1/git/delta). Delivery never
 // errors on the repository's behalf: an uncloneable repository or a base
 // that does not match the mapped head fails the bound pipelines
-// asynchronously, it does not reject the event.
+// asynchronously, it does not reject the event — but the response reports
+// the outcome, so an event that bound no pipelines (a URL spelling drift
+// or an untracked branch) or failed every base check is visible to the
+// emitter as applied=false with the reason, not a bare ok.
 func (d *daemon) gitDeltaH(w http.ResponseWriter, r *http.Request) error {
 	var ev gitDeltaEvent
 	if err := decodeBody(r, &ev); err != nil {
 		return fmt.Errorf("invalid request body")
 	}
-	d.gitDelta(ev)
-	writeJSON(w, map[string]string{"ok": "true"})
+	out := d.gitDelta(ev)
+	resp := map[string]any{"ok": "true", "applied": out.Applied}
+	if out.Reason != "" {
+		resp["reason"] = out.Reason
+	}
+	if out.Head != "" {
+		resp["head"] = out.Head
+	}
+	writeJSON(w, resp)
 	return nil
 }
 
@@ -396,16 +435,29 @@ func (d *daemon) gitDeltaH(w http.ResponseWriter, r *http.Request) error {
 // with no head yet applies onto the empty tree (it bootstraps a partial
 // revision) unless a base is set, in which case there is nothing to match
 // and it fails like any stale base.
-func (d *daemon) gitDelta(ev gitDeltaEvent) {
+//
+// The outcome reports whether the edit committed anywhere and why not:
+// applied is false when no pipeline bound the url/branch (the silent
+// no-op class — a delta addressed to a repo no watch tracks is dropped,
+// and the emitter must learn that), when the event is private, or when
+// every repo's base check refused the edit. The bound pipelines are
+// failed exactly as before in each refusal case, so the pipeline state
+// and the response agree.
+func (d *daemon) gitDelta(ev gitDeltaEvent) gitDeltaOutcome {
 	bound, seen := d.gitBindings(ev.URL, ev.Branch)
 	if len(bound) == 0 {
-		return
+		return gitDeltaOutcome{
+			Applied: false,
+			Reason: fmt.Sprintf(
+				"no pipeline is bound to %s branch %q (recorded revision %q); check the git-input URL spelling and tracked branch",
+				ev.URL, ev.Branch, ev.Revision),
+		}
 	}
 	if ev.Private {
 		for _, b := range bound {
 			d.markPipelineFailed(b.pipeline, fmt.Sprintf("unable to clone private repository (%s)", ev.URL))
 		}
-		return
+		return gitDeltaOutcome{Applied: false, Reason: fmt.Sprintf("unable to clone private repository (%s)", ev.URL)}
 	}
 	for _, b := range bound {
 		d.clearPipelineFailure(b.pipeline, "unable to clone private repository")
@@ -415,14 +467,18 @@ func (d *daemon) gitDelta(ev gitDeltaEvent) {
 		repos = append(repos, repo)
 	}
 	sort.Strings(repos)
+	out := gitDeltaOutcome{}
 	for _, repo := range repos {
 		if ev.Base != "" {
 			if marker, ok := d.headRevisionMarker(repo, ev.Branch); !ok || marker != ev.Base {
+				reason := fmt.Sprintf("delta base %q does not match mapped head of %s (recorded %q; deliver a full push or a delta with the current base)", ev.Base, ev.URL, marker)
 				for _, b := range bound {
 					if b.repo == repo {
-						d.markPipelineFailed(b.pipeline,
-							fmt.Sprintf("delta base %q does not match mapped head of %s (recorded %q; deliver a full push or a delta with the current base)", ev.Base, ev.URL, marker))
+						d.markPipelineFailed(b.pipeline, reason)
 					}
+				}
+				if out.Reason == "" {
+					out.Reason = reason
 				}
 				continue
 			}
@@ -440,7 +496,7 @@ func (d *daemon) gitDelta(ev gitDeltaEvent) {
 				d.clearPipelineFailure(b.pipeline, "delta base")
 			}
 		}
-		d.commitRevision(repo, ev.Branch, func(commitID string) bool {
+		if d.commitRevision(repo, ev.Branch, func(commitID string) bool {
 			for _, p := range ev.Deleted {
 				if err := d.store.DeleteFile(commitID, p); err != nil {
 					// a failed write abandons the edit rather than
@@ -464,8 +520,16 @@ func (d *daemon) gitDelta(ev gitDeltaEvent) {
 				}
 			}
 			return true
-		}, nil)
+		}, nil) {
+			out.Applied = true
+			if out.Head == "" {
+				if head, err := d.store.HeadCommitRec(repo, ev.Branch); err == nil {
+					out.Head = head.ID
+				}
+			}
+		}
 	}
+	return out
 }
 
 // headRevisionMarker returns the revision recorded at the repository's

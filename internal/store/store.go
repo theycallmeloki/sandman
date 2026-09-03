@@ -1013,9 +1013,39 @@ func (s *Store) FinishCommit(commitID, description string, empty bool) (client.C
 	if description != "" {
 		rec.Description = description
 	}
+	// the resolved view is computed once and shared by the marker
+	// normalization and the type-conflict check below
+	view := s.ResolveView(rec)
+	// An authored head records itself. The .git/HEAD marker names the
+	// external revision a head's tree was last delivered as — a push or
+	// delta commits one explicitly. A commit authored in the control
+	// plane (the per-file commit API) carries no such op and inherits
+	// its ancestry's marker file unchanged; the authored tree is a new
+	// delivery baseline, so the inherited marker is stale: two
+	// workspaces bootstrapped from heads on opposite sides of the
+	// authoring would both record the old revision as their base, and
+	// the delta base guard — the only thing stopping a stale-tree edit
+	// from silently overwriting the authored work — could not tell them
+	// apart. Recording the authored head's own id resets the baseline:
+	// a base of the old revision no longer matches, while a bootstrap of
+	// this head (marker fallback == head id) still does.
+	if !commitWritesMarker(rec) {
+		if e, ok := view[".git/HEAD"]; ok {
+			if b, err := e.Bytes(s); err == nil && string(b) != rec.ID {
+				if sha, err := s.WriteBlob([]byte(rec.ID)); err == nil {
+					rec.Ops = append(rec.Ops, fileOp{
+						Path:      ".git/HEAD",
+						SHA:       sha,
+						Size:      uint64(len(rec.ID)),
+						Overwrite: true,
+					})
+				}
+			}
+		}
+	}
 	// a path that is both a file and a directory prefix of another path is
 	// a type conflict; finishing fails ("x" then "x/y" type conflict)
-	if conflict := s.PathConflict(rec); conflict != "" {
+	if conflict := pathConflict(view); conflict != "" {
 		return client.Commit{}, fmt.Errorf("type conflict at path %q", conflict)
 	}
 	rec.Empty = empty
@@ -1030,6 +1060,19 @@ func (s *Store) FinishCommit(commitID, description string, empty bool) (client.C
 		s.onFinish()
 	}
 	return rec.Commit(), nil
+}
+
+// commitWritesMarker reports whether the commit's own write operations
+// touch the .git/HEAD marker path — the explicit revision record a push
+// or delta carries. Authored commits (per-file commit API) never do, and
+// FinishCommit normalizes their inherited marker instead.
+func commitWritesMarker(rec *CommitRec) bool {
+	for _, op := range rec.Ops {
+		if op.Path == ".git/HEAD" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) InspectCommit(commitID string) (client.Commit, error) {
@@ -1094,12 +1137,17 @@ func (rec *CommitRec) Commit() client.Commit {
 	}
 }
 
-// pathConflict reports a path that is both a file and a directory prefix
+// PathConflict reports a path that is both a file and a directory prefix
 // of another path in the commit's resolved view — a type conflict that
 // must fail finishing ("x" then "x/y" in one commit;
 // a child writing "x/y" over an inherited file "x").
 func (s *Store) PathConflict(rec *CommitRec) string {
-	view := s.ResolveView(rec)
+	return pathConflict(s.ResolveView(rec))
+}
+
+// pathConflict is the pure view check behind PathConflict; FinishCommit
+// resolves the view once and shares it with the marker normalization.
+func pathConflict(view map[string]ViewEntry) string {
 	paths := make([]string, 0, len(view))
 	for p := range view {
 		paths = append(paths, p)
