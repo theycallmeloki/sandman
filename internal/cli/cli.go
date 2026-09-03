@@ -134,6 +134,7 @@ func Commands() []*cobra.Command {
 	cmds = append(cmds, getCmd())    // get [file] <ref> [-o dest]
 	cmds = append(cmds, putCmd())    // cp-like upload
 	cmds = append(cmds, patchCmd())  // deliver a checkout's edits as a delta
+	cmds = append(cmds, deltaCmd())  // submit a delta payload, print the report
 	cmds = append(cmds, lsCmd())     // repos, or files in a repo
 	cmds = append(cmds, catCmd())    // files to stdout
 	cmds = append(cmds, psCmd())     // jobs, alias for `job list`
@@ -823,6 +824,7 @@ func newJobCmd() *cobra.Command {
 		},
 	}
 	list.Flags().StringSliceVarP(&jobStates, "state", "s", nil, "only jobs in these states (repeatable)")
+	list.Flags().StringSliceVar(&jobInputCommits, "input-commit", nil, "only jobs whose input set includes every commit (repeatable)")
 	list.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	cmd.AddCommand(list)
 	cmd.AddCommand(
@@ -885,8 +887,12 @@ func newJobCmd() *cobra.Command {
 	return cmd
 }
 
-// jobStates is the shared --state filter of `job list` and `ps`.
-var jobStates []string
+// jobStates is the shared --state filter of `job list` and `ps`;
+// jobInputCommits is the shared --input-commit filter.
+var (
+	jobStates       []string
+	jobInputCommits []string
+)
 
 // runJobList is the shared listing of `job list` and `ps`: pipeline
 // filter, repeatable state filter, table or JSON.
@@ -896,6 +902,7 @@ func runJobList(args []string, states []string) {
 		filter.Pipeline = args[0]
 	}
 	filter.States = states
+	filter.InputCommits = jobInputCommits
 	js, err := cliClient().ListJobsFiltered(filter)
 	if err != nil {
 		dieErr("job list", err, "")
@@ -925,6 +932,7 @@ func psCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringSliceVarP(&jobStates, "state", "s", nil, "only jobs in these states (repeatable)")
+	cmd.Flags().StringSliceVar(&jobInputCommits, "input-commit", nil, "only jobs whose input set includes every commit (repeatable)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON instead of a table")
 	return cmd
 }

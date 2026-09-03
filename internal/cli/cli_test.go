@@ -257,6 +257,24 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
+			if commits, ok := q["inputCommit"]; ok {
+				all := true
+				for _, want := range commits {
+					found := false
+					for _, have := range j.InputCommits {
+						if have == want {
+							found = true
+						}
+					}
+					if !found {
+						all = false
+						break
+					}
+				}
+				if !all {
+					continue
+				}
+			}
 			out = append(out, j)
 		}
 		_ = json.NewEncoder(w).Encode(out)
@@ -265,6 +283,14 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&pl)
 		f.pipelines = append(f.pipelines, pl)
 		_ = json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
+	case r.Method == "POST" && p == "/api/v1/git/delta":
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		res := client.GitDeltaResult{Applied: true, Head: "feedface0000111122223333"}
+		if body["base"] == "stale" {
+			res = client.GitDeltaResult{Applied: false, Reason: "base mismatch"}
+		}
+		_ = json.NewEncoder(w).Encode(res)
 	case r.Method == "GET" && p == "/api/v1/pipelines":
 		var out []client.PipelineInfo
 		for _, pl := range f.pipelines {
@@ -591,6 +617,31 @@ func TestJobListStateFilter(t *testing.T) {
 	}
 	if len(js) != 2 {
 		t.Fatalf("json jobs = %d, want 2", len(js))
+	}
+}
+
+func TestJobListInputCommitFilter(t *testing.T) {
+	f := newFakeDaemon()
+	f.jobs = []client.Job{
+		{ID: "aaaaaaaaaaaaaaaa", Pipeline: "p1", InputCommits: []string{"1111111111111111"}},
+		{ID: "bbbbbbbbbbbbbbbb", Pipeline: "p1", InputCommits: []string{"2222222222222222"}},
+		{ID: "cccccccccccccccc", Pipeline: "p1", InputCommits: []string{"1111111111111111", "3333333333333333"}},
+	}
+	out, _, code := runCLI(t, f, nil, "job", "list", "p1", "--input-commit", "1111111111111111", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	var js []client.Job
+	if err := json.Unmarshal([]byte(out), &js); err != nil {
+		t.Fatalf("json: %v (%q)", err, out)
+	}
+	if len(js) != 2 {
+		t.Fatalf("jobs = %d, want 2 (both including 1111...): %q", len(js), out)
+	}
+	for _, j := range js {
+		if j.ID == "bbbbbbbbbbbbbbbb" {
+			t.Fatalf("input-commit filter leaked job with only 2222...")
+		}
 	}
 }
 
