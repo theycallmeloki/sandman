@@ -1032,6 +1032,16 @@ func (d *daemon) sideFileData(jx *jobExec, sd datumSide, f string) ([]byte, erro
 // is indistinguishable by content.
 func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, started time.Time, worker int) (outcome, reason string, files []fileRef) {
 	tr := jx.pl.Pipeline.Transform
+	// Carry the execution-environment customization the same way the control
+	// plane's local executor applies it: the customization (and secret) env,
+	// plus the declared volumes mounted at /sandman/volumes/<name>. Secret
+	// *file* mounts stay control-plane-local and are deliberately not shipped.
+	var vols []execVolume
+	if custom, err := parseCustomization(tr); err == nil && custom != nil {
+		for name, v := range custom.Volumes {
+			vols = append(vols, execVolume{Name: name, HostPath: v.HostPath, EmptyDir: v.EmptyDir})
+		}
+	}
 	req := execRequest{
 		JobID:            jx.id,
 		Index:            index,
@@ -1042,7 +1052,8 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		Stdin:            tr.Stdin,
 		ErrCmd:           tr.ErrCmd,
 		ErrStdin:         tr.ErrStdin,
-		Env:              append([]string{}, jx.env...),
+		Env:              append(append([]string{}, jx.env...), jx.extraEnv...),
+		Volumes:          vols,
 		DatumTimeout:     tr.DatumTimeout,
 		AcceptReturnCode: tr.AcceptReturnCode,
 		User:             tr.User,

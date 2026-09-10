@@ -42,28 +42,39 @@ import (
 // same mapping as a local run: memory limit → --memory, memory request →
 // --memory-reservation, CPU (limit, or request when no limit) → --cpus.
 type execRequest struct {
-	JobID             string     `json:"jobID"`
-	Index             int        `json:"index"`
-	Attempt           int        `json:"attempt"`
-	Cname             string     `json:"cname"`
-	Image             string     `json:"image,omitempty"`
-	Cmd               []string   `json:"cmd,omitempty"`
-	Stdin             []string   `json:"stdin,omitempty"`
-	ErrCmd            []string   `json:"errCmd,omitempty"`
-	ErrStdin          []string   `json:"errStdin,omitempty"`
-	Env               []string   `json:"env"`
-	Sides             []execSide `json:"sides"`
-	Memory            string     `json:"memory,omitempty"`
-	MemoryReservation string     `json:"memoryReservation,omitempty"`
-	CPU               float64    `json:"cpu,omitempty"`
-	DatumTimeout      string     `json:"datumTimeout,omitempty"`
-	AcceptReturnCode  int        `json:"acceptReturnCode,omitempty"`
-	User              string     `json:"user,omitempty"`
-	Workdir           string     `json:"workdir,omitempty"`
+	JobID             string       `json:"jobID"`
+	Index             int          `json:"index"`
+	Attempt           int          `json:"attempt"`
+	Cname             string       `json:"cname"`
+	Image             string       `json:"image,omitempty"`
+	Cmd               []string     `json:"cmd,omitempty"`
+	Stdin             []string     `json:"stdin,omitempty"`
+	ErrCmd            []string     `json:"errCmd,omitempty"`
+	ErrStdin          []string     `json:"errStdin,omitempty"`
+	Env               []string     `json:"env"`
+	Sides             []execSide   `json:"sides"`
+	Volumes           []execVolume `json:"volumes,omitempty"`
+	Memory            string       `json:"memory,omitempty"`
+	MemoryReservation string       `json:"memoryReservation,omitempty"`
+	CPU               float64      `json:"cpu,omitempty"`
+	DatumTimeout      string       `json:"datumTimeout,omitempty"`
+	AcceptReturnCode  int          `json:"acceptReturnCode,omitempty"`
+	User              string       `json:"user,omitempty"`
+	Workdir           string       `json:"workdir,omitempty"`
 	// Gpus are the device indices (docker/CUDA numbering) this attempt is
 	// allocated by the control plane; empty means no GPU. The container
 	// sees exactly these devices — never "all GPUs".
 	Gpus []int `json:"gpus,omitempty"`
+}
+
+// execVolume is one pipeline-customization volume, mounted at
+// /sandman/volumes/<name>: a host path the operator provides, or a fresh
+// per-attempt directory (emptyDir) — the same vocabulary the control plane's
+// local executor applies.
+type execVolume struct {
+	Name     string `json:"name"`
+	HostPath string `json:"hostPath,omitempty"`
+	EmptyDir bool   `json:"emptyDir,omitempty"`
 }
 
 // execSide is one input side's files for the attempt, shipped as content.
@@ -401,6 +412,17 @@ func runExec(nodeName string, req execRequest) execResult {
 	env := append([]string{}, req.Env...)
 	env = append(env, "HOSTNAME="+nodeName) // the host's identity, visible to the transform
 	mounts := []string{"-v", tmpDir + ":/tmp"}
+	// The pipeline's customization volumes, mounted exactly as the control
+	// plane's local executor does: /sandman/volumes/<name>. A host path is
+	// the operator's to provide; emptyDir is a fresh per-attempt directory.
+	for _, v := range req.Volumes {
+		host := v.HostPath
+		if v.EmptyDir || host == "" {
+			host = filepath.Join(dir, "volumes", v.Name)
+			os.MkdirAll(host, 0o755)
+		}
+		mounts = append(mounts, "-v", host+":/sandman/volumes/"+v.Name)
+	}
 	sideDirs := map[string]string{}
 	for _, sd := range req.Sides {
 		inDir := filepath.Join(dir, "in", sd.Name)
