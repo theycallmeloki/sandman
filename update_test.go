@@ -3,7 +3,7 @@ package main
 // Unit tests for the self-update path (update.go): version comparison,
 // checksum verification, release/asset parsing, and the end-to-end
 // install against an httptest server. The install target is a temp dir —
-// updatePath (/usr/local/bin/sandman) is never touched.
+// the real install path (updateTarget()) is never touched.
 
 import (
 	"crypto/sha256"

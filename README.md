@@ -53,7 +53,8 @@ Three things are deliberately *not* here, and they change how you operate:
 - **No cluster scheduler.** Jobs are placed by the shell (`xargs sandman
   run`), or by pipeline placement labels. There is no backfill, no
   preemption, no resource broker.
-- **No central database.** State is plain files under `/var/lib/sandman`;
+- **No central database.** State is plain files under `/var/lib/sandman`
+  (macOS: `~/Library/Application Support/sandman`);
   `cat /var/lib/sandman/registry` is the fleet, `ls repos/in/commits` is
   the history. Everything is inspectable with standard tools.
 - **No auth on the wire.** Trusted-LAN by design: *the firewall is the
@@ -62,8 +63,8 @@ Three things are deliberately *not* here, and they change how you operate:
 ## Design principles
 
 - **Composition** — a job is argv + env + stdin. `echo data | sandman run b2 -- alpine cat`
-- **Representation** — the fleet is a text file (`/var/lib/sandman/registry`);
-  node knowledge is data, not code
+- **Representation** — the fleet is a text file (`<state>/registry`,
+  `/var/lib/sandman` by default); node knowledge is data, not code
 - **Transparency** — output streams live, like ssh; job state is a directory
   you can cat
 - **Silence** — only the job's stdout on stdout; diagnostics on stderr
@@ -78,7 +79,8 @@ Three things are deliberately *not* here, and they change how you operate:
 
 ## Quickstart: ten minutes to a dream
 
-Requirements: Linux, docker, and a LAN with multicast (one L2 segment).
+Requirements: Linux or macOS (Apple Silicon or Intel), docker, and a LAN
+with multicast (one L2 segment).
 
 ### 1. Install the daemon
 
@@ -86,6 +88,14 @@ Requirements: Linux, docker, and a LAN with multicast (one L2 segment).
 make build                # or: CGO_ENABLED=0 go build -o sandman .
 sudo make install         # binary + systemd unit
 sudo systemctl enable --now sandman
+```
+
+On macOS the same command installs a per-user launchd agent instead — no
+sudo, no systemd (see [macOS](#macos-apple-silicon)):
+
+```sh
+make install daemon
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandman.daemon.plist
 ```
 
 That's it. The node advertises `_sandman._tcp` and browses for peers on
@@ -251,7 +261,7 @@ Each daemon publishes a `_sandman._tcp.local.` service (TXT records carry
 docker version and arch) and browses the same type. Peers are kept in the
 registry file with a last-seen timestamp and are forgotten after 90s of
 silence; a graceful shutdown announces an mDNS goodbye so peers drop the
-node immediately. `cat /var/lib/sandman/registry` is the fleet.
+node immediately. `cat <state>/registry` is the fleet.
 
 mDNS on Linux delivers multicast to one socket per packet when several
 processes share UDP 5353 (reuseport hashing), so a specific peer pair can
@@ -349,8 +359,9 @@ can dial back and place jobs), and the control plane — the worker
 discovers the daemon itself via mDNS (`role=daemon`; the fleet expects one
 daemon per LAN). The worker's systemd unit is written with these values
 baked in — edit `/etc/systemd/system/sandman-worker.service` and
-`systemctl restart sandman-worker` to change them. Set `CONTROL` to skip
-discovery:
+`systemctl restart sandman-worker` to change them. On macOS the same
+script writes `~/Library/LaunchAgents/dev.sandman.worker.plist`, loads it
+with `launchctl`, and needs no root. Set `CONTROL` to skip discovery:
 
 ```sh
 CONTROL=http://192.168.1.147:4242 \
@@ -365,6 +376,61 @@ the endpoint is unauthenticated, so only set it when the control plane is
 on another host. `-label` and `-gpu` are repeatable: `-gpu` limits which
 detected NVIDIA devices the worker makes schedulable (default: every GPU
 `nvidia-smi` reports).
+
+### macOS (Apple Silicon)
+
+Everything the daemon, worker, CLI, and dashboard do on Linux works on
+macOS; only the pieces that are OS-shaped differ.
+
+Install with no root at all: the binary lands in `~/.local/bin/sandman`,
+the state directory in `~/Library/Application Support/sandman`, and the
+service in `~/Library/LaunchAgents` (Docker Desktop is per-user anyway, so
+nothing here has a reason to be root-owned):
+
+```sh
+make install daemon
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandman.daemon.plist
+```
+
+Re-running the install over a loaded agent needs a bootout first —
+`launchctl bootout gui/$(id -u)/dev.sandman.daemon` — and `make uninstall`
+does both. Logs go to `~/Library/Logs/sandman/daemon.log`: launchd has no
+journal, so the agent is written with `StandardOutPath`/`StandardErrorPath`
+and a `PATH` that can see docker under Docker Desktop (`/usr/local/bin`) or
+Homebrew (`/opt/homebrew/bin`). `make install worker` and `install.sh` do
+the same for the worker, with its flags baked into `ProgramArguments`.
+
+Why the paths move: every job's input, scratch, and output directories are
+bind-mounted into a container from under the state directory, and Docker
+Desktop shares only a few host paths with its VM (`/Users`, `/Volumes`,
+`/private`, `/tmp`). Under `/var/lib` those mounts come up empty — the
+transform would see no input and write output the daemon never observes.
+`~/Library/Application Support/sandman` is both user-owned and shared, so
+the mounts work. On either OS `-state <dir>` or `$SANDMAN_STATE` overrides
+the default, which is how a node keeps its state on a scratch volume.
+
+What is different on macOS:
+
+- **No GPU placement.** There is no NVIDIA driver or container runtime on
+  Apple Silicon, so a worker advertises no GPUs and a pipeline that
+  requests one is reported unplaceable rather than silently run on the CPU
+  (the same behaviour as any Linux host without a driver).
+- **No host cpu utilization.** The counter the Linux sampler reads
+  (`/proc/stat`) has no cheap macOS equivalent — `sysctl kern.cp_time` is
+  gone on modern macOS, and the Mach route needs cgo, which the static
+  release build forbids. `sandman stats` and the dashboard report the
+  memory figures but leave cpu-busy at zero. Job execution is unaffected.
+- **Container I/O crosses the Docker Desktop VM.** Correctness is the
+  same; per-datum throughput is lower than a native Linux docker, and the
+  gap grows with the number of files a datum touches.
+- **Images need an arm64 manifest.** A user-supplied amd64-only image
+  fails as a provisioning error — the spec has no `--platform` override.
+- **Memory requests are advisory.** `--memory` and `--cpus` limits apply,
+  but Docker Desktop does not enforce `--memory-reservation`.
+- **mDNS shares UDP 5353 with the system responder.** If discovery seems
+  unreliable on a host, `sandman attach <name> <addr>` pins a peer
+  statically; discovery is never a hard dependency, since the registry
+  also converges over TCP.
 
 ### GPUs
 
@@ -954,7 +1020,9 @@ only the page and its assets are embedded.
 
 ### State is plain files
 
-Under the state dir (`/var/lib/sandman` by default) — cat it:
+Under the state dir — `/var/lib/sandman` on Linux,
+`~/Library/Application Support/sandman` on macOS, or whatever
+`-state`/`$SANDMAN_STATE` names — cat it:
 
 ```
 repos/<repo>/refs/<branch>       one-line commit ids
@@ -997,7 +1065,10 @@ Data-plane CLI verbs default to the local daemon
 ### Updating the binary
 
 - **Self-update** — `sandman update` checks GitHub releases and installs the
-  latest published build; `--check` reports without installing.
+  latest published build over the binary that is running (so an install
+  outside `/usr/local/bin` — a macOS `~/.local/bin`, a Homebrew prefix —
+  updates in place rather than growing a second copy); `--check` reports
+  without installing. `$SANDMAN_UPDATE_PATH` overrides the target.
 - **Release install** — `sudo make install-release VERSION=0.2.22` (no
   leading `v`) installs the newest published release binary instead of
   building — no Go toolchain needed on the target. The download lands in a
@@ -1007,7 +1078,8 @@ Data-plane CLI verbs default to the local daemon
   can switch roles without reinstalling — `make install daemon` vs
   `make install worker` only picks the enable hint. If your Go lives
   outside root's `secure_path`, pass it: `sudo make GO=$HOME/sdk/go/bin/go
-  install`.
+  install`. On macOS the same target writes launchd agents under `$HOME`
+  and needs no sudo (see [macOS](#macos-apple-silicon)).
 
 ### Cutting a release
 
@@ -1019,8 +1091,11 @@ git tag v0.2.22 && git push origin v0.2.22
 ```
 
 It builds with the tag baked in (`-X main.Version`), checksum-ships
-`sandman-<os>-<arch>` + `.sha256` for linux/amd64 and linux/arm64, and
-creates the release with a changelog of the commits since the previous tag.
+`sandman-<os>-<arch>` + `.sha256` for linux/amd64, linux/arm64,
+darwin/amd64, and darwin/arm64, and creates the release with a changelog of
+the commits since the previous tag. All four are static (`CGO_ENABLED=0`)
+and built on one runner — `make install-release` and `sandman update`
+select the asset by `uname -s`/`uname -m` on the target.
 
 ### Rolling the fleet
 
@@ -1051,7 +1126,7 @@ too — only expose it where the control plane can reach it.
 - No cluster scheduler or backfill: pipelines process commits in order, one
   job at a time per pipeline; parallelism and autoscaling are per-pipeline
 - Fabric `run` artifacts stay in the node's scratch dir
-  (`/var/lib/sandman/jobs/<id>/`); pipeline jobs publish to output repos
+  (`<state>/jobs/<id>/`); pipeline jobs publish to output repos
   instead, which a fetch verb is not built for yet (use the API or the
   `client` library)
 - Inputs are file-scoped (repo + glob): there is no watch of an on-disk

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Sandman execution worker (macOS equivalent of deploy/sandman-worker.service).
+
+  @SANDMAN_BIN@ and @SANDMAN_LOG_DIR@ are substituted by the installer
+  (`make install worker` / install.sh); install.sh additionally bakes the
+  worker's flags (-name, -port, -advertise, -control, -label) into
+  ProgramArguments, exactly as it writes them into ExecStart on Linux.
+
+  A bare `sandman worker` joins the fleet with zero configuration: the
+  name defaults to the hostname, the control plane is discovered via mDNS
+  (role=daemon on the LAN), and the exec endpoint binds loopback. For the
+  control plane to place jobs here, -advertise must name a host:port the
+  daemon can dial (and -port must match); the endpoint is unauthenticated,
+  so only advertise on a trusted LAN.
+
+  Written to ~/Library/LaunchAgents/dev.sandman.worker.plist and started
+  with:
+
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandman.worker.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.sandman.worker</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>@SANDMAN_BIN@</string>
+		<string>worker</string>
+	</array>
+
+	<!-- see deploy/sandman.plist: launchd's PATH cannot see docker under
+	     Docker Desktop or Homebrew without this. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Restart=on-failure: a crashed or OOM-killed worker must come back,
+	     or the control plane's host TTL silently drops it from placement
+	     (fleet capacity lost with no signal). -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<!-- systemd's RestartSec=2; launchd's own default is 10s. -->
+	<key>ThrottleInterval</key>
+	<integer>2</integer>
+
+	<!-- launchd has no journal: without these the registration and exec
+	     errors that matter for placement are discarded. -->
+	<key>StandardOutPath</key>
+	<string>@SANDMAN_LOG_DIR@/worker.log</string>
+	<key>StandardErrorPath</key>
+	<string>@SANDMAN_LOG_DIR@/worker.log</string>
+</dict>
+</plist>

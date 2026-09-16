@@ -8,6 +8,12 @@
 # holds roughly a third of the docker load, fits comfortably in the 45m
 # budget, and a contention cascade in one shard no longer fails the others
 # (fail-fast: false).
+#
+# The Linux/amd64 shards stay the load-bearing suite. Two further jobs
+# cover the other shipped platforms: `arm64` runs the daemon and a
+# container-facing subset natively on an arm64 runner, and `macos` runs
+# the daemon, store, scheduler, and fabric on darwin/arm64 (GitHub's macOS
+# runners have no docker, so the container-facing tests self-skip there).
 
 name: Go
 
@@ -126,3 +132,96 @@ jobs:
           cache: true
       - name: Test with race detector
         run: go test -race -timeout 15m . ./cli/...
+
+  arm64:
+    # linux/arm64 is a released platform (release.yml ships
+    # sandman-linux-arm64) that CI has never executed: every other job
+    # runs on an amd64 host, so an arm64-only bug — a width assumption,
+    # an image without an arm64 manifest, a syscall that behaves
+    # differently — would ship unexercised. This job runs the daemon, the
+    # unit tests, and the container-facing subset natively on an arm64
+    # runner, and cross-builds the darwin assets so a PR cannot break the
+    # macOS release either.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Every target is static, so darwin builds from this runner; the
+      # point is that the darwin code paths (hoststats_darwin.go, the
+      # release asset names) compile on every PR, not only at tag time.
+      - name: Cross-build the darwin targets
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=darwin GOARCH=$arch CGO_ENABLED=0 go build -trimpath -o /dev/null .
+          done
+
+      - name: Test (root unit tests, native arm64)
+        run: go test -timeout 15m .
+
+      - name: Prepare docker images
+        run: docker pull alpine:3.21
+
+      - name: Conformance (container-facing subset, native arm64)
+        run: |
+          go test -timeout 30m ./conformance/ -run 'Test(CrashThenUpdate|ResourceLimitsApplied|UserIdentityAndWorkingDir|SingleInputPipelineCopiesInputFiles)$'
+
+  macos:
+    # darwin/arm64 is a supported platform: `make install` writes a
+    # per-user launchd agent and platform.go puts the state directory
+    # under ~/Library/Application Support. GitHub's macOS runners have no
+    # docker, so the container-facing tests self-skip; what runs here is
+    # the daemon, the store, the scheduler, and the fabric on the process
+    # backend — the code the port actually changed — plus Apple's own
+    # plutil validating the agents the installer writes.
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not formatted:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test (root unit tests)
+        run: go test -timeout 15m .
+
+      - name: Check the launchd agents install cleanly
+        # The macOS install bakes this node's paths into the agents (a
+        # plist cannot express $HOME). plutil is the platform's own
+        # validator, so a malformed agent fails here instead of at login.
+        run: |
+          make PREFIX="$RUNNER_TEMP/prefix" \
+               LAUNCH_AGENTS="$RUNNER_TEMP/LaunchAgents" \
+               SANDMAN_LOG_DIR="$RUNNER_TEMP/Logs" \
+               build do-install
+          for p in "$RUNNER_TEMP/LaunchAgents"/*.plist; do plutil -lint "$p"; done
+          plutil -p "$RUNNER_TEMP/LaunchAgents/dev.sandman.worker.plist"
+
+      - name: Conformance (daemon + engine, process backend)
+        run: |
+          go test -timeout 30m ./conformance/ -run 'Test(SingleInputPipelineCopiesInputFiles|RunPipeline|RestartKeepsDataAndPipelines|SecretsCRUD|BackupRestoreRoundTrip|ResetRobustness|ListJobsFilteredByStates|PipelineFailureMentionsDatum|CronCadenceSurvivesUpdates|TransactionAtomicApply|BranchInspectListDelete|MetricsEndpoint)$'

@@ -124,73 +124,10 @@ type daemon struct {
 	hosts *hostRegistry
 }
 
-// cpuSample is one /proc/stat reading for host-wide cpu utilization.
-type cpuSample struct {
-	idle, total uint64
-}
-
-func readCpu() cpuSample {
-	b, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return cpuSample{}
-	}
-	line := strings.SplitN(string(b), "\n", 2)[0]
-	f := strings.Fields(line)
-	if len(f) < 8 {
-		return cpuSample{}
-	}
-	var total uint64
-	for _, s := range f[1:] {
-		if v, err := strconv.ParseUint(s, 10, 64); err == nil {
-			total += v
-		}
-	}
-	idle, _ := strconv.ParseUint(f[4], 10, 64) // idle
-	ioWait, _ := strconv.ParseUint(f[5], 10, 64)
-	return cpuSample{idle: idle + ioWait, total: total}
-}
-
-// cpuBusyDelta computes host-wide cpu utilization (percent * 1000) between
-// two samples: 0 when the window is empty or not moving.
-func cpuBusyDelta(prev, cur cpuSample) uint64 {
-	if cur.total <= prev.total || cur.idle < prev.idle {
-		return 0
-	}
-	dIdle := cur.idle - prev.idle
-	dTotal := cur.total - prev.total
-	if dTotal == 0 {
-		return 0
-	}
-	busy := 100 * (1 - float64(dIdle)/float64(dTotal))
-	return uint64(busy*1000 + 0.5)
-}
-
-// readMem reads host memory totals from /proc/meminfo (kB -> bytes).
-// used = MemTotal - MemAvailable, the kernel's honest "in use" figure.
-func readMem() (total, used uint64) {
-	b, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return 0, 0
-	}
-	var memTotal, memAvail uint64
-	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 {
-			continue
-		}
-		kb, err := strconv.ParseUint(f[1], 10, 64)
-		if err != nil {
-			continue
-		}
-		switch f[0] {
-		case "MemTotal:":
-			memTotal = kb
-		case "MemAvailable:":
-			memAvail = kb
-		}
-	}
-	return memTotal * 1024, (memTotal - memAvail) * 1024
-}
+// Host resource sampling (cpuSample, cpuBusyDelta, and the platform
+// readers readCpu/readMem) lives in hoststats*.go: /proc/stat and
+// /proc/meminfo on Linux, hw.memsize + vm_stat on macOS (which has no
+// cheap cpu counter — see hoststats_darwin.go).
 
 // guard runs a daemon-owned goroutine body with panic recovery: an
 // unrecovered panic in any of them would kill the process and every
@@ -210,7 +147,7 @@ func cmdDaemon(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	port := fs.Int("port", DefaultPort, "TCP listen port")
 	name := fs.String("name", sanitizeName(hostname()), "advertised instance name")
-	state := fs.String("state", DefaultState, "state directory")
+	state := fs.String("state", defaultState(), stateFlagHelp)
 	runner := fs.String("runner", "container", "execution backend: container (default) or process")
 	fs.Parse(args)
 

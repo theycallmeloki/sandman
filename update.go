@@ -20,20 +20,46 @@ import (
 
 // update implements `sandman update`: check GitHub releases for the
 // latest tagged build and, when behind, download the release asset and
-// install it over the daemon at /usr/local/bin/sandman. The binary is
-// both CLI and daemon, so one install updates the whole node.
+// install it over the running binary. The binary is both CLI and daemon,
+// so one install updates the whole node.
 //
 // Releases are tagged v0.0.1+ and carry a per-platform binary asset
-// (sandman-linux-amd64) plus its sha256; the update verifies the
-// checksum before replacing the file (atomic: temp file + rename).
-// A non-root install re-executes through sudo when the target directory
-// is not writable.
+// (sandman-linux-amd64, sandman-darwin-arm64, ...) plus its sha256; the
+// update verifies the checksum before replacing the file (atomic: temp
+// file + rename). A non-root install re-executes through sudo when the
+// target directory is not writable.
 
 const (
 	updateOwner = "theycallmeloki"
 	updateRepo  = "sandman"
-	updatePath  = "/usr/local/bin/sandman"
+	// defaultUpdatePath is where releases have always landed on Linux;
+	// updateTarget prefers the path the running binary was actually
+	// installed at and falls back here only when that cannot be resolved.
+	defaultUpdatePath = "/usr/local/bin/sandman"
 )
+
+// updateTarget is the file `sandman update` replaces: the running
+// binary's own path. A node installed outside /usr/local/bin — a macOS
+// Homebrew prefix, a user-local ~/.local/bin — updates itself in place
+// instead of growing a second copy under /usr/local/bin that the shell's
+// PATH may never reach. $SANDMAN_UPDATE_PATH overrides it.
+//
+// os.Executable can return a path relative to the invocation directory
+// (or one that no longer exists, after a package-manager reinstall), so
+// only an existing absolute path is trusted.
+func updateTarget() string {
+	if p := os.Getenv("SANDMAN_UPDATE_PATH"); p != "" {
+		return p
+	}
+	exe, err := os.Executable()
+	if err != nil || !filepath.IsAbs(exe) {
+		return defaultUpdatePath
+	}
+	if _, err := os.Stat(exe); err != nil {
+		return defaultUpdatePath
+	}
+	return exe
+}
 
 // updateAPIBase is the GitHub API base for release lookups; a package var
 // so tests can point it at an httptest server.
@@ -46,7 +72,7 @@ func cmdUpdate(args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	checkOnly := fs.Bool("check", false, "report the latest release without installing")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: sandman update [--check]\n  check GitHub releases and install the latest build over %s\n  --check: report the latest release without installing\n", updatePath)
+		fmt.Fprintf(fs.Output(), "usage: sandman update [--check]\n  check GitHub releases and install the latest build over %s\n  --check: report the latest release without installing\n", updateTarget())
 	}
 	_ = fs.Parse(args)
 
@@ -89,13 +115,14 @@ func cmdUpdate(args []string) {
 		die(fmt.Sprintf("update: release %s is missing the %s checksum asset; refusing unsigned install", rel.TagName, runtime.GOOS+"-"+runtime.GOARCH+".sha256"), 1)
 	}
 
-	if err := installRelease(asset, shasum, updatePath); err != nil {
+	dst := updateTarget()
+	if err := installRelease(asset, shasum, dst); err != nil {
 		if err == errReexecInstalled {
 			return // the sudo re-exec already printed the result
 		}
 		die("update: "+err.Error(), 1)
 	}
-	fmt.Printf("updated to %s — installed at %s\n", rel.TagName, updatePath)
+	fmt.Printf("updated to %s — installed at %s\n", rel.TagName, dst)
 }
 
 // validVersion reports whether Version is a parseable semver-ish
@@ -203,7 +230,7 @@ func releaseAsset(rel *ghRelease, goos, goarch string) string {
 // installRelease downloads the binary and its checksum, verifies the
 // hash, and atomically replaces the install path (sudo re-exec when the
 // target directory is not writable). dst is the install target; the
-// production call passes updatePath, tests pass a temp dir.
+// production call passes updateTarget(), tests pass a temp dir.
 func installRelease(binURL, shaURL, dst string) error {
 	tmp, err := os.CreateTemp("", "sandman-update-*.bin")
 	if err != nil {
@@ -351,7 +378,7 @@ func installAsRoot() error {
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return fmt.Errorf("could not write %s (permission denied) and sudo failed (exit %d) — run `sudo %s %s`", updatePath, ee.ExitCode(), self, strings.Join(os.Args[1:], " "))
+			return fmt.Errorf("could not write %s (permission denied) and sudo failed (exit %d) — run `sudo %s %s`", updateTarget(), ee.ExitCode(), self, strings.Join(os.Args[1:], " "))
 		}
 		return err
 	}

@@ -8,6 +8,11 @@
 # No manual build or upload — the workflow builds with the tag baked in
 # (-X main.Version), checksum-ships the binaries, and creates the
 # release with a changelog of the commits since the previous tag.
+#
+# Releases cover linux/amd64, linux/arm64, darwin/amd64, and
+# darwin/arm64: the Linux pair for the fleet nodes, the darwin pair for
+# Apple Silicon (and Intel) Macs, where `make install-release` and
+# `sandman update` fetch the same assets by uname.
 
 name: Release
 
@@ -36,7 +41,12 @@ jobs:
       - name: Build release binaries
         run: |
           mkdir -p dist
-          for target in "linux amd64" "linux arm64"; do
+          # Every platform `make install-release` and `sandman update` can
+          # ask for (Makefile maps uname -s/-m, update.go maps
+          # runtime.GOOS/GOARCH). All four are static (CGO_ENABLED=0), so
+          # one Linux runner builds them all — no per-arch runner needed,
+          # and nothing here depends on the host architecture.
+          for target in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64"; do
             set -- $target
             GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -trimpath \
               -ldflags "-X main.Version=$GITHUB_REF_NAME" \
