@@ -110,7 +110,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `sandman — a naive peer-to-peer docker fabric
+	fmt.Fprintf(os.Stderr, `sandman — a naive peer-to-peer docker fabric
 
 usage: sandman [flags] <verb> [flags]
 
@@ -155,8 +155,8 @@ verbs:
   completion bash|zsh|fish    generate shell completion
 
 flags (per verb):
-  -state <dir>        state directory (default /var/lib/sandman)
-`)
+  -state <dir>        state directory (default %s)
+`, defaultState())
 }
 
 type multiFlag []string
@@ -169,7 +169,7 @@ func (m *multiFlag) Set(v string) error {
 
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	state := fs.String("state", DefaultState, "state dir for name resolution")
+	state := fs.String("state", defaultState(), stateFlagHelp)
 	var env multiFlag
 	fs.Var(&env, "e", "env K=V (repeatable)")
 	fs.Parse(args)
@@ -182,14 +182,14 @@ func cmdRun(args []string) {
 
 func cmdStats(args []string) {
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
-	state := fs.String("state", DefaultState, "state directory")
+	state := fs.String("state", defaultState(), stateFlagHelp)
 	fs.Parse(args)
 	clientStats(*state)
 }
 
 func cmdNodes(args []string) {
 	fs := flag.NewFlagSet("nodes", flag.ExitOnError)
-	state := fs.String("state", DefaultState, "state directory (local browse fallback)")
+	state := fs.String("state", defaultState(), stateFlagHelp)
 	addr := fs.String("addr", defaultAddr(), "control-plane address (default $SANDMAN_ADDR or 127.0.0.1:4242)")
 	local := fs.Bool("local", false, "browse mDNS and local registry files instead of asking the daemon")
 	asJSON := fs.Bool("json", false, "emit JSON instead of a table")
@@ -228,7 +228,7 @@ func cmdNodes(args []string) {
 
 func cmdAttach(args []string) {
 	fs := flag.NewFlagSet("attach", flag.ExitOnError)
-	state := fs.String("state", DefaultState, "state directory")
+	state := fs.String("state", defaultState(), stateFlagHelp)
 	fs.Parse(args)
 	rest := fs.Args()
 	if len(rest) != 2 {
@@ -242,7 +242,7 @@ func cmdAttach(args []string) {
 
 func cmdDetach(args []string) {
 	fs := flag.NewFlagSet("detach", flag.ExitOnError)
-	state := fs.String("state", DefaultState, "state directory")
+	state := fs.String("state", defaultState(), stateFlagHelp)
 	fs.Parse(args)
 	rest := fs.Args()
 	if len(rest) != 1 {

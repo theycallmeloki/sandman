@@ -14,7 +14,6 @@ const (
 	ProtoVersion = "sandman/0.1"
 	ServiceType  = "_sandman._tcp"
 	DefaultPort  = 4242
-	DefaultState = "/var/lib/sandman"
 )
 
 // textBackend is the protocol-specific half of the fabric text protocol:

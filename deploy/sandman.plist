@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Sandman control plane (macOS equivalent of deploy/sandman.service).
+
+  @SANDMAN_BIN@ and @SANDMAN_LOG_DIR@ are substituted by the installer
+  (`make install daemon` / install.sh) with the paths of this node: a
+  macOS install is per-user — no root, no /var/lib — so the paths cannot
+  be compile-time constants the way the systemd unit's are. The result is
+  written to ~/Library/LaunchAgents/dev.sandman.daemon.plist and started
+  with:
+
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandman.daemon.plist
+
+  A bare `sandman daemon` needs no flags: the state directory defaults to
+  ~/Library/Application Support/sandman (see platform.go) and the node
+  advertises itself over mDNS.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.sandman.daemon</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>@SANDMAN_BIN@</string>
+		<string>daemon</string>
+	</array>
+
+	<!-- launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin, which
+	     cannot see docker under Docker Desktop (/usr/local/bin) or
+	     Homebrew (/opt/homebrew/bin); every job is launched through the
+	     docker CLI, so without this the node starts and places nothing. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Restart=on-failure: a clean exit (an operator stopping the node)
+	     stays stopped; a crash comes back. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<!-- systemd's RestartSec=2; launchd's own default is 10s. -->
+	<key>ThrottleInterval</key>
+	<integer>2</integer>
+
+	<!-- launchd has no journal: without these the daemon's log, including
+	     every placement and crash message, is discarded. -->
+	<key>StandardOutPath</key>
+	<string>@SANDMAN_LOG_DIR@/daemon.log</string>
+	<key>StandardErrorPath</key>
+	<string>@SANDMAN_LOG_DIR@/daemon.log</string>
+</dict>
+</plist>

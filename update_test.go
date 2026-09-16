@@ -3,7 +3,7 @@ package main
 // Unit tests for the self-update path (update.go): version comparison,
 // checksum verification, release/asset parsing, and the end-to-end
 // install against an httptest server. The install target is a temp dir —
-// updatePath (/usr/local/bin/sandman) is never touched.
+// the real install path (updateTarget()) is never touched.
 
 import (
 	"crypto/sha256"
@@ -81,10 +81,14 @@ func TestValidVersion(t *testing.T) {
 }
 
 func TestReleaseAsset(t *testing.T) {
+	// the released platform set (release.yml): both Linux and both darwin
+	// assets must be selectable by runtime.GOOS/GOARCH
 	rel := &ghRelease{Assets: []ghAsset{
 		{Name: "sandman-linux-amd64", BrowserDownloadURL: "https://x/bin"},
 		{Name: "sandman-linux-amd64.sha256", BrowserDownloadURL: "https://x/sha"},
 		{Name: "sandman-linux-arm64", BrowserDownloadURL: "https://x/arm"},
+		{Name: "sandman-darwin-arm64", BrowserDownloadURL: "https://x/mac"},
+		{Name: "sandman-darwin-arm64.sha256", BrowserDownloadURL: "https://x/macsha"},
 	}}
 	if got := releaseAsset(rel, "linux", "amd64"); got != "https://x/bin" {
 		t.Errorf("linux/amd64 = %q", got)
@@ -92,8 +96,15 @@ func TestReleaseAsset(t *testing.T) {
 	if got := releaseAsset(rel, "linux", "amd64.sha256"); got != "https://x/sha" {
 		t.Errorf("checksum asset = %q", got)
 	}
-	if got := releaseAsset(rel, "darwin", "arm64"); got != "" {
-		t.Errorf("darwin/arm64 = %q, want empty", got)
+	if got := releaseAsset(rel, "darwin", "arm64"); got != "https://x/mac" {
+		t.Errorf("darwin/arm64 = %q", got)
+	}
+	if got := releaseAsset(rel, "darwin", "arm64.sha256"); got != "https://x/macsha" {
+		t.Errorf("darwin checksum asset = %q", got)
+	}
+	// an unpublished platform is reported, never silently substituted
+	if got := releaseAsset(rel, "darwin", "amd64"); got != "" {
+		t.Errorf("unpublished darwin/amd64 = %q, want empty", got)
 	}
 	if got := releaseAsset(rel, "linux", "amd64x"); got != "" {
 		t.Errorf("suffix-clash = %q, want empty (exact match only)", got)

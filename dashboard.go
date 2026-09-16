@@ -22,7 +22,7 @@ import (
 // cell-based and adapts to any terminal size instead of hand-padded ANSI.
 func cmdDashboard(args []string) {
 	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
-	state := fs.String("state", DefaultState, "state directory")
+	state := fs.String("state", defaultState(), stateFlagHelp)
 	refresh := fs.Duration("refresh", 2*time.Second, "refresh interval")
 	fs.Parse(args)
 

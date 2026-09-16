@@ -9,15 +9,30 @@
 # advertise address (the host's default-route LAN IP, so the daemon can
 # dial back), and the control plane — the worker discovers the daemon
 # itself via mDNS (role=daemon; the fleet expects one daemon per LAN).
-# The worker's systemd unit is written with these values baked in; edit
-# /etc/systemd/system/sandman-worker.service and restart to change them.
+# The worker's service definition is written with these values baked in:
+# /etc/systemd/system/sandman-worker.service on Linux (edit and
+# `systemctl restart sandman-worker`), a launchd agent in
+# ~/Library/LaunchAgents on macOS (edit and `launchctl kickstart -k
+# gui/$(id -u)/dev.sandman.worker`).
 #
 # Optional env: CONTROL=http://host:4242  NAME=worker-1  PORT=4343
 #               LABELS="-label gpu -label fast"
 set -e
 
+# darwin installs entirely under $HOME (per-user launchd agent, per-user
+# state directory, per-user Docker Desktop): no sudo, and the log lives
+# beside the agent rather than in a journal.
+DARWIN=0
+if [ "$(uname -s)" = Darwin ]; then
+	DARWIN=1
+fi
+
 need() {
 	command -v "$1" >/dev/null 2>&1 && return 0
+	if [ "$DARWIN" = 1 ]; then
+		echo "install.sh: $1 not found — install the Xcode command line tools (xcode-select --install) and retry" >&2
+		exit 1
+	fi
 	echo "install.sh: $1 not found — installing it"
 	sudo apt-get install -y -qq "$1" || {
 		echo "install.sh: apt install failed — refreshing package lists and retrying"
@@ -48,12 +63,26 @@ PORT=${PORT:-4343}
 # exec endpoint from loopback to 0.0.0.0 (worker.go), and that endpoint
 # is unauthenticated — remote placement needs it, a single-host install
 # can leave ADVERTISE empty to keep the loopback bind.
-ADVERTISE=${ADVERTISE:-$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p')}
-if [ -z "$ADVERTISE" ]; then
+#
+# macOS has neither `ip` nor `hostname -I`: ask the default route which
+# interface it uses, then that interface for its address.
+lan_ip() {
+	if [ "$DARWIN" = 1 ]; then
+		iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
+		[ -n "$iface" ] || return 1
+		ipconfig getifaddr "$iface" 2>/dev/null
+		return 0
+	fi
+	ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p'
+}
+if [ -z "${ADVERTISE:-}" ]; then
+	ADVERTISE=$(lan_ip || true)
+fi
+if [ -z "$ADVERTISE" ] && [ "$DARWIN" = 0 ]; then
 	ADVERTISE=$(hostname -I 2>/dev/null | awk '{print $1}')
 fi
 if [ -z "$ADVERTISE" ]; then
-	echo "install.sh: cannot determine this host's LAN address" >&2
+	echo "install.sh: cannot determine this host's LAN address — set ADVERTISE=<address> to place jobs here, or leave it empty for a single-host install" >&2
 	exit 1
 fi
 
@@ -85,21 +114,26 @@ unit_safe "LABELS" "${LABELS:-}" 1
 
 # build from source when Go exists, else install the release binary — both
 # paths are Makefile targets, so the install logic lives in one place.
-# The explicit GO= is required: sudo resets PATH to root's secure_path
-# (user-local Go installs like ~/sdk/go/bin are not on it), so a bare
-# `sudo make` would resolve GO ?= go against that PATH and fail with
-# "make: go: No such file or directory".
+# The explicit GO= is required on Linux: sudo resets PATH to root's
+# secure_path (user-local Go installs like ~/sdk/go/bin are not on it), so
+# a bare `sudo make` would resolve GO ?= go against that PATH and fail with
+# "make: go: No such file or directory". macOS installs under $HOME (the
+# Makefile defaults PREFIX to ~/.local there) and needs no sudo at all.
+SUDO=sudo
+if [ "$DARWIN" = 1 ]; then
+	SUDO=""
+fi
 if command -v go >/dev/null 2>&1; then
-	sudo make GO="$(command -v go)" install worker
+	$SUDO make GO="$(command -v go)" install worker
 else
 	echo "install.sh: go not found — installing the release binary (make install-release)"
-	sudo make install-release worker
+	$SUDO make install-release worker
 fi
 
-# the worker's config lives in its unit, with the flags baked in: name,
-# port, advertise (so the daemon can dial back and place jobs), and any
-# placement labels. CONTROL is added only when given explicitly — by
-# default the worker discovers the daemon via mDNS.
+# the worker's config lives in its service definition, with the flags baked
+# in: name, port, advertise (so the daemon can dial back and place jobs),
+# and any placement labels. CONTROL is added only when given explicitly —
+# by default the worker discovers the daemon via mDNS.
 labels=""
 if [ -n "$LABELS" ]; then
 	labels=" $LABELS"
@@ -108,6 +142,97 @@ control=""
 if [ -n "$CONTROL" ]; then
 	control=" -control $CONTROL"
 fi
+
+if [ "$DARWIN" = 1 ]; then
+	# macOS: the same agent the Makefile just wrote, with this node's
+	# flags in ProgramArguments. launchd reads a plist as XML, so the
+	# operator-supplied values are entity-escaped here — the systemd
+	# heredoc below needs the opposite treatment (unit_safe rejects what
+	# would inject a directive).
+	xml_escape() {
+		printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+	}
+	# the paths the Makefile installed to: asking it beats re-deriving
+	# PREFIX here, where the two could drift and leave the agent pointing
+	# at a binary nobody installed.
+	paths=$(make -s install-paths)
+	bin=$(printf '%s\n' "$paths" | sed -n 1p)
+	log_dir=$(printf '%s\n' "$paths" | sed -n 2p)
+	[ -n "$bin" ] && [ -n "$log_dir" ] || { echo "install.sh: make install-paths returned no paths" >&2; exit 1; }
+	agent="$HOME/Library/LaunchAgents/dev.sandman.worker.plist"
+	mkdir -p "$HOME/Library/LaunchAgents" "$log_dir"
+	# the placement flags, one <string> element per argv word — the same
+	# whitespace split ExecStart gets on Linux.
+	flag_args=""
+	for w in $control $labels; do
+		flag_args="$flag_args
+		<string>$(xml_escape "$w")</string>"
+	done
+	cat > "$agent" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.sandman.worker</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>$(xml_escape "$bin")</string>
+		<string>worker</string>
+		<string>-name</string>
+		<string>$(xml_escape "$NAME")</string>
+		<string>-port</string>
+		<string>$(xml_escape "$PORT")</string>
+		<string>-advertise</string>
+		<string>$(xml_escape "$ADVERTISE:$PORT")</string>$flag_args
+	</array>
+
+	<!-- see deploy/sandman.plist: launchd's PATH cannot see docker
+	     under Docker Desktop (/usr/local/bin) or Homebrew
+	     (/opt/homebrew/bin) without this. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Restart=on-failure: a crashed or OOM-killed worker must come
+	     back, or the control plane's host TTL drops it from placement. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>2</integer>
+
+	<key>StandardOutPath</key>
+	<string>$(xml_escape "$log_dir")/worker.log</string>
+	<key>StandardErrorPath</key>
+	<string>$(xml_escape "$log_dir")/worker.log</string>
+</dict>
+</plist>
+EOF
+
+	# bootout first: bootstrap refuses an already-loaded label, which is
+	# exactly the re-run (upgrade) case.
+	launchctl bootout "gui/$(id -u)/dev.sandman.worker" 2>/dev/null || true
+	launchctl bootstrap "gui/$(id -u)" "$agent"
+
+	echo "install.sh: wrote $agent (name=$NAME advertise=$ADVERTISE:$PORT control=${CONTROL:-<mDNS discovery>})"
+	if [ -n "$ADVERTISE" ]; then
+		echo "install.sh: WARNING: -advertise $ADVERTISE:$PORT binds the worker's unauthenticated exec endpoint on all interfaces — any LAN host can submit jobs to this worker. Leave ADVERTISE empty (single-host install) to keep the loopback bind."
+	fi
+
+	echo "install.sh: worker $NAME is up — it registers with the discovered daemon and appears in the fleet (log: $log_dir/worker.log)"
+	echo "install.sh: check with:  sandman nodes   (from the control-plane host)"
+	exit 0
+fi
+
 sudo tee /etc/systemd/system/sandman-worker.service >/dev/null <<EOF
 [Unit]
 Description=Sandman execution worker (joins a control plane)
