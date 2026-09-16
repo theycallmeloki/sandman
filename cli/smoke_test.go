@@ -242,11 +242,16 @@ func TestCLI_SmokeFlow(t *testing.T) {
 		t.Fatalf("missing-glob stderr %q: want a glob error", errs)
 	}
 
-	// 15. overwrite semantics through the CLI: the -o flag replaces
-	// accumulated content at the path
-	mustCLI(t, "bye\n", "file", "put", "-o", "r1@master:/greeting.txt", "-")
+	// 15. put semantics through the CLI: --append grows the content
+	// accumulated at the path, and a plain put replaces it — the API's
+	// PUT-replaces contract, with accumulation as the explicit opt-in
+	mustCLI(t, "again\n", "file", "put", "--append", "r1@master:/greeting.txt", "-")
+	if got := mustCLI(t, "", "file", "get", "r1@master:/greeting.txt"); got != "hello world\nagain\n" {
+		t.Fatalf("after append file get = %q, want %q", got, "hello world\nagain\n")
+	}
+	mustCLI(t, "bye\n", "file", "put", "r1@master:/greeting.txt", "-")
 	if got := mustCLI(t, "", "file", "get", "r1@master:/greeting.txt"); got != "bye\n" {
-		t.Fatalf("after overwrite file get = %q, want %q", got, "bye\n")
+		t.Fatalf("after plain put file get = %q, want %q", got, "bye\n")
 	}
 }
 
