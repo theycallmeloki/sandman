@@ -69,9 +69,32 @@ PORT=${PORT:-4343}
 lan_ip() {
 	if [ "$DARWIN" = 1 ]; then
 		iface=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
-		[ -n "$iface" ] || return 1
-		ipconfig getifaddr "$iface" 2>/dev/null
-		return 0
+		# a tunnel is not LAN-reachable: a full-tunnel VPN routes the
+		# default through utunN, and advertising the tunnel address would
+		# give the control plane an address it cannot dial back
+		case "$iface" in
+			utun*|tun*|tap*|ppp*|ipsec*|gpd*|ipsec*) iface="" ;;
+		esac
+		if [ -n "$iface" ]; then
+			ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+			if [ -z "$ip" ]; then
+				# ipconfig reports the DHCP-managed address only: an
+				# interface with a manual address has one and no lease
+				ip=$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2; exit}')
+			fi
+			[ -n "$ip" ] && printf '%s' "$ip" && return 0
+		fi
+		# no usable default route: ask the physical interfaces in order
+		for i in $(ifconfig -l 2>/dev/null); do
+			case "$i" in en*) ;; *) continue ;; esac
+			ip=$(ipconfig getifaddr "$i" 2>/dev/null)
+			[ -n "$ip" ] || ip=$(ifconfig "$i" 2>/dev/null | awk '/inet /{print $2; exit}')
+			[ -n "$ip" ] || continue
+			case "$ip" in 169.254.*|127.*|0.0.0.0) continue ;; esac
+			printf '%s' "$ip"
+			return 0
+		done
+		return 1
 	fi
 	ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p'
 }
@@ -82,7 +105,7 @@ if [ -z "$ADVERTISE" ] && [ "$DARWIN" = 0 ]; then
 	ADVERTISE=$(hostname -I 2>/dev/null | awk '{print $1}')
 fi
 if [ -z "$ADVERTISE" ]; then
-	echo "install.sh: cannot determine this host's LAN address — set ADVERTISE=<address> to place jobs here, or leave it empty for a single-host install" >&2
+	echo "install.sh: cannot determine this host's LAN address — set ADVERTISE=<address> to place jobs here, or ADVERTISE=127.0.0.1 for a loopback-only install (this machine runs jobs, but no remote control plane can place work on it)" >&2
 	exit 1
 fi
 
