@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,44 @@ type killRecorder struct{ kills atomic.Int32 }
 
 func (*killRecorder) Run(JobSpec) RunResult { return RunResult{} }
 func (k *killRecorder) Kill(string) error   { k.kills.Add(1); return nil }
+
+// ensureView materializes an input side's full view for the
+// /sandman/view/<name> mount. A revision whose paths differ only in case
+// cannot be written faithfully on a case-insensitive filesystem, and that
+// refusal has to reach the caller — which fails the datum with the reason —
+// rather than being swallowed into a silently absent mount, where the only
+// symptom is a transform's own read error.
+func TestEnsureViewReportsCaseCollisionInsteadOfSkippingTheMount(t *testing.T) {
+	dir := t.TempDir()
+	d := &daemon{state: dir, runner: processRunner{}}
+	d.store = store.New(filepath.Join(dir, "store"))
+	jx := &jobExec{
+		d:  d,
+		id: "j1",
+		views: map[string]map[string]store.ViewEntry{
+			"in": {"Data.txt": {}, "data.txt": {}},
+		},
+		viewDirs: map[string]string{},
+	}
+	vd, err := d.ensureView(jx, "in")
+	if !store.CaseInsensitive(dir) {
+		if err != nil {
+			t.Fatalf("case-sensitive filesystem: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("a revision whose paths differ only in case materialized without error")
+	}
+	if vd != "" {
+		t.Fatalf("a failed materialization returned the directory %q, want empty", vd)
+	}
+	for _, want := range []string{`"Data.txt"`, `"data.txt"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error does not name %s: %v", want, err)
+		}
+	}
+}
 
 // TestDatumTimeoutTimerStopsOnCompletion pins the rule that the per-attempt datum
 // timeout timer must be stopped when the attempt completes. A datum

@@ -849,9 +849,11 @@ func (d *daemon) runDatumAttempt(jx *jobExec, dt datum, index, attempt int, star
 		mounts = append(mounts, "-v", inDir+":/sandman/in/"+sd.Name+":ro")
 		// the full side view is available to containers: a datum can read
 		// data outside its own datum set
-		if vd := d.ensureView(jx, sd.Name); vd != "" {
-			mounts = append(mounts, "-v", vd+":/sandman/view/"+sd.Name+":ro")
+		vd, err := d.ensureView(jx, sd.Name)
+		if err != nil {
+			return stateFailed, "materialize view " + sd.Name + ": " + err.Error(), nil
 		}
+		mounts = append(mounts, "-v", vd+":/sandman/view/"+sd.Name+":ro")
 	}
 
 	// the container is registered so a cancel can kill it mid-flight; the
@@ -1148,18 +1150,24 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 
 // ensureView materializes an input side's full view once into the job's
 // view directory (mounted into containers at /sandman/view/<name>).
-func (d *daemon) ensureView(jx *jobExec, side string) string {
+//
+// A failure is reported rather than swallowed. Skipping the mount silently —
+// which is what this did — left a transform reading /sandman/view/<name>
+// failing for reasons of its own while the actual cause (an unreadable blob,
+// a full disk, or a revision whose paths collide on a case-insensitive
+// filesystem) never reached the job's reason.
+func (d *daemon) ensureView(jx *jobExec, side string) (string, error) {
 	jx.viewMu.Lock()
 	defer jx.viewMu.Unlock()
 	if dir, ok := jx.viewDirs[side]; ok {
-		return dir
+		return dir, nil
 	}
 	dir := filepath.Join(d.jobDir(jx.id), "view", side)
-	if d.store.MaterializeView(jx.views[side], dir) != nil {
-		return ""
+	if err := d.store.MaterializeView(jx.views[side], dir); err != nil {
+		return "", err
 	}
 	jx.viewDirs[side] = dir
-	return dir
+	return dir, nil
 }
 
 // ---- join and group inputs ----
