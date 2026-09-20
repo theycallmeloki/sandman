@@ -134,7 +134,7 @@ func TestNoCommandAcceptedButFailsAtStart(t *testing.T) {
 	}
 	mustPipeline(t, p) // creation succeeds
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(testTimeout(30 * time.Second))
 	for {
 		info, err := c.InspectPipeline(name)
 		if err != nil {

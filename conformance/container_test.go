@@ -44,7 +44,7 @@ func withContainerDaemon(t *testing.T) {
 
 	oldC, oldPort, oldState := c, daemonPort, daemonStateDir
 	oldCmd := daemonCmd
-	c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
+	c = &testClient{client.New(fmt.Sprintf("127.0.0.1:%d", port))}
 	daemonPort = port
 	daemonStateDir = state
 	daemonCmd = cmd // restartDaemon must kill THIS daemon, not the shared one

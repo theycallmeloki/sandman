@@ -10,6 +10,7 @@ package conformance
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -28,7 +29,7 @@ import (
 // (a panic with no failing test). Run locally with -timeout 40m, matching
 // the CI workflow's conformance shard budget.
 var (
-	c          *client.Client
+	c          *testClient
 	daemonCmd  *exec.Cmd
 	daemonPort int
 	daemonName string
@@ -95,7 +96,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	c = client.New(fmt.Sprintf("127.0.0.1:%d", daemonPort))
+	c = &testClient{client.New(fmt.Sprintf("127.0.0.1:%d", daemonPort))}
 	code := m.Run()
 	// os.Exit skips defers, so the daemon must die here or it keeps the
 	// inherited stderr pipe open and go test waits out its WaitDelay.
@@ -133,7 +134,7 @@ func stopDaemon() {
 	go func() { _ = daemonCmd.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(20 * time.Second):
+	case <-time.After(testTimeout(20 * time.Second)):
 		_ = daemonCmd.Process.Kill()
 		<-done
 	}
@@ -214,7 +215,7 @@ func freePort() int {
 }
 
 func waitPort(port int, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(testTimeout(timeout))
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 500*time.Millisecond)
 		if err == nil {
@@ -335,7 +336,7 @@ func mustPipeline(t *testing.T, p client.Pipeline) {
 // flushOK flushes the commit and requires every triggered job to succeed.
 func flushOK(t *testing.T, commitID string) []client.Job {
 	t.Helper()
-	jobs, err := c.Flush(commitID, testTimeout(60*time.Second))
+	jobs, err := c.Flush(commitID, 60*time.Second)
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -402,6 +403,31 @@ func testTimeout(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * f)
 }
 
+// testClient is the harness's client: it scales the blocking waits whose
+// deadline travels to the server in the request — a flush, a job wait, a
+// file fetch — so $SANDMAN_TEST_TIMEOUT_FACTOR applies to every call site
+// without editing the ~60 of them, and to the server-side wait, which is
+// the one that overruns first when the container runtime is behind a VM.
+// Callers pass an unscaled budget (60*time.Second); the wrapper is the one
+// place it is scaled.
+type testClient struct{ *client.Client }
+
+func (tc *testClient) Flush(commitID string, timeout time.Duration) ([]client.Job, error) {
+	return tc.Client.Flush(commitID, testTimeout(timeout))
+}
+
+func (tc *testClient) FlushSet(commitIDs []string, timeout time.Duration) ([]client.Job, error) {
+	return tc.Client.FlushSet(commitIDs, testTimeout(timeout))
+}
+
+func (tc *testClient) WaitJob(jobID string, timeout time.Duration) (client.Job, error) {
+	return tc.Client.WaitJob(jobID, testTimeout(timeout))
+}
+
+func (tc *testClient) FetchFileTo(w io.Writer, commitID, p string, download bool, timeout time.Duration) (client.FileFetch, error) {
+	return tc.Client.FetchFileTo(w, commitID, p, download, testTimeout(timeout))
+}
+
 // pollFor waits for a condition, failing the test with the budget it was
 // given: the budget is scaled by testTimeout so a slower runtime is a
 // configuration change, not a rewrite of every call site.
@@ -453,7 +479,7 @@ func withIsolatedDaemon(t *testing.T) {
 		t.Fatalf("isolated daemon did not come up")
 	}
 	oldC, oldPort, oldState := c, daemonPort, daemonStateDir
-	c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
+	c = &testClient{client.New(fmt.Sprintf("127.0.0.1:%d", port))}
 	daemonPort = port
 	daemonStateDir = state
 	t.Cleanup(func() {
@@ -462,7 +488,7 @@ func withIsolatedDaemon(t *testing.T) {
 		go func() { _ = cmd.Wait(); close(done) }()
 		select {
 		case <-done:
-		case <-time.After(20 * time.Second):
+		case <-time.After(testTimeout(20 * time.Second)):
 			_ = cmd.Process.Kill()
 			<-done
 		}

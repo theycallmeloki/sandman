@@ -171,8 +171,8 @@ func waitFollow(t *testing.T, ch chan []string, want int, timeout time.Duration)
 	select {
 	case lines := <-ch:
 		return lines
-	case <-time.After(timeout):
-		t.Fatalf("follow stream delivered fewer than %d lines within %s", want, timeout)
+	case <-time.After(testTimeout(timeout)):
+		t.Fatalf("follow stream delivered fewer than %d lines within %s", want, testTimeout(timeout))
 		return nil
 	}
 }
