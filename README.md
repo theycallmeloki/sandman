@@ -342,6 +342,13 @@ falls back to the local mDNS browse (`--local` forces the browse);
 to type when something feels off: daemon version, registered hosts (GPU
 hosts called out), pipeline states, and job states.
 
+The `ADDR` column is where the **control plane** dials to place work, which
+is not the same thing as a `sandman run` target: `run` speaks the job
+protocol, served by a daemon (`sandman run <daemon> -- …`, or any
+`host:port` that answers it). A worker's endpoint answers the placement API
+instead, and pointing `run` at it is rejected with an explanation — work on
+a worker is placed by a pipeline carrying that worker's `--placement` label.
+
 Cross-subnet nodes (no multicast): `sandman attach wan-node 10.0.0.9:4242`
 adds a static peer; `detach` removes it.
 

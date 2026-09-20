@@ -96,6 +96,15 @@ func clientRun(node, state, image string, env, argv []string) {
 		if len(run) > 1 && run[0] == "ERR" {
 			die("node rejected job: "+strings.Join(run[1:], " "), 1)
 		}
+		if len(run) == 0 {
+			// A node that answers the greeting and then closes without a
+			// verdict is an execution host's exec endpoint: a worker takes
+			// work only from the control plane (POST /exec with a full
+			// request), so a bare RUN is dropped rather than refused.
+			die(fmt.Sprintf("%s completed the handshake, then closed the connection — that address is an execution host's exec endpoint (placed work only), not a job endpoint.\n"+
+				"  run against a daemon:  sandman run <daemon> -- <image> <cmd...>\n"+
+				"  or let a pipeline place the work on this host:  pipeline --placement <its label>", node), 1)
+		}
 		die("node rejected job", 1)
 	}
 

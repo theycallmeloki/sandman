@@ -217,7 +217,14 @@ func cmdNodes(args []string) {
 			cli.RenderTable([]string{"NAME", "ADDR", "LABELS", "GPUS", "SEEN"}, rows)
 			if len(rows) == 0 {
 				fmt.Println("no registered hosts")
+				return
 			}
+			// ADDR is what the control plane dials to place work, not a job
+			// endpoint: `run` speaks the job protocol, which the daemon
+			// serves on :4242 — a worker's endpoint answers the placement
+			// API only, so pointing `run` at it is rejected.
+			fmt.Println("\nADDR is where the control plane places work. `sandman run` targets a daemon")
+			fmt.Println("(or any host:port speaking the job protocol); work on a worker is placed by a pipeline.")
 			return
 		}
 		// daemon unreachable: fall back to the local mDNS browse
