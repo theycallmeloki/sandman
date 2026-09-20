@@ -46,14 +46,32 @@ const (
 //
 // os.Executable can return a path relative to the invocation directory
 // (or one that no longer exists, after a package-manager reinstall), so
-// only an existing absolute path is trusted.
+// only an existing absolute path is trusted. Symlinks are resolved: on
+// Linux os.Executable is already /proc/self/exe (the real file), but darwin
+// reports the path the process was started with, so an install reached
+// through a symlink would have the *link* replaced by the rename in
+// replaceBinary while the binary the launchd agent runs stays on the old
+// build — and the link is destroyed.
 func updateTarget() string {
 	if p := os.Getenv("SANDMAN_UPDATE_PATH"); p != "" {
 		return p
 	}
 	exe, err := os.Executable()
-	if err != nil || !filepath.IsAbs(exe) {
+	if err != nil {
 		return defaultUpdatePath
+	}
+	return resolveUpdateTarget(exe)
+}
+
+// resolveUpdateTarget applies the trust rules to the path the binary was
+// started with: absolute, symlink-resolved, and still present. Split out of
+// updateTarget because os.Executable cannot be redirected in a test.
+func resolveUpdateTarget(exe string) string {
+	if !filepath.IsAbs(exe) {
+		return defaultUpdatePath
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil && filepath.IsAbs(resolved) {
+		exe = resolved
 	}
 	if _, err := os.Stat(exe); err != nil {
 		return defaultUpdatePath

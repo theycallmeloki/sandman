@@ -18,6 +18,44 @@ import (
 	"testing"
 )
 
+// A symlinked install must update the binary the link points at, not replace
+// the link itself: os.Executable reports the path the process was started
+// with (on Linux that is /proc/self/exe, already resolved; on darwin it is
+// not), and installRelease renames over the target — so an unresolved link
+// would be destroyed while the real binary, the one the launchd agent runs,
+// stayed on the old build.
+func TestResolveUpdateTargetFollowsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real-sandman")
+	if err := os.WriteFile(real, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "sandman")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// compare against the fully resolved form: EvalSymlinks also resolves
+	// the volume's own links (macOS /var -> /private/var)
+	wantReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveUpdateTarget(link); got != wantReal {
+		t.Fatalf("resolveUpdateTarget(link) = %q, want the real binary %q", got, wantReal)
+	}
+	if got := resolveUpdateTarget(real); got != wantReal {
+		t.Fatalf("resolveUpdateTarget(real) = %q, want %q", got, wantReal)
+	}
+	// a relative path and a vanished one are not trusted: the install falls
+	// back to the historical location rather than renaming over a guess
+	if got := resolveUpdateTarget("sandman"); got != defaultUpdatePath {
+		t.Fatalf("relative path = %q, want %q", got, defaultUpdatePath)
+	}
+	if got := resolveUpdateTarget(filepath.Join(dir, "gone")); got != defaultUpdatePath {
+		t.Fatalf("absent path = %q, want %q", got, defaultUpdatePath)
+	}
+}
+
 func TestCmpVersions(t *testing.T) {
 	cases := []struct {
 		a, b string
