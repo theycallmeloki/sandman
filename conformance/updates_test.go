@@ -21,7 +21,7 @@ func hist(n int) *int { return &n }
 func echoTransform(content string) *client.Transform {
 	return &client.Transform{
 		Image: "alpine:3.21",
-		Cmd:   []string{"sh", "-c", fmt.Sprintf("echo -n %s > ${OUT}/file", shq(content))},
+		Cmd:   []string{"sh", "-c", fmt.Sprintf("printf '%%s' %s > ${OUT}/file", shq(content))},
 	}
 }
 
@@ -101,7 +101,7 @@ func TestAcceptReturnCode(t *testing.T) {
 	name := uniq(t)
 	tr := &client.Transform{
 		Image:            "alpine:3.21",
-		Cmd:              []string{"sh", "-c", "echo -n ok > ${OUT}/file; exit 1"},
+		Cmd:              []string{"sh", "-c", "printf %s ok > ${OUT}/file; exit 1"},
 		AcceptReturnCode: 1,
 	}
 	mustPipeline(t, client.Pipeline{Name: name, Transform: tr, Input: &client.Input{Repo: repo, Glob: "/*"}})
@@ -370,7 +370,7 @@ func TestUpdateFixesFailingPipeline(t *testing.T) {
 		t.Fatalf("after settle: got %d jobs, want exactly 1 failed", len(js))
 	}
 
-	fixed := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "echo -n bar > ${OUT}/file"}}
+	fixed := &client.Transform{Image: "alpine:3.21", Cmd: []string{"sh", "-c", "printf %s bar > ${OUT}/file"}}
 	mustUpdate(t, name, fixed, in, false) // no reprocess flag
 	if jobs, err := c.Flush(cm.ID, 60*time.Second); err != nil {
 		// diagnostic for the CI-only hang: show every job of the pipeline
