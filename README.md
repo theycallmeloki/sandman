@@ -79,8 +79,9 @@ Three things are deliberately *not* here, and they change how you operate:
 
 ## Quickstart: ten minutes to a dream
 
-Requirements: Linux or macOS (Apple Silicon or Intel), docker, and a LAN
-with multicast (one L2 segment).
+Requirements: Linux or macOS (Apple Silicon or Intel), docker — on macOS
+that means Docker Desktop, started at least once (see
+[macOS](#macos-apple-silicon)) — and a LAN with multicast (one L2 segment).
 
 ### 1. Install the daemon
 
@@ -392,12 +393,23 @@ make install daemon
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sandman.daemon.plist
 ```
 
+Before that, Docker Desktop has to be installed and started once: the first
+launch installs its privileged helper and populates `~/.docker/bin`, which
+is where its CLI lives on a Mac that has no other docker client. The agent
+is written with that directory on its `PATH` (plus `/usr/local/bin` for a
+host where the privileged helper linked the CLI there, and Homebrew's
+`/opt/homebrew/bin`), because a LaunchAgent never reads `~/.zprofile` — the
+place Docker Desktop announces itself to shells — and every job is launched
+through the docker CLI. Without it the daemon starts, advertises over mDNS,
+reports `docker=?` in its log, and fails every job it places. Docker
+Desktop must be running whenever the node is; keep its File Sharing list on
+the defaults (`/Users` shared) or the job bind mounts below come up empty.
+
 Re-running the install over a loaded agent needs a bootout first —
 `launchctl bootout gui/$(id -u)/dev.sandman.daemon` — and `make uninstall`
 does both. Logs go to `~/Library/Logs/sandman/daemon.log`: launchd has no
 journal, so the agent is written with `StandardOutPath`/`StandardErrorPath`
-and a `PATH` that can see docker under Docker Desktop (`/usr/local/bin`) or
-Homebrew (`/opt/homebrew/bin`). `make install worker` and `install.sh` do
+and the `PATH` described above. `make install worker` and `install.sh` do
 the same for the worker, with its flags baked into `ProgramArguments`.
 
 Why the paths move: every job's input, scratch, and output directories are
