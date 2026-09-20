@@ -814,6 +814,47 @@ func TestStandbyLifecycle(t *testing.T) {
 		return err == nil && p.State == "crashed"
 	})
 }
+
+// A datum placed on a worker runs in another process (on another host): its
+// output has to come back with the result, or `sandman logs` is empty for
+// exactly the work an operator most needs to read — a pipeline failing on a
+// GPU host, say. The transform prints the worker's own HOSTNAME (the
+// execution host sets it), so the assertion covers both halves: the datum
+// really ran on the worker, and its output reached the job's log.
+func TestPlacedJobLogsAreRetrievable(t *testing.T) {
+	withContainerDaemon(t)
+	repo := uniq(t)
+	mustRepo(t, repo)
+	cm := commitFiles(t, repo, "master", map[string]string{"file": "x\n"})
+
+	w := startWorker(t, "loghost", "logs")
+	waitHostRegistered(t, "loghost")
+	defer func() { _ = w.cmd.Process.Kill() }()
+
+	pipe := uniq(t)
+	mustPipeline(t, client.Pipeline{
+		Name:      pipe,
+		Placement: "logs",
+		Input:     &client.Input{Repo: repo, Glob: "/*"},
+		Transform: &client.Transform{
+			Image: "alpine:3.21",
+			Cmd:   []string{"sh", "-c", "echo placed-on=$HOSTNAME; cp /sandman/in/" + repo + "/file /sandman/out/file"},
+		},
+	})
+	jobs := flushOK(t, cm.ID)
+	if len(jobs) != 1 {
+		t.Fatalf("flush returned %d jobs, want 1", len(jobs))
+	}
+	lines, err := c.Logs(client.LogParams{Job: jobs[0].ID})
+	if err != nil {
+		t.Fatalf("logs of a placed job: %v", err)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "placed-on=loghost") {
+		t.Fatalf("placed job's log = %q, want the transform's output naming the execution host %q", joined, "loghost")
+	}
+}
+
 func TestPlacementLabels(t *testing.T) {
 	withContainerDaemon(t)
 	r := uniq(t)

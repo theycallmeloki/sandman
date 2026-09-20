@@ -101,6 +101,25 @@ type execResult struct {
 	TimedOut    bool       `json:"timedOut,omitempty"`
 	Outputs     []shipFile `json:"outputs,omitempty"`
 	Error       string     `json:"error,omitempty"`
+	// Log is the attempt's combined output, so the control plane can write
+	// the job's log for work that ran here: a placed datum's output exists
+	// only in this process, and without it `sandman logs` was empty for
+	// exactly the jobs an operator most needs to read.
+	Log string `json:"log,omitempty"`
+}
+
+// maxShippedLog bounds the output returned with a result: a runaway
+// transform must not turn the response into an unbounded payload. It is far
+// above what a datum normally prints, and when it bites the log says so.
+// (The local path streams to the log file with no cap; this one travels in
+// the result.)
+const maxShippedLog = 16 << 20
+
+func shippedLog(s string) string {
+	if len(s) <= maxShippedLog {
+		return s
+	}
+	return s[:maxShippedLog] + "\n[output truncated at 16 MiB by the execution host]\n"
 }
 
 // cmdWorker runs the host-side execution participant: register with the
@@ -466,6 +485,10 @@ func runExec(nodeName string, req execRequest) execResult {
 	if timeoutTimer != nil {
 		defer timeoutTimer.Stop()
 	}
+	// the attempt's combined output is captured alongside the runner's own
+	// tail buffer: the tail is what a failure reason quotes, the capture is
+	// what the control plane writes into the job's log
+	var logBuf bytes.Buffer
 	run := func(cname string, argv, stdin []string) (int, string) {
 		if len(argv) == 0 && len(stdin) == 0 {
 			// default entry point: copy every side's files to OUT
@@ -477,7 +500,7 @@ func runExec(nodeName string, req execRequest) execResult {
 			}
 			return code, ""
 		}
-		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, nil, argv, stdin, req.Gpus)
+		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, &logBuf, argv, stdin, req.Gpus)
 	}
 	primaryCode, tail := run(cname, req.Cmd, req.Stdin)
 	// without an error-handling command a nonzero primary exit fails the
@@ -521,17 +544,17 @@ func runExec(nodeName string, req execRequest) execResult {
 			outputs = append(outputs, shipFile{Path: rel, Data: data})
 			return nil
 		}); err != nil {
-			return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load(), Error: "scan output: " + err.Error()}
+			return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load(), Error: "scan output: " + err.Error(), Log: shippedLog(logBuf.String())}
 		}
 		if len(tail) > 2000 {
 			tail = tail[len(tail)-2000:]
 		}
-		return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load(), Outputs: outputs}
+		return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load(), Outputs: outputs, Log: shippedLog(logBuf.String())}
 	}
 	if len(tail) > 2000 {
 		tail = tail[len(tail)-2000:]
 	}
-	return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load()}
+	return execResult{PrimaryCode: primaryCode, ErrCode: errCode, Tail: tail, TimedOut: timedOut.Load(), Log: shippedLog(logBuf.String())}
 }
 
 // execOnHost pushes one datum attempt to a worker and decodes the result.
@@ -539,10 +562,10 @@ func runExec(nodeName string, req execRequest) execResult {
 // deadline: a hung or partitioned worker must fail the attempt (crashing
 // the pipeline) instead of wedging the job's gate forever
 // while cancelJob finds no local container to kill.
-func (d *daemon) execOnHost(ctx context.Context, h *execHost, req execRequest) (code, errCode int, tail string, timedOut bool, outputs []shipFile, err error) {
+func (d *daemon) execOnHost(ctx context.Context, h *execHost, req execRequest) (execResult, error) {
 	b, err := json.Marshal(req)
 	if err != nil {
-		return 0, 0, "", false, nil, err
+		return execResult{}, err
 	}
 	// the operator's DatumTimeout is the declared per-datum bound; without
 	// one, a generous cap keeps a black-holed worker from holding the
@@ -555,26 +578,26 @@ func (d *daemon) execOnHost(ctx context.Context, h *execHost, req execRequest) (
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+h.Addr+"/exec", bytes.NewReader(b))
 	if err != nil {
-		return 0, 0, "", false, nil, err
+		return execResult{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return 0, 0, "", false, nil, err
+		return execResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return 0, 0, "", false, nil, fmt.Errorf("host %s: status %d: %s", h.Name, resp.StatusCode, strings.TrimSpace(string(body)))
+		return execResult{}, fmt.Errorf("host %s: status %d: %s", h.Name, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var res execResult
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return 0, 0, "", false, nil, err
+		return execResult{}, err
 	}
 	if res.Error != "" {
-		return 0, 0, "", false, nil, errors.New(res.Error)
+		return execResult{}, errors.New(res.Error)
 	}
-	return res.PrimaryCode, res.ErrCode, res.Tail, res.TimedOut, res.Outputs, nil
+	return res, nil
 }
 
 // ---- remote services ----

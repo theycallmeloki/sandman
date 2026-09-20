@@ -243,6 +243,25 @@ func (d *daemon) appendLogLine(id, line string) {
 	f.Write(b)
 }
 
+// appendLogOutput writes an attempt's captured output into a job's log in
+// one pass, in the format the local capture produces (timestamped JSON lines,
+// partial last lines held to the close). A remote attempt's output arrives
+// with its result rather than streaming, so it is journaled when it lands.
+func (d *daemon) appendLogOutput(id, output string) {
+	if output == "" {
+		return
+	}
+	c, err := newLogCapture(d.logPath(id))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sandman: job %s: cannot open log: %v\n", id, err)
+		return
+	}
+	if _, err := c.Write([]byte(output)); err != nil {
+		fmt.Fprintf(os.Stderr, "sandman: job %s: log write: %v\n", id, err)
+	}
+	c.Close()
+}
+
 // globMatches reports whether a relative view path matches a glob.
 // Patterns are root-anchored ("/dirA/*" matches "dirA/file"); "**"
 // matches across directories, "*" within one.
@@ -1110,7 +1129,7 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		}
 	}()
 
-	code, errCode, tail, timedOut, outputs, err := d.execOnHost(ctx, jx.host, req)
+	res, err := d.execOnHost(ctx, jx.host, req)
 	if err != nil {
 		// the host is unreachable or the attempt could not be produced:
 		// an environment problem, not a user-code failure — the pipeline
@@ -1118,6 +1137,12 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 		d.markPipelineCrashed(jx.pl.Pipeline.Name, "execution host "+jx.host.Name+": "+err.Error())
 		return stateFailed, "execution host: " + err.Error(), nil
 	}
+	code, errCode, tail, timedOut, outputs := res.PrimaryCode, res.ErrCode, res.Tail, res.TimedOut, res.Outputs
+	// The worker's capture is journaled for every outcome. It used to be
+	// written only on failure, and only the 2KB the failure reason quotes,
+	// so a successful placed job left no log at all — the work most likely
+	// to need reading had nothing to read.
+	d.appendLogOutput(jx.id, res.Log)
 	accepted := tr.AcceptReturnCode != 0 && code == tr.AcceptReturnCode
 	if code == 0 || accepted || errCode == 0 {
 		for _, f := range outputs {
@@ -1130,13 +1155,6 @@ func (d *daemon) runRemoteAttempt(jx *jobExec, dt datum, index, attempt int, sta
 			return stateRecovered, "", files
 		}
 		return stateSuccess, "", files
-	}
-	// the worker's container output is journaled into the job's log store
-	// like a local run's capture would be
-	if tail != "" {
-		for _, ln := range strings.Split(strings.TrimRight(tail, "\n"), "\n") {
-			d.appendLogLine(jx.id, ln)
-		}
 	}
 	reason = fmt.Sprintf("exited with status %d", code)
 	if timedOut {
