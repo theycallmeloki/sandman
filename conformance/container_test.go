@@ -39,6 +39,7 @@ func withContainerDaemon(t *testing.T) {
 		t.Fatalf("start container daemon: %v", err)
 	}
 	if !waitPort(port, 15*time.Second) {
+		_ = cmd.Process.Kill() // the child started; failing here must not leak it
 		t.Fatalf("container daemon did not come up")
 	}
 

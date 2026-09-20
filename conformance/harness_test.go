@@ -92,6 +92,12 @@ func TestMain(m *testing.M) {
 
 	startDaemon(state)
 	if !waitPort(daemonPort, 15*time.Second) {
+		// the daemon is up but never bound its port: kill it before
+		// exiting — os.Exit skips the suite's teardown, and a daemon left
+		// behind outlives the run
+		if daemonCmd != nil && daemonCmd.Process != nil {
+			_ = daemonCmd.Process.Kill()
+		}
 		fmt.Fprintln(os.Stderr, "harness: daemon did not come up")
 		os.Exit(1)
 	}
@@ -163,22 +169,32 @@ func dockerAvailable() bool {
 	return exec.Command("docker", "version").Run() == nil
 }
 
-// procPPID reads a process's parent pid from /proc/<pid>/stat. Returns -1
-// when the process is gone or unreadable.
+// procPPID reads a process's parent pid. /proc is the Linux fast path;
+// elsewhere it is read via ps. Reading /proc unconditionally made the
+// orphan sweep a silent no-op off Linux — a daemon leaked by an interrupted
+// run was never reclaimed on darwin, which is exactly what the sweep exists
+// to prevent.
 func procPPID(pid string) int {
-	b, err := os.ReadFile("/proc/" + pid + "/stat")
+	if b, err := os.ReadFile("/proc/" + pid + "/stat"); err == nil {
+		// stat layout: pid (comm) state ppid ... — comm may contain spaces
+		// and parens, so split after the LAST ')'.
+		s := string(b)
+		i := strings.LastIndexByte(s, ')')
+		f := strings.Fields(s[i+1:])
+		if len(f) < 2 {
+			return -1
+		}
+		n, err := strconv.Atoi(f[1])
+		if err != nil {
+			return -1
+		}
+		return n
+	}
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", pid).Output()
 	if err != nil {
 		return -1
 	}
-	// stat layout: pid (comm) state ppid ... — comm may contain spaces
-	// and parens, so split after the LAST ')'.
-	s := string(b)
-	i := strings.LastIndexByte(s, ')')
-	f := strings.Fields(s[i+1:])
-	if len(f) < 2 {
-		return -1
-	}
-	n, err := strconv.Atoi(f[1])
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
 	if err != nil {
 		return -1
 	}
@@ -476,6 +492,7 @@ func withIsolatedDaemon(t *testing.T) {
 		t.Fatalf("start isolated daemon: %v", err)
 	}
 	if !waitPort(port, 15*time.Second) {
+		_ = cmd.Process.Kill() // the child started; failing here must not leak it
 		t.Fatalf("isolated daemon did not come up")
 	}
 	oldC, oldPort, oldState := c, daemonPort, daemonStateDir
