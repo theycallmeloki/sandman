@@ -71,7 +71,7 @@ jobs:
         run: go build -v ./...
 
       - name: Test (root unit tests)
-        run: go test -timeout 15m .
+        run: go test -timeout 15m . ./client/ ./internal/...
 
   test:
     runs-on: ubuntu-latest
@@ -164,7 +164,7 @@ jobs:
           done
 
       - name: Test (root unit tests, native arm64)
-        run: go test -timeout 15m .
+        run: go test -timeout 15m . ./client/ ./internal/...
 
       - name: Prepare docker images
         run: docker pull alpine:3.21
@@ -208,7 +208,7 @@ jobs:
         run: go build -v ./...
 
       - name: Test (root unit tests)
-        run: go test -timeout 15m .
+        run: go test -timeout 15m . ./client/ ./internal/...
 
       - name: Check the launchd agents install cleanly
         # The macOS install bakes this node's paths into the agents (a
