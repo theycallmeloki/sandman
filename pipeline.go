@@ -509,6 +509,12 @@ func (d *daemon) createPipeline(p client.Pipeline) error {
 	// pipeline: not updatable, not silently recreated.
 	existing, loadErr := d.loadPipeline(p.Name)
 	if loadErr == nil {
+		// a case-insensitive filesystem resolves this name to the existing
+		// record: updating would silently rewrite that other pipeline, so
+		// the collision is named instead (an exact-name update still applies)
+		if err := store.CaseNameCollision("pipeline", filepath.Dir(d.pipelinePath(p.Name)), p.Name, ".json"); err != nil {
+			return err
+		}
 		if !p.Update {
 			return fmt.Errorf("pipeline %q already exists", p.Name)
 		}

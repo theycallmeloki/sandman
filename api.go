@@ -904,6 +904,12 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 	if !store.ValidName(body.Name) {
 		return fmt.Errorf("invalid secret name %q", body.Name)
 	}
+	// one secret is one file (secrets/<name>.json): on a case-insensitive
+	// filesystem a differently-cased put would silently replace the stored
+	// secret rather than add a second one
+	if err := store.CaseNameCollision("secret", filepath.Join(d.state, "secrets"), body.Name, ".json"); err != nil {
+		return err
+	}
 	rec := secretRec{
 		Name:    body.Name,
 		Type:    "Opaque",

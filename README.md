@@ -427,6 +427,18 @@ What is different on macOS:
   fails as a provisioning error — the spec has no `--platform` override.
 - **Memory requests are advisory.** `--memory` and `--cpus` limits apply,
   but Docker Desktop does not enforce `--memory-reservation`.
+- **The state directory's filesystem decides which names can coexist.**
+  macOS's default APFS volume is case-insensitive: there `Data.txt` and
+  `data.txt` are one file, though they are two distinct paths in the store.
+  A repo, pipeline, secret, or tag whose name differs only in case from an
+  existing one is refused with an error naming the existing entry, and a
+  commit refuses a path that differs only in case from another path of the
+  same revision — both are accepted on a case-sensitive volume, so the
+  Linux behaviour is unchanged. One case cannot be caught before it happens:
+  a *transform* that writes both `OUT/Result.txt` and `OUT/result.txt` writes
+  them onto a single host file, so the second replaces the first and the
+  output commit carries only one. Name such outputs distinctly, or run the
+  node with `-state` on a case-sensitive volume.
 - **mDNS shares UDP 5353 with the system responder.** If discovery seems
   unreliable on a host, `sandman attach <name> <addr>` pins a peer
   statically; discovery is never a hard dependency, since the registry

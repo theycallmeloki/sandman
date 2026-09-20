@@ -39,7 +39,11 @@ import (
 // immutable commit records.
 type Store struct {
 	dir string
-	mu  sync.RWMutex
+	// state is the daemon's state directory — dir's parent. The
+	// case-sensitivity guards probe it: it is the filesystem the job
+	// staging directories (which views are materialized into) also live on.
+	state string
+	mu    sync.RWMutex
 	// onFinish, when set, is called after every commit finish — the
 	// daemon's state-change broadcast for the blocking waits.
 	onFinish func()
@@ -159,7 +163,7 @@ type CommitRec struct {
 const DefaultBranch = "master"
 
 func New(stateDir string) *Store {
-	return &Store{dir: filepath.Join(stateDir, "repos")}
+	return &Store{dir: filepath.Join(stateDir, "repos"), state: stateDir}
 }
 
 // SetOnFinish installs the callback invoked after every commit finish
@@ -398,6 +402,11 @@ func (s *Store) CreateRepo(name string) error {
 	defer s.mu.Unlock()
 	dir := s.RepoDir(name)
 	if _, err := os.Stat(dir); err == nil {
+		// a case-insensitive filesystem resolves "foo" to an existing
+		// "Foo": name the colliding repo instead of claiming this one exists
+		if err := CaseNameCollision("repo", s.dir, name, ""); err != nil {
+			return err
+		}
 		return fmt.Errorf("repo %q already exists", name)
 	}
 	return os.MkdirAll(dir, 0o755)
@@ -525,6 +534,13 @@ func (s *Store) HeadCommit(repo, branch string) string {
 func (s *Store) SetHead(repo, branch, id string) error {
 	refs := filepath.Join(s.RepoDir(repo), "refs")
 	if err := os.MkdirAll(refs, 0o755); err != nil {
+		return err
+	}
+	// a branch is one ref file: on a case-insensitive filesystem "Feature"
+	// and "feature" are one ref, so pointing the second would silently move
+	// the first branch's head — and answer success. This is the single funnel
+	// for branch writes (commit finish, branch create, job output advance).
+	if err := CaseNameCollision("branch", refs, branch, ""); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(refs, branch), []byte(id+"\n"), 0o644); err != nil {
@@ -694,6 +710,9 @@ func (s *Store) PutFile(commitID, p string, data []byte) error {
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
 	}
+	if err := s.checkCommitCase(rec, p); err != nil {
+		return err
+	}
 	sha, err := s.WriteBlob(data)
 	if err != nil {
 		return err
@@ -719,6 +738,9 @@ func (s *Store) OverwriteFile(commitID, p string, data []byte) error {
 	}
 	if !rec.Started || rec.Finished {
 		return fmt.Errorf("commit %q is not open for writes", commitID)
+	}
+	if err := s.checkCommitCase(rec, p); err != nil {
+		return err
 	}
 	sha, err := s.WriteBlob(data)
 	if err != nil {
@@ -889,6 +911,14 @@ func (s *Store) AddFilesFromDir(commitID, dir string) error {
 	if walkErr != nil {
 		return walkErr
 	}
+	// a job's output can introduce a path that differs only in case from an
+	// inherited one; on a case-insensitive filesystem the two are the same
+	// file, so the assembled revision could not be read back faithfully. The
+	// guard builds its path list inside its own gate (nothing is allocated on
+	// a case-sensitive filesystem).
+	if err := s.checkCommitEntriesCase(rec, entries); err != nil {
+		return err
+	}
 	rec.Ops = append(rec.Ops, entries...)
 	return s.SaveCommit(rec)
 }
@@ -935,6 +965,13 @@ func (s *Store) CopyFile(dstCommitID, dstPath, srcCommitID, srcPath string, over
 		}
 	}
 	dstView := s.ResolveView(dstRec)
+	dstPaths := make([]string, 0, len(moves))
+	for _, m := range moves {
+		dstPaths = append(dstPaths, m.dst)
+	}
+	if err := s.checkPathsCase(dstView, dstPaths); err != nil {
+		return err
+	}
 	for _, m := range moves {
 		if _, exists := dstView[m.dst]; exists && !overwrite {
 			return fmt.Errorf("path %q already exists in commit %q", m.dst, dstCommitID)
@@ -1261,7 +1298,26 @@ func (s *Store) MaterializeInput(commitID, dir string) error {
 }
 
 // materializeView writes an already-resolved view into dir.
+//
+// On a case-insensitive filesystem two paths of one revision that differ only
+// in case would be written to the same file, so the second silently replaces
+// the first and the job sees one file where the revision holds two. Ingest
+// refuses to create such a revision, but a state directory can already hold
+// one (written by an older binary, or synced from a case-sensitive host), so
+// the materializer is also the last place that can refuse instead of losing
+// content: it names both paths rather than writing one of them twice.
+//
+// The filesystem that decides is the one being written — a job's staging
+// directory under the state directory, or an egress destination the caller
+// chose, which can be a different mount — so the check asks about dir rather
+// than assuming the store's own state directory (a staging directory inside
+// it reuses the cached answer; see caseInsensitiveDest).
 func (s *Store) MaterializeView(view map[string]ViewEntry, dir string) error {
+	if s.caseInsensitiveDest(dir) {
+		if a, b := viewCaseConflict(view); a != "" {
+			return fmt.Errorf("revision holds %q and %q, which differ only in case: %s is on a case-insensitive filesystem, where they are one file — rename one of them", a, b, dir)
+		}
+	}
 	for p, f := range view {
 		data, err := f.Bytes(s)
 		if err != nil {
@@ -1353,6 +1409,12 @@ func (s *Store) TagPath(name string) string {
 func (s *Store) PutTag(name string, data []byte) error {
 	if !ValidName(name) {
 		return fmt.Errorf("invalid tag name %q", name)
+	}
+	// a tag is one file per name under tags/: on a case-insensitive
+	// filesystem "V1" and "v1" are the same tag, and the second put would
+	// silently retarget the first
+	if err := CaseNameCollision("tag", filepath.Dir(s.TagPath(name)), name, ""); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
