@@ -42,7 +42,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		if !waitPort(port, 15*time.Second) {
 			t.Fatalf("daemon did not come up")
 		}
-		c = client.New(fmt.Sprintf("127.0.0.1:%d", port))
+		c = &testClient{client.New(fmt.Sprintf("127.0.0.1:%d", port))}
 		daemonPort = port
 		daemonStateDir = state
 	}
@@ -55,7 +55,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		go func() { _ = cmd.Wait(); close(done) }()
 		select {
 		case <-done:
-		case <-time.After(20 * time.Second):
+		case <-time.After(testTimeout(20 * time.Second)):
 			_ = cmd.Process.Kill()
 			<-done
 		}
