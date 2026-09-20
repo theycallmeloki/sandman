@@ -173,50 +173,58 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 		changed, deferred := spoutDiffVerify(outDir, committedOut, !final)
 		if len(changed) > 0 {
 			log.Printf("spout %s: cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
-			d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit)
-			// The committed set is the previous committed files plus
-			// this cycle's changed files, refreshed to their current
-			// content. It is NOT the raw post-commit snapshot: a file
-			// that appeared during the commit window was never written
-			// by this commit, and marking it committed would silently
-			// drop its cycle (observed on CI: a rapid writer's file
-			// landing mid-commit was never committed nor retried).
-			snap := spoutSnapshot(outDir)
-			for p, h := range snap {
-				if _, was := committedOut[p]; !was {
-					if _, just := changed[p]; !just {
-						delete(snap, p) // appeared mid-cycle: stays uncommitted, retried next poll
+			if d.spoutCommit(outDir, changed, outputBranch(pl), pl.Pipeline.Name, rj, pl.SpecCommit) {
+				// The committed set is the previous committed files plus
+				// this cycle's changed files, refreshed to their current
+				// content. It is NOT the raw post-commit snapshot: a file
+				// that appeared during the commit window was never written
+				// by this commit, and marking it committed would silently
+				// drop its cycle (observed on CI: a rapid writer's file
+				// landing mid-commit was never committed nor retried).
+				snap := spoutSnapshot(outDir)
+				for p, h := range snap {
+					if _, was := committedOut[p]; !was {
+						if _, just := changed[p]; !just {
+							delete(snap, p) // appeared mid-cycle: stays uncommitted, retried next poll
+						}
+					} else {
+						snap[p] = h // refresh a previously committed file's content hash
 					}
-				} else {
-					snap[p] = h // refresh a previously committed file's content hash
 				}
+				for p := range deferred {
+					delete(snap, p) // still being written: must stay uncommitted for the next poll
+					log.Printf("spout %s: deferred mid-write file %s (left uncommitted)", pl.Pipeline.Name, p)
+				}
+				committedOut = snap
+			} else {
+				// the files stay out of the committed set, so the next
+				// poll recomputes and retries the cycle
+				log.Printf("spout %s: cycle commit failed; the cycle stays uncommitted and is retried", pl.Pipeline.Name)
 			}
-			for p := range deferred {
-				delete(snap, p) // still being written: must stay uncommitted for the next poll
-				log.Printf("spout %s: deferred mid-write file %s (left uncommitted)", pl.Pipeline.Name, p)
-			}
-			committedOut = snap
 		}
 		if markerDir != "" {
 			changed, deferred := spoutDiffVerify(markerDir, committedMarker, !final)
 			if len(changed) > 0 {
 				log.Printf("spout %s: marker cycle commit (final=%v) %d files: %v", pl.Pipeline.Name, final, len(changed), sortedStringKeys(changed))
-				d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit)
-				snap := spoutSnapshot(markerDir)
-				for p, h := range snap {
-					if _, was := committedMarker[p]; !was {
-						if _, just := changed[p]; !just {
-							delete(snap, p)
+				if d.spoutCommit(markerDir, changed, markerBranch, pl.Pipeline.Name, rj, pl.SpecCommit) {
+					snap := spoutSnapshot(markerDir)
+					for p, h := range snap {
+						if _, was := committedMarker[p]; !was {
+							if _, just := changed[p]; !just {
+								delete(snap, p)
+							}
+						} else {
+							snap[p] = h
 						}
-					} else {
-						snap[p] = h
 					}
+					for p := range deferred {
+						delete(snap, p)
+						log.Printf("spout %s: deferred marker mid-write file %s (left uncommitted)", pl.Pipeline.Name, p)
+					}
+					committedMarker = snap
+				} else {
+					log.Printf("spout %s: marker cycle commit failed; the cycle stays uncommitted and is retried", pl.Pipeline.Name)
 				}
-				for p := range deferred {
-					delete(snap, p)
-					log.Printf("spout %s: deferred marker mid-write file %s (left uncommitted)", pl.Pipeline.Name, p)
-				}
-				committedMarker = snap
 			}
 		}
 	}
@@ -302,16 +310,22 @@ func (d *daemon) spoutMarkerDir(pipeline string) string {
 // current content, one finished commit that triggers the consumers. The
 // commit records the pipeline's specification commit as its provenance —
 // the epoch anchor: an update that writes a new spec commit starts a new
-// provenance epoch shared by all commits after it.
-func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo string, rj *runningJob, specCommit string) {
+// provenance epoch shared by all commits after it. It reports whether the
+// cycle is committed, so the caller only records the files as committed
+// when it was: a commit that could not be written stays uncommitted and is
+// retried on the next poll rather than silently dropped.
+func (d *daemon) spoutCommit(dir string, changed map[string]string, branch, repo string, rj *runningJob, specCommit string) bool {
 	if rj.cancelled.Load() {
-		return
+		// the epoch is being replaced: this uncommitted cycle is
+		// deliberately dropped (the job is ending, so nothing retries),
+		// and the caller's bookkeeping is not asked to hold it back
+		return true
 	}
 	var prov []string
 	if specCommit != "" {
 		prov = []string{specCommit}
 	}
-	d.commitRevision(repo, branch, func(commitID string) bool {
+	return d.commitRevision(repo, branch, func(commitID string) bool {
 		for _, p := range sortedStringKeys(changed) {
 			if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
 				d.store.OverwriteFile(commitID, p, data)

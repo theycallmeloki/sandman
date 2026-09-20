@@ -424,8 +424,17 @@ func newJobRec(pl pipelineRec, heads []client.Commit, id string) *jobRec {
 // false abandons the commit (no finish, no trigger), so a caller can
 // refuse to publish a partial revision. finishCommit and the consumer
 // trigger are one step so no caller can produce a finished commit that
-// never triggers. Provenance (optional) is stamped before the trigger
-// (spout's epoch anchor).
+// never triggers.
+//
+// Provenance (optional — the spout's epoch anchor) is part of the revision,
+// not an annotation applied to it afterwards: it is stamped before the
+// commit is finished, so any consumer that can see the finished commit can
+// already see its provenance. Stamping after finishCommit left a window in
+// which a finished commit was readable with no provenance — and, because
+// that write's error was swallowed, a permanently unanchored commit on any
+// store hiccup. Observed on CI as one spout commit of an epoch reporting
+// provenance = [] while its siblings carried the epoch's spec commit
+// (TestSpoutEpochsAndMarker/provenance_epochs_across_updates).
 func (d *daemon) commitRevision(repo, branch string, write func(commitID string) bool, provenance []string) bool {
 	cm, err := d.store.StartCommit(repo, branch, "")
 	if err != nil {
@@ -434,15 +443,19 @@ func (d *daemon) commitRevision(repo, branch string, write func(commitID string)
 	if write != nil && !write(cm.ID) {
 		return false
 	}
+	if len(provenance) > 0 {
+		rec, err := d.store.LoadCommitByID(cm.ID)
+		if err != nil {
+			return false
+		}
+		rec.Provenance = provenance
+		if err := d.store.SaveCommit(rec); err != nil {
+			return false
+		}
+	}
 	fin, err := d.store.FinishCommit(cm.ID, "", false)
 	if err != nil {
 		return false
-	}
-	if len(provenance) > 0 {
-		if rec, err := d.store.LoadCommitByID(fin.ID); err == nil {
-			rec.Provenance = provenance
-			d.store.SaveCommit(rec)
-		}
 	}
 	d.triggerForCommit(fin)
 	return true
