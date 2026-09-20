@@ -412,6 +412,22 @@ journal, so the agent is written with `StandardOutPath`/`StandardErrorPath`
 and the `PATH` described above. `make install worker` and `install.sh` do
 the same for the worker, with its flags baked into `ProgramArguments`.
 
+Three things that surprise a first macOS node:
+
+- **The agent is per-user, so it starts at login.** There is no root
+  daemon and no `/Library/LaunchDaemons` equivalent: a Mac sitting at the
+  login window runs nothing and advertises nothing. `launchctl print
+  gui/$(id -u)/dev.sandman.daemon` is the check that it is actually up.
+- **The application firewall has to allow it.** The daemon binds `:4242`
+  on every interface, so with the macOS application firewall enabled
+  (Settings → Network → Firewall) `sandman` needs incoming connections
+  allowed, or the fleet cannot reach the node while local commands still
+  work. macOS may also ask for permission to find devices on the local
+  network, which is what mDNS discovery uses.
+- **Nothing needs signing or un-quarantining.** A locally built binary has
+  no quarantine flag, and the release asset is fetched by `curl` or Go's
+  HTTP client rather than a browser, so Gatekeeper never blocks it.
+
 Why the paths move: every job's input, scratch, and output directories are
 bind-mounted into a container from under the state directory, and Docker
 Desktop shares only a few host paths with its VM (`/Users`, `/Volumes`,
@@ -1124,7 +1140,11 @@ select the asset by `uname -s`/`uname -m` on the target.
 ### Rolling the fleet
 
 `sandman update` per node, workers first, the daemon last (its restart is a
-brief control-plane blip that the workers' heartbeats ride through). The
+brief control-plane blip that the workers' heartbeats ride through). An
+update replaces the file, not the running process: the daemon keeps
+executing the old build — and `sandman status` keeps reporting its version
+— until it is restarted (`systemctl restart sandman` on Linux,
+`launchctl kickstart -k gui/$(id -u)/dev.sandman.daemon` on macOS). The
 companion `sandman-pipelines` checkout ships a `roll-update.sh` that walks
 a fixed fleet manifest over ssh, restarts each unit only when an update
 actually landed, and prints the final fleet view.
