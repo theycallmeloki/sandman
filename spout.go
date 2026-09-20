@@ -49,8 +49,22 @@ func validateSpout(p client.Pipeline) error {
 func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 	id := newJobID(d.name)
 	if fresh {
+		// A reprocess update resets the marker state. Clear the marker
+		// directory's CONTENTS; never remove the directory itself. The
+		// previous epoch's container can still hold this path as a
+		// bind-mount root while the update is being applied, and replacing
+		// the directory inode orphans that mount: the container keeps
+		// writing into the deleted tree, the new epoch polls an empty
+		// marker directory and commits nothing, and the spout silently
+		// stops producing after a reprocess update (observed on macOS /
+		// Docker Desktop, where the share outlives the inode). The remote
+		// service refresh clears contents for the same reason.
 		if dir := d.spoutMarkerDir(rec.Pipeline.Name); dir != "" {
-			os.RemoveAll(dir)
+			if entries, err := os.ReadDir(dir); err == nil {
+				for _, e := range entries {
+					os.RemoveAll(filepath.Join(dir, e.Name()))
+				}
+			}
 		}
 	}
 	// mirror spawnJob: the running handle is registered before
@@ -59,6 +73,7 @@ func (d *daemon) spawnSpoutJob(rec *pipelineRec, fresh bool) string {
 	// would escape the cancel and keep running (container up, cycles
 	// committing) against a stopped or deleted pipeline
 	rj := d.registerRunning(id, rec.Pipeline.Name)
+	log.Printf("spout %s: spawn job %s (fresh=%v)", rec.Pipeline.Name, id, fresh)
 	go d.runSpoutJob(*rec, id, rj)
 	return id
 }
@@ -78,6 +93,9 @@ func (d *daemon) runSpoutJob(pl pipelineRec, id string, rj *runningJob) {
 	dir := d.jobDir(id)
 	outDir := filepath.Join(dir, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		// the one silent exit before the job record exists: an operator
+		// otherwise sees a spawned spout that never appears as a job
+		log.Printf("spout %s: job %s: cannot create %s: %v", pl.Pipeline.Name, id, outDir, err)
 		return
 	}
 
