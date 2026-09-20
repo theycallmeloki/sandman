@@ -988,7 +988,7 @@ func TestStandbyIdlesWithZeroContainers(t *testing.T) {
 	// container must start within the poll; a slow runner's docker
 	// overhead has blown 30s, so the poll is generous.
 	cm := commitFiles(t, repo, "", map[string]string{"file": "foo\n"})
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(testTimeout(60 * time.Second))
 	for sandmanContainerCount() == 0 {
 		if time.Now().After(deadline) {
 			// diagnostic for the CI-only hang: dump every sandman-*

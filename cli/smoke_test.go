@@ -29,12 +29,23 @@ var (
 	daemonCmd *exec.Cmd
 )
 
+// testTempBase is the parent for this package's scratch state.
+// $SANDMAN_TEST_TMP overrides it: on macOS the default (/var/folders/…) is
+// shared by Docker Desktop but not by colima, whose VM mounts $HOME only, so
+// a colima user points this at a directory the VM shares.
+func testTempBase() string {
+	if v := os.Getenv("SANDMAN_TEST_TMP"); v != "" {
+		return v
+	}
+	return os.TempDir()
+}
+
 func TestMain(m *testing.M) {
 	if !dockerAvailable() {
 		fmt.Fprintln(os.Stderr, "cli: no docker runtime — skipping (container carve-out)")
 		os.Exit(0)
 	}
-	binPath = filepath.Join(os.TempDir(), fmt.Sprintf("sandman-cli-%d", os.Getpid()))
+	binPath = filepath.Join(testTempBase(), fmt.Sprintf("sandman-cli-%d", os.Getpid()))
 	build := exec.Command("go", "build", "-o", binPath, "..")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
@@ -45,7 +56,7 @@ func TestMain(m *testing.M) {
 
 	port := freePort()
 	addr = fmt.Sprintf("127.0.0.1:%d", port)
-	state := filepath.Join(os.TempDir(), fmt.Sprintf("sandman-cli-state-%d", os.Getpid()))
+	state := filepath.Join(testTempBase(), fmt.Sprintf("sandman-cli-state-%d", os.Getpid()))
 	defer os.RemoveAll(state)
 
 	// the daemon runs its default container runner: the CLI smoke flow is

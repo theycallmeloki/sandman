@@ -38,7 +38,7 @@ var (
 func TestMain(m *testing.M) {
 	bin := os.Getenv("SANMAN_BIN")
 	if bin == "" {
-		bin = filepath.Join(os.TempDir(), fmt.Sprintf("sandman-conformance-%d", os.Getpid()))
+		bin = filepath.Join(testTempBase(), fmt.Sprintf("sandman-conformance-%d", os.Getpid()))
 		build := exec.Command("go", "build", "-o", bin, ".")
 		build.Dir = ".." // package dir is conformance/; the binary lives at the repo root
 		build.Stderr = os.Stderr
@@ -51,7 +51,7 @@ func TestMain(m *testing.M) {
 	binPath = bin
 
 	daemonPort = freePort()
-	state := filepath.Join(os.TempDir(), fmt.Sprintf("sandman-state-%d", os.Getpid()))
+	state := filepath.Join(testTempBase(), fmt.Sprintf("sandman-state-%d", os.Getpid()))
 	defer os.RemoveAll(state)
 	daemonStateDir = state
 	daemonName = "conformance-" + strconv.Itoa(daemonPort)
@@ -335,7 +335,7 @@ func mustPipeline(t *testing.T, p client.Pipeline) {
 // flushOK flushes the commit and requires every triggered job to succeed.
 func flushOK(t *testing.T, commitID string) []client.Job {
 	t.Helper()
-	jobs, err := c.Flush(commitID, 60*time.Second)
+	jobs, err := c.Flush(commitID, testTimeout(60*time.Second))
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -373,10 +373,41 @@ func noPanic(t *testing.T, err error) {
 	t.Fatalf("transport error (possible panic in handler): %v", err)
 }
 
-// pollFor polls until cond returns true or the deadline passes.
+// testTempBase is the parent directory for the suite's scratch state (the
+// daemon's state dir, the built binary, backup fixtures). $SANDMAN_TEST_TMP
+// overrides it: on macOS the default (/var/folders/…) is shared by Docker
+// Desktop but not by colima, whose VM mounts $HOME only — the container-gated
+// tests then fail with empty bind mounts (the transform sees no input) rather
+// than with an obvious error. A colima user points this somewhere the VM
+// shares, e.g. SANDMAN_TEST_TMP=$HOME/.cache/sandman-tests.
+func testTempBase() string {
+	if v := os.Getenv("SANDMAN_TEST_TMP"); v != "" {
+		return v
+	}
+	return os.TempDir()
+}
+
+// testTimeout scales a wait budget by $SANDMAN_TEST_TIMEOUT_FACTOR (default
+// 1). The budgets below are tuned for a native Linux runner; a container
+// runtime behind a VM (Docker Desktop on macOS) starts and execs slower under
+// load, and an overrun looks like a product failure — "timed out waiting for
+// spout commits" — rather than a slow host.
+func testTimeout(d time.Duration) time.Duration {
+	f := 1.0
+	if v := os.Getenv("SANDMAN_TEST_TIMEOUT_FACTOR"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil && parsed > 0 {
+			f = parsed
+		}
+	}
+	return time.Duration(float64(d) * f)
+}
+
+// pollFor waits for a condition, failing the test with the budget it was
+// given: the budget is scaled by testTimeout so a slower runtime is a
+// configuration change, not a rewrite of every call site.
 func pollFor(t *testing.T, what string, timeout time.Duration, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(testTimeout(timeout))
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
@@ -409,7 +440,7 @@ func waitJobFor(t *testing.T, pipeline string, timeout time.Duration) client.Job
 // shared daemon keeps running untouched on its own port.
 func withIsolatedDaemon(t *testing.T) {
 	t.Helper()
-	state := filepath.Join(os.TempDir(), "sandman-isolated-"+uniq(t))
+	state := filepath.Join(testTempBase(), "sandman-isolated-"+uniq(t))
 	os.MkdirAll(state, 0o755)
 	port := freePort()
 	cmd := exec.Command(binPath, "daemon", "-name", daemonName, "-port", strconv.Itoa(port), "-state", state, "-runner", "process")

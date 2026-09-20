@@ -18,7 +18,7 @@ import (
 // that order.
 func hostConfig(t *testing.T, jobID string, timeout time.Duration) (int64, int64, int64) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(testTimeout(timeout))
 	for time.Now().Before(deadline) {
 		out, err := exec.Command("docker", "ps", "-aq", "--filter", "name=sandman-"+jobID).Output()
 		if err == nil {
@@ -38,7 +38,7 @@ func hostConfig(t *testing.T, jobID string, timeout time.Duration) (int64, int64
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatalf("no container for job %s appeared within %s", jobID, timeout)
+	t.Fatalf("no container for job %s appeared within %s", jobID, testTimeout(timeout))
 	return 0, 0, 0
 }
 

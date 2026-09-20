@@ -1216,6 +1216,18 @@ sleep 3 && ./sandman nodes -state /tmp/sandman-a
 echo hi | ./sandman run -state /tmp/sandman-a b2 -- alpine cat
 ```
 
+Two environment knobs cover running the suite somewhere slower than a native
+Linux runner (Docker Desktop behind a VM, a loaded laptop):
+
+- `SANDMAN_TEST_TIMEOUT_FACTOR` scales every wait budget (default `1`). The
+  container-start and spout-cycle budgets are tuned for native docker; on
+  Docker Desktop give them headroom, e.g. `SANDMAN_TEST_TIMEOUT_FACTOR=3`.
+- `SANDMAN_TEST_TMP` moves the suite's scratch state (default `os.TempDir()`).
+  On macOS that default is `/var/folders/…`, which Docker Desktop shares but
+  **colima does not** — colima's VM mounts `$HOME` only, so the container-gated
+  tests otherwise fail with empty bind mounts. Point it somewhere the VM
+  shares: `SANDMAN_TEST_TMP=$HOME/.cache/sandman-tests`.
+
 ---
 
 *"Dreams of war, dreams of liars, dreams of dragon's fire — and of things

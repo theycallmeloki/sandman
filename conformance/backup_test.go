@@ -26,7 +26,7 @@ import (
 )
 
 func TestBackupRestoreRoundTrip(t *testing.T) {
-	state := filepath.Join(os.TempDir(), "sandman-backup-"+uniq(t))
+	state := filepath.Join(testTempBase(), "sandman-backup-"+uniq(t))
 	os.MkdirAll(state, 0o755)
 	port := freePort()
 	oldC, oldPort, oldState := c, daemonPort, daemonStateDir
