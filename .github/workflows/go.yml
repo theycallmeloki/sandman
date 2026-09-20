@@ -221,6 +221,20 @@ jobs:
                build do-install
           for p in "$RUNNER_TEMP/LaunchAgents"/*.plist; do plutil -lint "$p"; done
           plutil -p "$RUNNER_TEMP/LaunchAgents/dev.sandman.worker.plist"
+          # A valid plist can still be a useless agent: every job is a
+          # docker CLI subprocess, so the agent's PATH must reach the CLI
+          # Docker Desktop installs under $HOME/.docker/bin. It advertises
+          # that directory only from ~/.zprofile, which launchd never
+          # reads, and it links into /usr/local/bin only when its
+          # privileged helper ran — so the path has to be in the agent,
+          # and no @SANDMAN_*@ token may survive the install.
+          for p in "$RUNNER_TEMP/LaunchAgents"/*.plist; do
+            plutil -p "$p" | grep -qF "$HOME/.docker/bin" || {
+              echo "$p: agent PATH cannot reach the docker CLI under \$HOME/.docker/bin"; exit 1; }
+            if grep -qF '@SANDMAN_' "$p"; then
+              echo "$p: unsubstituted installer token"; exit 1
+            fi
+          done
 
       - name: Conformance (daemon + engine, process backend)
         run: |

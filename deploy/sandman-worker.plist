@@ -32,11 +32,13 @@
 	</array>
 
 	<!-- see deploy/sandman.plist: launchd's PATH cannot see docker under
-	     Docker Desktop or Homebrew without this. -->
+	     Docker Desktop ($HOME/.docker/bin, or /usr/local/bin when its
+	     privileged helper ran) or Homebrew (/opt/homebrew/bin) without
+	     this. @SANDMAN_HOME@ is substituted by the installer. -->
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>/opt/homebrew/bin:/usr/local/bin:@SANDMAN_HOME@/.docker/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>
 
 	<key>RunAtLoad</key>

@@ -28,13 +28,23 @@
 	</array>
 
 	<!-- launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin, which
-	     cannot see docker under Docker Desktop (/usr/local/bin) or
-	     Homebrew (/opt/homebrew/bin); every job is launched through the
-	     docker CLI, so without this the node starts and places nothing. -->
+	     cannot see docker; every job is launched through the docker CLI,
+	     so without this the node starts, reports `docker=?`, and fails
+	     every job it places.
+
+	     Three locations matter, because a Mac may have any one of them:
+	     Docker Desktop installs its CLI as $HOME/.docker/bin/docker (and
+	     advertises it only from ~/.zprofile, which launchd never reads),
+	     only links it into /usr/local/bin when its privileged helper ran,
+	     and Homebrew keeps its own client in /opt/homebrew/bin. Omitting
+	     the first cost a real debugging session: on a Mac whose only
+	     client was Docker Desktop's, every datum failed with a bare
+	     "exited with status 1". @SANDMAN_HOME@ is substituted by the
+	     installer alongside @SANDMAN_BIN@ — a plist cannot express $HOME. -->
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>/opt/homebrew/bin:/usr/local/bin:@SANDMAN_HOME@/.docker/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>
 
 	<key>RunAtLoad</key>

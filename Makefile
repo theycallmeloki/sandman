@@ -85,8 +85,10 @@ do-install:
 	install -d $(PREFIX)/bin $(LAUNCH_AGENTS) $(SANDMAN_LOG_DIR)
 	install -m 0755 sandman $(PREFIX)/bin/sandman
 	sed -e 's|@SANDMAN_BIN@|$(PREFIX)/bin/sandman|g' -e 's|@SANDMAN_LOG_DIR@|$(SANDMAN_LOG_DIR)|g' \
+		-e 's|@SANDMAN_HOME@|$(HOME)|g' \
 		deploy/sandman.plist > $(LAUNCH_AGENTS)/dev.sandman.daemon.plist
 	sed -e 's|@SANDMAN_BIN@|$(PREFIX)/bin/sandman|g' -e 's|@SANDMAN_LOG_DIR@|$(SANDMAN_LOG_DIR)|g' \
+		-e 's|@SANDMAN_HOME@|$(HOME)|g' \
 		deploy/sandman-worker.plist > $(LAUNCH_AGENTS)/dev.sandman.worker.plist
 	@echo "installed $(PREFIX)/bin/sandman ($(ROLE) role)"
 	@if [ "$(ROLE)" = "worker" ]; then \

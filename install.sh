@@ -188,13 +188,14 @@ if [ "$DARWIN" = 1 ]; then
 		<string>$(xml_escape "$ADVERTISE:$PORT")</string>$flag_args
 	</array>
 
-	<!-- see deploy/sandman.plist: launchd's PATH cannot see docker
-	     under Docker Desktop (/usr/local/bin) or Homebrew
-	     (/opt/homebrew/bin) without this. -->
+	<!-- see deploy/sandman.plist: launchd's PATH cannot see docker under
+	     Docker Desktop ($HOME/.docker/bin, where it installs its CLI and
+	     which it advertises only from ~/.zprofile, which launchd never
+	     reads) or Homebrew (/opt/homebrew/bin) without this. -->
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>/opt/homebrew/bin:/usr/local/bin:$(xml_escape "$HOME")/.docker/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>
 
 	<key>RunAtLoad</key>
