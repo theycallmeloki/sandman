@@ -115,8 +115,18 @@ fi
 # NAME additionally gets the daemon's default dot-to-dash rule (main.go
 # sanitizeName), so a DHCP-style "host.local" stays a single argv word.
 unit_safe() { # $1 = field label, $2 = value, $3 = allow-space (1)
+	# A newline or CR in a value injects a fresh directive into the systemd
+	# unit written below (and a fresh element into a launchd plist's XML).
+	# $'\n' spelled those inline, which is bash-only: under dash — the /bin/sh
+	# of every Debian-family host — it is a literal four-character pattern
+	# that never matches, so the guard was dead exactly where the unit is
+	# written. Build the patterns portably instead.
+	nl=$(printf '\n_')
+	nl=${nl%_}
+	cr=$(printf '\r_')
+	cr=${cr%_}
 	case "$2" in
-		*$'\n'*|*$'\r'*|*'%'*|*'"'*)
+		*"$nl"*|*"$cr"*|*'%'*|*'"'*)
 			echo "install.sh: $1 contains characters that would corrupt the systemd unit (newline, %, or quote)" >&2
 			exit 1 ;;
 	esac
