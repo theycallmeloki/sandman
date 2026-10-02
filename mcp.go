@@ -213,13 +213,6 @@ func (s *mcpServer) sessionCount() int {
 	return len(s.sessions)
 }
 
-func (s *mcpServer) handleOptions(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "*")
-	w.WriteHeader(http.StatusOK)
-}
-
 func (s *mcpServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -235,7 +228,6 @@ func (s *mcpServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
@@ -272,11 +264,6 @@ func (s *mcpServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *mcpServer) handleMessages(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	if r.Method == "OPTIONS" {
-		s.handleOptions(w, r)
-		return
-	}
 	if r.Method != "POST" {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed: use POST for /mcp/messages")
 		return
@@ -505,10 +492,6 @@ func (d *daemon) mcpSSEH(w http.ResponseWriter, r *http.Request) {
 
 func (d *daemon) mcpMessagesH(w http.ResponseWriter, r *http.Request) {
 	d.getMCP().handleMessages(w, r)
-}
-
-func (d *daemon) mcpOptionsH(w http.ResponseWriter, r *http.Request) {
-	d.getMCP().handleOptions(w, r)
 }
 
 // ---- Tool Registration and Helpers ----

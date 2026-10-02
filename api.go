@@ -183,10 +183,6 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /mcp/sse/", d.mcpSSEH)
 	mux.HandleFunc("POST /mcp/messages", d.mcpMessagesH)
 	mux.HandleFunc("POST /mcp/messages/", d.mcpMessagesH)
-	mux.HandleFunc("OPTIONS /mcp/sse", d.mcpOptionsH)
-	mux.HandleFunc("OPTIONS /mcp/sse/", d.mcpOptionsH)
-	mux.HandleFunc("OPTIONS /mcp/messages", d.mcpOptionsH)
-	mux.HandleFunc("OPTIONS /mcp/messages/", d.mcpOptionsH)
 	mux.HandleFunc("GET /mcp/messages", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed: use POST for /mcp/messages")
 	})
