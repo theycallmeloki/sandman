@@ -122,6 +122,19 @@ type daemon struct {
 	// placement label. Ephemeral: workers re-register on a heartbeat, so
 	// no durable state is needed.
 	hosts *hostRegistry
+
+	// mcp is the Model Context Protocol endpoint server.
+	mcpMu sync.Mutex
+	mcp   *mcpServer
+}
+
+func (d *daemon) getMCP() *mcpServer {
+	d.mcpMu.Lock()
+	defer d.mcpMu.Unlock()
+	if d.mcp == nil {
+		d.mcp = newMCPServer(d)
+	}
+	return d.mcp
 }
 
 // Host resource sampling (cpuSample, cpuBusyDelta, and the platform

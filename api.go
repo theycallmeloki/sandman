@@ -178,6 +178,21 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("GET /api/v1/tags/{name}", d.instrument("tags.get", hErr(d.getTagH)))
 	mux.HandleFunc("DELETE /api/v1/tags/{name}", d.instrument("tags.delete", hErr(d.deleteTagH)))
 	mux.HandleFunc("GET /api/v1/tags", d.instrument("tags.list", hErr(d.listTagsH)))
+	// Model Context Protocol (MCP) endpoints
+	mux.HandleFunc("GET /mcp/sse", d.mcpSSEH)
+	mux.HandleFunc("GET /mcp/sse/", d.mcpSSEH)
+	mux.HandleFunc("POST /mcp/messages", d.mcpMessagesH)
+	mux.HandleFunc("POST /mcp/messages/", d.mcpMessagesH)
+	mux.HandleFunc("OPTIONS /mcp/sse", d.mcpOptionsH)
+	mux.HandleFunc("OPTIONS /mcp/sse/", d.mcpOptionsH)
+	mux.HandleFunc("OPTIONS /mcp/messages", d.mcpOptionsH)
+	mux.HandleFunc("OPTIONS /mcp/messages/", d.mcpOptionsH)
+	mux.HandleFunc("GET /mcp/messages", func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed: use POST for /mcp/messages")
+	})
+	mux.HandleFunc("POST /mcp/sse", func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed: use GET for /mcp/sse")
+	})
 	// the embedded read-only dashboard: index at /, assets under /ui/.
 	// The API owns every /api/v1/... path; Go's ServeMux prefers the
 	// more specific registered patterns, so these never shadow it, and
