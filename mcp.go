@@ -312,7 +312,7 @@ func (s *mcpServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 			session.enqueue(b)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write(b)
+			_, _ = w.Write(b)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -346,7 +346,7 @@ func (s *mcpServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 		session.enqueue(b)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write(b)
+		_, _ = w.Write(b)
 		return
 	}
 
@@ -363,7 +363,7 @@ func (s *mcpServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 		session.enqueue(b)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write(b)
+		_, _ = w.Write(b)
 		return
 	}
 

@@ -795,8 +795,14 @@ func (d *daemon) runPipeline(name string, provenance []string, jobID string) (cl
 	jr.Manual = true
 	os.MkdirAll(d.jobDir(id), 0o755)
 	d.saveJob(jr)
+	// Snapshot before handing jr to the job goroutine: spawnJob's goroutine
+	// runs the job on this same record and writes it (State, and a re-save),
+	// so reading it after the spawn races with that write. The snapshot is
+	// also the more honest answer -- it is the job as returned to the caller,
+	// not a state the job goroutine may have moved on from.
+	snapshot := jr.job()
 	d.spawnJob(rec, heads, "", id, jr)
-	return jr.job(), nil
+	return snapshot, nil
 }
 
 // standbyIdle parks a just-created or just-updated standby pipeline in the

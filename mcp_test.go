@@ -75,6 +75,11 @@ func setupTestDaemon(t *testing.T) (*daemon, string, func()) {
 	}()
 
 	cleanup := func() {
+		// Mirror the daemon's own shutdown (daemon.go): settle every job this
+		// test spawned. These tests run a real process runner, and the daemon
+		// tests sharing this package are timing-sensitive about jobs settling,
+		// so a process left running here steals the CPU they measure.
+		d.cancelAllRunningJobs()
 		ln.Close()
 		close(acceptDone)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
