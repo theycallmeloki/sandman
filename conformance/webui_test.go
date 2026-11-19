@@ -42,6 +42,7 @@ func TestWebUIDashboard(t *testing.T) {
 		"/ui/shared.js",
 		"/ui/style.css",
 		"/ui/views/Flow.js",
+		"/ui/views/DAG.js",
 		"/ui/views/Attention.js",
 		"/ui/views/Jobs.js",
 		"/ui/views/Fleet.js",
@@ -62,6 +63,14 @@ func TestWebUIDashboard(t *testing.T) {
 	resp, body = get("/api/v1/version")
 	if resp.StatusCode != 200 || !strings.Contains(body, `"version"`) {
 		t.Fatalf("GET /api/v1/version: %d %s", resp.StatusCode, body)
+	}
+	resp, body = get("/api/v1/dag")
+	if resp.StatusCode != 200 || !strings.Contains(body, `"nodes"`) || !strings.Contains(body, `"edges"`) {
+		t.Fatalf("GET /api/v1/dag: %d %s, want JSON graph", resp.StatusCode, body)
+	}
+	resp, body = get("/api/v1/dag?format=dot")
+	if resp.StatusCode != 200 || !strings.Contains(body, "digraph sandman") {
+		t.Fatalf("GET /api/v1/dag?format=dot: %d %s, want DOT", resp.StatusCode, body)
 	}
 	resp, body = get("/api/v1/no-such-endpoint")
 	if resp.StatusCode != 404 || !strings.Contains(body, `"error"`) {

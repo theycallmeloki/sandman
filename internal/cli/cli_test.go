@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"sandman/client"
+	"sandman/internal/dag"
 )
 
 // binPath is the test-built sandman binary (built in TestMain).
@@ -301,6 +302,16 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"lines": []string{"line one", "line two"}})
 	case r.Method == "GET" && p == "/api/v1/version":
 		_ = json.NewEncoder(w).Encode(map[string]string{"version": "v0.2.35-test"})
+	case r.Method == "GET" && p == "/api/v1/dag":
+		infos := make([]client.PipelineInfo, 0, len(f.pipelines))
+		for _, pl := range f.pipelines {
+			infos = append(infos, client.PipelineInfo{Name: pl.Name, State: "running", Version: 1, Input: pl.Input})
+		}
+		repos := make([]dag.RepoState, 0, len(f.repos))
+		for name := range f.repos {
+			repos = append(repos, dag.RepoState{Name: name})
+		}
+		_ = json.NewEncoder(w).Encode(dag.Build(infos, repos, f.jobs))
 	case r.Method == "GET" && p == "/api/v1/hosts":
 		_ = json.NewEncoder(w).Encode(f.hosts)
 	default:
@@ -746,6 +757,47 @@ func TestStatus(t *testing.T) {
 	for _, want := range []string{"daemon", "v0.2.35-test", "1 registered", "1 with GPUs", "1 running"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status = %q, missing %q", out, want)
+		}
+	}
+}
+
+func TestDagJSONDotAndSubgraph(t *testing.T) {
+	f := newFakeDaemon()
+	f.repos["src"] = &fakeRepo{name: "src"}
+	f.pipelines = []client.Pipeline{
+		{Name: "a", Input: &client.Input{Repo: "src", Glob: "/*"}},
+		{Name: "b", Input: &client.Input{Repo: "a", Glob: "/*"}},
+	}
+
+	out, _, code := runCLI(t, f, nil, "dag", "--json")
+	if code != 0 {
+		t.Fatalf("dag --json exit %d: %s", code, out)
+	}
+	var g dag.Graph
+	if err := json.Unmarshal([]byte(out), &g); err != nil {
+		t.Fatalf("dag --json not JSON: %v (%q)", err, out)
+	}
+	if len(g.Nodes) != 5 || len(g.Edges) != 4 {
+		t.Fatalf("dag graph = %d nodes / %d edges, want 5/4: %+v", len(g.Nodes), len(g.Edges), g)
+	}
+
+	out, _, code = runCLI(t, f, nil, "dag")
+	if code != 0 {
+		t.Fatalf("dag exit %d", code)
+	}
+	for _, want := range []string{"fabric:", "2 pipelines", "PIPELINE", "a"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dag summary = %q, missing %q", out, want)
+		}
+	}
+
+	out, _, code = runCLI(t, f, nil, "dag", "--format", "dot", "--pipeline", "a")
+	if code != 0 {
+		t.Fatalf("dag dot exit %d", code)
+	}
+	for _, want := range []string{"digraph sandman", `"pipeline:a"`, `"pipeline:b"`, `"repo:src"`, "[style=dashed]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dag dot = %q, missing %q", out, want)
 		}
 	}
 }

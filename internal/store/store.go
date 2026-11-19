@@ -490,6 +490,30 @@ func (s *Store) InspectRepo(name string) (client.Repo, error) {
 	return r, nil
 }
 
+// ListRepoNames lists user repositories without inspecting a head view.
+// The DAG endpoint needs repo refs (branches are read separately), not the
+// head's recursively resolved size — ListRepos would walk commit ancestry
+// for every repo.
+func (s *Store) ListRepoNames() ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != "spec" {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (s *Store) ListRepos() ([]client.Repo, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {

@@ -139,6 +139,7 @@ func Commands() []*cobra.Command {
 	cmds = append(cmds, catCmd())    // files to stdout
 	cmds = append(cmds, psCmd())     // jobs, alias for `job list`
 	cmds = append(cmds, statusCmd()) // one-glance fleet/pipeline/job view
+	cmds = append(cmds, newDagCmd()) // whole pipeline/repo graph, or a subgraph
 	cmds = append(cmds, &cobra.Command{
 		Use: "version",
 		Run: func(*cobra.Command, []string) { PrintVersion() },

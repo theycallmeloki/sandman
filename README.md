@@ -325,6 +325,8 @@ separate server, no port to remember.
 sandman daemon                # run the node side (TCP :4242, mDNS)
 sandman nodes                 # list registered hosts (asks the daemon; --local for mDNS)
 sandman status                # one glance: daemon version, hosts, pipelines, jobs
+sandman dag                   # pipeline/repo topology (summary, --json, --format dot)
+sandman dag --pipeline extract --format dot   # upstream + downstream subgraph
 sandman stats                 # poll every node; fleet state as JSONL on stdout
 sandman dashboard             # live TUI: nodes, containers, per-container cpu/mem
 sandman run <node> -- <image> <cmd...>   # stream a job; exit code is the container's
@@ -583,6 +585,8 @@ sandman ls [in@master[:path]]                  # repos, or files in a repo
 sandman cat in@master:data.csv                 # files to stdout
 sandman ps [pipeline]                          # jobs (job list -s filters state)
 sandman status                                 # daemon, hosts, pipelines, jobs
+sandman dag                                    # repos/pipelines graph; --json or --format dot
+sandman dag --pipeline build --format json     # subgraph around one pipeline
 ```
 
 Transfers over a megabyte show progress on stderr when stderr is a
@@ -1065,6 +1069,11 @@ organized around questions, not resource types:
   pipelines in trouble), a live chain diagram built from the pipeline
   graph, node state chips, and per-job progress bars that animate only
   while a job is actually running.
+- **DAG** — the whole fabric graph from `GET /api/v1/dag`: every pipeline
+  and every repo it consumes or produces, laid out left-to-right. Solid
+  edges are repo inputs, dashed edges are output repos; clicking a node
+  opens its spec summary. `?format=dot` on the endpoint (or
+  `sandman dag --format dot`) renders the same graph for Graphviz.
 - **Attention** — is anything wrong? Problem pipelines, failed/killed jobs
   with inline reasons, failed datums (when per-datum stats are enabled),
   and hosts whose heartbeat has gone stale. An ALL-CLEAR empty state when

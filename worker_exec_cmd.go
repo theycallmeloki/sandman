@@ -100,7 +100,7 @@ func clientWorkerRun(ctx context.Context, worker, addr, image string, env, argv 
 	res, err := execOnWorker(ctx, "http://"+h.Addr, req, out)
 	if err != nil {
 		if ctx.Err() != nil {
-			fmt.Fprintln(errOut, "sandman: interrupted")
+			fmt.Fprintf(errOut, "sandman: interrupted\n")
 			return 130
 		}
 		fmt.Fprintf(errOut, "sandman: worker %q is not responding at %s: %v\n", h.Name, h.Addr, err)

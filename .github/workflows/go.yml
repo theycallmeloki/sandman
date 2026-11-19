@@ -181,7 +181,7 @@ jobs:
     # the daemon, the store, the scheduler, and the fabric on the process
     # backend — the code the port actually changed — plus Apple's own
     # plutil validating the agents the installer writes.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout
