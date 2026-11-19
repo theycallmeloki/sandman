@@ -384,3 +384,39 @@ select.filter {
   cursor: pointer;
 }
 select.filter:focus { outline: none; border-color: var(--accent-dim); }
+
+/* ---- fabric DAG ---- */
+.dag-count { font-size: 11px; letter-spacing: .5px; text-transform: none; margin-left: 8px; }
+.dag-wrap {
+  overflow: auto; border: 1px solid var(--border); border-radius: 10px;
+  background: radial-gradient(circle at 20% 0%, rgba(0,255,65,0.04), transparent 55%), var(--panel);
+}
+.dag-canvas { position: relative; min-width: 100%; }
+.dag-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.dag-edge { fill: none; stroke: var(--border-dim); stroke-width: 1.5; }
+.dag-edge.output { stroke: rgba(0,179,46,0.55); stroke-dasharray: 5 5; }
+.dag-node {
+  position: absolute; text-align: left; overflow: hidden;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 7px 10px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--panel-solid); color: var(--text);
+  font: inherit; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.dag-node:hover { border-color: var(--accent-dim); transform: translateY(-1px); }
+.dag-node.repo { border-radius: 16px; border-color: var(--border-dim); }
+.dag-node.repo.orphan { border-style: dashed; opacity: .85; }
+.dag-node.running { border-color: rgba(0,255,65,0.55); box-shadow: 0 0 10px rgba(0,255,65,0.18); }
+.dag-node.failure, .dag-node.crashed { border-color: rgba(255,77,94,0.6); box-shadow: 0 0 10px rgba(255,77,94,0.2); }
+.dag-node.paused, .dag-node.standby, .dag-node.queued { border-color: rgba(255,193,77,0.5); }
+.dag-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 16px rgba(0,255,65,0.35); }
+.dag-node .dn-name {
+  font-weight: 700; font-size: 13px; color: var(--text); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.dag-node .dn-meta {
+  display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dag-node .dn-meta .chip { padding: 0 6px; font-size: 10px; }
+.dag-note { font-size: 11px; margin-top: 8px; }

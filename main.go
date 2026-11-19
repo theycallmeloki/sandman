@@ -138,6 +138,8 @@ verbs:
   cat                 fetch files to stdout
   ps                  list jobs (alias for job list)
   status              one-glance view: daemon, hosts, pipelines, jobs
+  dag [--format json|dot] [--pipeline name] [--json]
+                      pipeline/repo graph, or the subgraph around a pipeline
 
   repo                create/list/inspect/delete repositories
   commit              start/finish/list/inspect/delete commits

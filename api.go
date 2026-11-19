@@ -140,6 +140,7 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/hosts/{name}", d.instrument("hosts.delete", hErr(d.deleteHostH)))
 	mux.HandleFunc("GET /api/v1/metrics", hErr(d.metricsH))
 	mux.HandleFunc("GET /api/v1/version", d.instrument("version.get", hErr(d.versionH)))
+	mux.HandleFunc("GET /api/v1/dag", d.instrument("dag.get", hErr(d.dagH)))
 	mux.HandleFunc("GET /api/v1/backup", d.instrument("backup", hErr(d.backupH)))
 	mux.HandleFunc("POST /api/v1/gc", d.instrument("gc", hErr(d.collectGarbageH)))
 	mux.HandleFunc("POST /api/v1/check", d.instrument("check", hErr(d.checkH)))

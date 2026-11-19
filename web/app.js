@@ -13,6 +13,7 @@
 import { createApp, reactive } from "vue";
 import { api, jobPulse, attentionCount } from "./shared.js";
 import Flow from "./views/Flow.js";
+import DAG from "./views/DAG.js";
 import Attention from "./views/Attention.js";
 import Jobs from "./views/Jobs.js";
 import Fleet from "./views/Fleet.js";
@@ -54,6 +55,8 @@ const routes = [
     view: Attention, props: () => ({}) },
   { re: /^#\/flow$/,
     view: Flow, props: () => ({}) },
+  { re: /^#\/dag$/,
+    view: DAG, props: () => ({}) },
   // bare "#/" (fresh tab, old bookmark) falls back to the flow view
   { re: /^#\/?$/,
     view: Flow, props: () => ({}) },
@@ -61,12 +64,13 @@ const routes = [
 
 const tabs = [
   { id: "flow", hash: "#/flow", label: "Flow" },
+  { id: "dag", hash: "#/dag", label: "DAG" },
   { id: "attention", hash: "#/attention", label: "Attention" },
   { id: "jobs", hash: "#/jobs", label: "Jobs" },
   { id: "fleet", hash: "#/fleet", label: "Fleet" },
 ];
 
-const viewTab = { Flow: "flow", Attention: "attention", Jobs: "jobs", Fleet: "fleet" };
+const viewTab = { Flow: "flow", DAG: "dag", Attention: "attention", Jobs: "jobs", Fleet: "fleet" };
 
 const app = createApp({
   data: () => ({ state, tabs, version: "", clock: "", pulse: { running: 0, queued: 0, failure: 0, attention: 0 } }),

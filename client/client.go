@@ -1288,6 +1288,13 @@ func (c *Client) Version() (string, error) {
 	return out.Version, nil
 }
 
+// DAG fetches the read-only fabric graph as raw JSON. The CLI decodes it
+// into the internal/dag model (the client package stays a thin wire
+// contract).
+func (c *Client) DAG() ([]byte, error) {
+	return c.doRaw("GET", "/api/v1/dag?format=json", nil)
+}
+
 // FetchMetrics returns the runtime metrics in Prometheus exposition
 // format: invocation counters and latency aggregates for file reads
 // (split by outcome), file writes, and job listings.
