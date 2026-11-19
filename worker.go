@@ -65,6 +65,27 @@ type execRequest struct {
 	// allocated by the control plane; empty means no GPU. The container
 	// sees exactly these devices — never "all GPUs".
 	Gpus []int `json:"gpus,omitempty"`
+	// Stream asks the worker to answer as NDJSON events (live output, then
+	// the result) instead of one JSON result. Optional and additive: a
+	// worker predating it ignores the field and replies with the ordinary
+	// JSON result, which the client accepts. The control plane never sets
+	// it; only `sandman run --worker` does.
+	Stream bool `json:"stream,omitempty"`
+}
+
+// execStreamType is the content type of a streamed exec reply: one JSON
+// event per line (see execStreamEvent). A client detects this type to
+// choose live decoding over the single-result JSON reply.
+const execStreamType = "application/x-ndjson"
+
+// execStreamEvent is one line of a streamed exec reply: "out" carries a
+// chunk of the run's combined output (bytes are base64 in JSON, so
+// non-text output survives), and the final "result" carries the same
+// execResult the non-streaming endpoint returns.
+type execStreamEvent struct {
+	Type   string      `json:"type"`
+	Data   []byte      `json:"data,omitempty"`
+	Result *execResult `json:"result,omitempty"`
 }
 
 // execVolume is one pipeline-customization volume, mounted at
@@ -206,6 +227,10 @@ func cmdWorker(args []string) {
 		var req execRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if req.Stream {
+			serveExecStream(w, r, *name, req)
 			return
 		}
 		writeJSON(w, runExec(*name, req))
@@ -410,13 +435,67 @@ func registerHost(control, name, addr string, labels []string, gpus []GpuInfo) e
 	return nil
 }
 
-// runExec executes one datum attempt on the worker: materialize the
+// serveExecStream answers a streamed ad-hoc exec: NDJSON "out" events as
+// the container writes, then one "result" event. The ordinary JSON path
+// is untouched, so a control plane (which never sets Stream) and older
+// clients see exactly the old reply. A client that goes away kills the
+// container it named — streaming is interactive, and an abandoned
+// `sandman run --worker` must not leave the transform running.
+func serveExecStream(w http.ResponseWriter, r *http.Request, nodeName string, req execRequest) {
+	w.Header().Set("Content-Type", execStreamType)
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	var mu sync.Mutex
+	enc := json.NewEncoder(w)
+	write := func(ev execStreamEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if err := enc.Encode(ev); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+	done := make(chan struct{})
+	defer close(done)
+	if req.Cname != "" {
+		go func() {
+			select {
+			case <-r.Context().Done():
+				exec.Command("docker", "kill", req.Cname).Run()
+			case <-done:
+			}
+		}()
+	}
+	live := writerFunc(func(p []byte) (int, error) {
+		if err := write(execStreamEvent{Type: "out", Data: p}); err != nil {
+			return 0, err
+		}
+		return len(p), nil
+	})
+	res := runExecTo(nodeName, req, live)
+	_ = write(execStreamEvent{Type: "result", Result: &res})
+}
+
+// writerFunc adapts a function to io.Writer.
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// runExec executes one datum attempt on the worker.
+func runExec(nodeName string, req execRequest) execResult {
+	return runExecTo(nodeName, req, nil)
+}
+
+// runExecTo executes one datum attempt on the worker: materialize the
 // shipped files, run the primary command (and, when it fails, the
 // error-handling command in the same output directory), scan the output,
 // and return the produced files. Mirrors the control plane's local
 // attempt semantics (recovery, datum timeout, output
 // scan) so a placed job's result is identical to a locally run one.
-func runExec(nodeName string, req execRequest) execResult {
+func runExecTo(nodeName string, req execRequest, live io.Writer) execResult {
 	dir, err := os.MkdirTemp("", "sandman-worker-*")
 	if err != nil {
 		return execResult{Error: err.Error()}
@@ -489,6 +568,10 @@ func runExec(nodeName string, req execRequest) execResult {
 	// tail buffer: the tail is what a failure reason quotes, the capture is
 	// what the control plane writes into the job's log
 	var logBuf bytes.Buffer
+	capture := io.Writer(&logBuf)
+	if live != nil {
+		capture = io.MultiWriter(&logBuf, live)
+	}
 	run := func(cname string, argv, stdin []string) (int, string) {
 		if len(argv) == 0 && len(stdin) == 0 {
 			// default entry point: copy every side's files to OUT
@@ -500,7 +583,7 @@ func runExec(nodeName string, req execRequest) execResult {
 			}
 			return code, ""
 		}
-		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, &logBuf, argv, stdin, req.Gpus)
+		return runDatumContainer(tr, nodeName, cname, env, mounts, outDir, capture, argv, stdin, req.Gpus)
 	}
 	primaryCode, tail := run(cname, req.Cmd, req.Stdin)
 	// without an error-handling command a nonzero primary exit fails the

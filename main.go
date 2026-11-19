@@ -121,6 +121,8 @@ verbs:
   daemon              run the node side (advertises via mDNS, serves jobs)
   worker              run an execution host (joins the control plane, executes placed work)
   run <node> -- <image> <cmd...>   stream a job to a node (ssh-like)
+  run --worker <name> [--env K=V] -- <image> <cmd...>
+                      execute ad hoc on an execution host (registry name)
   nodes               list the fleet (mDNS browse + registry files)
   stats               poll every node, emit fleet state as JSONL
   dashboard           live TUI overview: nodes, containers, cpu/mem
@@ -170,12 +172,27 @@ func (m *multiFlag) Set(v string) error {
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	state := fs.String("state", defaultState(), stateFlagHelp)
+	worker := fs.String("worker", "", "run ad hoc on this worker (name from the daemon host registry)")
+	addr := fs.String("addr", defaultAddr(), "control-plane address for --worker (default $SANDMAN_ADDR or 127.0.0.1:4242)")
 	var env multiFlag
 	fs.Var(&env, "e", "env K=V (repeatable)")
+	fs.Var(&env, "env", "env K=V (repeatable)")
 	fs.Parse(args)
 	rest := fs.Args()
+	if *worker != "" {
+		if len(rest) < 2 || rest[0] == "" {
+			die("usage: sandman run --worker <name> [--env K=V] -- <image> <cmd...>", 2)
+		}
+		for _, e := range env {
+			k, _, ok := strings.Cut(e, "=")
+			if !ok || k == "" {
+				die(fmt.Sprintf("invalid env %q: want KEY=VALUE", e), 2)
+			}
+		}
+		os.Exit(clientWorkerRunCmd(*worker, *addr, rest[0], env, rest[1:]))
+	}
 	if len(rest) < 4 || rest[1] != "--" {
-		die("usage: sandman run [-e K=V] <node> -- <image> <cmd...>", 2)
+		die("usage: sandman run [-e K=V] <node> -- <image> <cmd...>\n       sandman run --worker <name> [-e K=V] -- <image> <cmd...>", 2)
 	}
 	clientRun(rest[0], *state, rest[2], []string(env), rest[3:])
 }

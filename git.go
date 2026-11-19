@@ -156,12 +156,17 @@ func (d *daemon) deriveGitRepos(p *client.Pipeline) {
 		if in.Git != nil {
 			// the mapped repository is named by the input's own name
 			// or derived from the URL when unnamed
+			// the mapped repository keeps the URL-derived spelling (a
+			// repo name may carry hyphens); the side's environment name
+			// is the shell-legal sanitized form, matching what
+			// validation checked (pipeline.go). Repo and Name therefore
+			// differ for a hyphenated URL: `vendor-specs` / `vendor_specs`.
 			name := in.Name
 			if name == "" {
 				name = gitRepoName(in.Git.URL)
 			}
-			in.Name = name
 			in.Repo = name
+			in.Name = envName(name)
 			if in.Glob == "" {
 				// the whole revision is one datum: the commit's tree
 				// (including its .git metadata) is the input

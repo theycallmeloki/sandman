@@ -329,10 +329,25 @@ sandman stats                 # poll every node; fleet state as JSONL on stdout
 sandman dashboard             # live TUI: nodes, containers, per-container cpu/mem
 sandman run <node> -- <image> <cmd...>   # stream a job; exit code is the container's
 sandman run -e K=V b2 -- alpine sh -c 'echo $K'
+sandman run --worker w1 --env HF_TOKEN=… -- python:3.12-slim \
+  python -c 'print("runs where the pipeline runs")'
+                                          # execute ad hoc on a worker
 sandman attach <name> <addr>  # static peer (non-mDNS networks)
 sandman detach <name>
 sandman update [--check]      # check GitHub releases and install the latest build
 ```
+
+`sandman run --worker <name>` executes an arbitrary image/argv on a
+registered execution host instead of a daemon: name resolution uses the
+control plane's host registry (the same list `sandman nodes` shows), the
+request carries zero input sides, output streams live, and the exit code
+is the container's. `--env K=V` (or `-e`, repeatable) sets the container
+environment; the client's own log line masks values whose names look
+secret (`*KEY*`, `*TOKEN*`, `*SECRET*`), though the values still reach the
+container. This is how a transform author validates `uv run script.py`
+inside the exact image and host a pipeline will use. An unknown name or an
+unreachable worker fails with an explanation; a Ctrl-C cancels the request
+and the worker kills the container.
 
 `sandman nodes` asks the control plane for its registered execution hosts
 (name, address, placement labels, GPUs with allocation state) — the same
@@ -343,11 +358,19 @@ to type when something feels off: daemon version, registered hosts (GPU
 hosts called out), pipeline states, and job states.
 
 The `ADDR` column is where the **control plane** dials to place work, which
-is not the same thing as a `sandman run` target: `run` speaks the job
-protocol, served by a daemon (`sandman run <daemon> -- …`, or any
+is not the same thing as a `sandman run <node>` target: `run` speaks the
+job protocol, served by a daemon (`sandman run <daemon> -- …`, or any
 `host:port` that answers it). A worker's endpoint answers the placement API
-instead, and pointing `run` at it is rejected with an explanation — work on
-a worker is placed by a pipeline carrying that worker's `--placement` label.
+instead, and pointing `run <node>` at it is rejected with an explanation —
+work on a worker is placed by a pipeline carrying that worker's
+`--placement` label, or run ad hoc with `run --worker <name>`.
+
+Ad-hoc streaming is additive on the worker's `/exec` (an optional `stream`
+field); the daemon RUN protocol is unchanged. Against a worker older than
+this build the command still runs and returns the right exit code, but
+output arrives when the run finishes rather than live. To get live output
+on the lab fleet, upgrade the **worker** (and use the new CLI); the daemon
+may stay at v0.2.53.
 
 Cross-subnet nodes (no multicast): `sandman attach wan-node 10.0.0.9:4242`
 adds a static peer; `detach` removes it.

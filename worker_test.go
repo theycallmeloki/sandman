@@ -80,3 +80,36 @@ func TestRunExecCustomizationVolumes(t *testing.T) {
 		t.Fatalf("emptyDir volume not mounted: %s", got)
 	}
 }
+
+// TestRunExecToStreamsLiveOutput pins the worker half of `sandman run
+// --worker`: the live writer receives the container's output as it runs,
+// and the captured log still carries it for the result. The fake docker is
+// the same harness the other worker tests use — no real container.
+func TestRunExecToStreamsLiveOutput(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "docker"),
+		[]byte("#!/bin/sh\necho container-out\nexit 3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	var live strings.Builder
+	res := runExecTo("test-node", execRequest{
+		Cname:  "sandman-exec-test",
+		Image:  "alpine",
+		Cmd:    []string{"true"},
+		Stream: true,
+	}, &live)
+	if res.PrimaryCode != 3 {
+		t.Fatalf("PrimaryCode = %d, want the container's 3", res.PrimaryCode)
+	}
+	if !strings.Contains(live.String(), "container-out") {
+		t.Fatalf("live output = %q, want container-out", live.String())
+	}
+	if !strings.Contains(res.Log, "container-out") {
+		t.Fatalf("result log = %q, want the captured output", res.Log)
+	}
+}
