@@ -1,0 +1,20 @@
+# Host-side persistence for the Sandman daemon's 4242 restriction.
+# This example is intentionally host-specific: replace the --peer list with
+# the actual operator and worker addresses for this daemon host.
+[Unit]
+Description=Sandman fabric daemon firewall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/sandman-fabric-firewall --role daemon \
+  --peer 192.168.1.9/32 \
+  --peer 192.168.1.212/32 \
+  --peer 192.168.1.172/32 \
+  --peer 192.168.1.197/32 \
+  --peer 192.168.1.246/32
+
+[Install]
+WantedBy=multi-user.target

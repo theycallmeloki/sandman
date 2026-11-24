@@ -165,11 +165,12 @@ Lockout notes:
 - Keep the current SSH session open while applying and test from a second
   session before closing it; a serial/console path is the fallback.
 - `--check` performs a parse/transaction check and does not commit.
-- `nft` rules are not persistent across reboot unless the host's
-  `nftables.service` loads them. Persist the table with the distribution's
-  mechanism (for example `nft list table inet sandman_fabric` into the
-  local ruleset) or re-run the script from your configuration management;
-  this repository does not install a persistence unit.
+- The example `sandman-fabric-firewall.service` persists the daemon-side
+  rule. Install the script at `/usr/local/sbin/sandman-fabric-firewall`,
+  adjust its `--peer` list, then `systemctl enable --now
+  sandman-fabric-firewall`. The Kubernetes worker DaemonSet persists the
+  worker-side 9595 rule on its nodes. The service file here is a template,
+  not an automatic install step.
 - `--rollback` removes only `inet sandman_fabric`. It cannot restore a
   different firewall's rules that were changed outside this script.
 
