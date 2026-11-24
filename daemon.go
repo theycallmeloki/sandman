@@ -95,6 +95,10 @@ type daemon struct {
 	// metrics accumulates the instrumented operations' runtime
 	// observability.
 	metrics metricsStore
+	// audit appends the mutation trail (audit.go): every instrumented
+	// POST/PUT/DELETE/PATCH lands as one JSONL record under the state
+	// dir. Its mutex serializes concurrent appends.
+	audit auditLog
 	// metricCounts caches the fleet state gauges (jobs/pipelines by
 	// state, hosts, GPUs) so scrapes don't rescan the state directory on
 	// every poll.
@@ -178,6 +182,9 @@ func cmdDaemon(args []string) {
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
+	// tighten secret material written by an earlier release (0755 dir,
+	// 0644 files); a missing store is normal and never fails startup
+	hardenSecretStore(*state)
 	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: store.New(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}, running: map[string]*runningJob{}, auth: auth}
 	d.text = textBackend{nodeName: *name, handleNodes: d.handleNodes, handleStats: d.handleStats, handleRun: d.handleRun}
 	if auth.enabled() {

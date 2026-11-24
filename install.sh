@@ -275,6 +275,33 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Unprivileged service account; docker access comes from the socket group.
+# Deliberately no PrivateTmp: job scratch paths under /tmp are passed to
+# the host dockerd, which resolves them in the host mount namespace.
+User=sandman
+Group=sandman
+SupplementaryGroups=docker
+StateDirectory=sandman
+StateDirectoryMode=0750
+Environment=HOME=/var/lib/sandman
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/tmp
+ReadWritePaths=/var/lib/sandman
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+EnvironmentFile=-/etc/sandman/auth.env
 ExecStart=/usr/local/bin/sandman worker -name $NAME -port $PORT -advertise $ADVERTISE:$PORT$control$labels
 # a crashed or OOM-killed worker must come back: without a restart
 # policy the control plane's host TTL silently drops it from placement

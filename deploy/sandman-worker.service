@@ -5,6 +5,20 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# The worker also runs unprivileged: it reaches docker through the socket
+# group, not root. `make install` creates the account. Unlike the daemon,
+# this unit does NOT set PrivateTmp: the worker materializes job sides in
+# /tmp and passes those paths to the host dockerd over the socket, and
+# dockerd resolves bind mounts in the host mount namespace, where a
+# private /tmp would not exist. See sandman-worker-hardening.conf.
+User=sandman
+Group=sandman
+SupplementaryGroups=docker
+# HOME is only the docker CLI/config location; the worker itself keeps no
+# durable state. StateDirectory also guarantees the path exists.
+StateDirectory=sandman
+StateDirectoryMode=0750
+Environment=HOME=/var/lib/sandman
 # A bare `sandman worker` joins the fleet with zero configuration: the
 # name defaults to the hostname, the control plane is discovered via mDNS
 # (role=daemon on the LAN), and the exec endpoint binds loopback. For the

@@ -371,7 +371,11 @@ func (d *daemon) serviceSecretEnv(id string, pl pipelineRec, env, mounts []strin
 			dir, ok := mountDirs[m.MountPath]
 			if !ok {
 				dir = filepath.Join(d.jobDir(id), "secrets", strconv.Itoa(len(mountDirs)))
-				os.MkdirAll(dir, 0o755)
+				// 0700 dir / 0600 files (secretfs.go): the bind carries
+				// plaintext secret values from the store.
+				if err := ensureSecretDir(dir); err != nil {
+					return nil, nil, fmt.Errorf("secret mount: %w", err)
+				}
 				mountDirs[m.MountPath] = dir
 				mountKeys[dir] = map[string]string{}
 				mounts = append(mounts, "-v", dir+":"+m.MountPath)
@@ -381,7 +385,10 @@ func (d *daemon) serviceSecretEnv(id string, pl pipelineRec, env, mounts []strin
 					return fmt.Errorf("secret mount: key %q at %q already mounted from secret %q", key, m.MountPath, owner)
 				}
 				mountKeys[dir][key] = m.Name
-				return os.WriteFile(filepath.Join(dir, key), []byte(val), 0o644)
+				if err := writeSecretFile(dir, key, val); err != nil {
+					return fmt.Errorf("secret mount: %w", err)
+				}
+				return nil
 			}
 			if m.Key != "" {
 				v, ok := srec.Data[m.Key]

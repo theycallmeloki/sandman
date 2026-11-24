@@ -7,3 +7,4 @@ resources:
 - decoratorcontroller.yaml
 - sandmand-monitor.yaml
 - sandman-dashboard.yaml
+- networkpolicy.yaml

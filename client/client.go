@@ -1861,11 +1861,13 @@ func (c *Client) FollowLogs(p LogParams) (io.ReadCloser, error) {
 	return resp.Body, nil
 }
 
-// Backup streams the control plane's full durable state as a tar.gz into
-// w: repos, tags, pipelines, jobs, dedup, logs, spout markers, secrets,
-// transactions, triggers — everything under the state dir. The store part
-// is captured under the store's write lock (the single-writer's buffer),
-// so a restored state is a consistent point-in-time snapshot.
+// Backup streams the control plane's durable state as a tar.gz into w:
+// repos, tags, pipelines, jobs, dedup, logs, spout markers, transactions,
+// triggers — the state needed to restore the control plane. Secret
+// material is deliberately excluded: neither the secret store nor the
+// per-job mounted secret copies appear in the archive. The store part is
+// captured under the store's write lock (the single-writer's buffer), so
+// a restored state is a consistent point-in-time snapshot.
 //
 // The response is validated as a gzip stream: the server writes its
 // gzip trailer only on the full success path (a mid-stream failure

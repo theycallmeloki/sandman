@@ -83,6 +83,12 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("pre-backup output = %q (%v), want x", string(b), err)
 	}
 
+	// a secret exists before the backup; it must not travel in the archive
+	secretName := "backup-secret-" + uniq(t)
+	if err := c.CreateSecret(secretName, map[string]string{"token": "backup-secret-value"}); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
 	// stream the backup
 	var buf bytes.Buffer
 	if err := c.Backup(&buf); err != nil {
@@ -108,6 +114,9 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		}
 		if err != nil {
 			t.Fatalf("tar read: %v", err)
+		}
+		if strings.HasPrefix(hdr.Name, "secrets/") || strings.Contains(hdr.Name, "/secrets/") {
+			t.Fatalf("backup archive contains secret path %q", hdr.Name)
 		}
 		path := filepath.Join(state, hdr.Name)
 		switch hdr.Typeflag {
@@ -166,5 +175,16 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 	if b, err := c.GetFile(cm.ID, "big"); err != nil || len(b) != 200*1024 {
 		t.Fatalf("large input after restore = %d bytes (err %v), want %d", len(b), err, 200*1024)
+	}
+	// the excluded secret did not come back (bindings name secrets, the
+	// values must be recreated by the operator)
+	secrets, err := c.ListSecrets()
+	if err != nil {
+		t.Fatalf("list secrets after restore: %v", err)
+	}
+	for _, s := range secrets {
+		if s.Name == secretName {
+			t.Fatalf("secret %s restored from a backup that must exclude it", secretName)
+		}
 	}
 }

@@ -206,10 +206,13 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	})
+	var h http.Handler = mux
 	if d.auth.enabled() {
-		return basicAuth(d.auth, mux)
+		h = basicAuth(d.auth, h)
 	}
-	return mux
+	// audit outside auth: a rejected mutation attempt is still part of
+	// the history (the record carries the 401 status)
+	return d.auditHTTP(h)
 }
 
 // hErr wraps a handler that returns a client error.
@@ -605,10 +608,15 @@ func (s *statusRecorder) Flush() {
 }
 
 // instrument wraps an HTTP handler with its operation's invocation counter
-// and latency histogram.
+// and latency histogram, and names the operation for the central mutation
+// audit wrapper (audit.go). Reads are metered but never audited: the trail
+// is a mutation history, not an access log.
 func (d *daemon) instrument(op string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		if aop := auditOpFrom(r.Context()); aop != nil {
+			aop.name = op
+		}
 		sw := &statusRecorder{ResponseWriter: w, status: 200}
 		h(sw, r)
 		d.metrics.observe(op, time.Since(start).Seconds(), sw.status >= 400)
@@ -931,14 +939,16 @@ func (d *daemon) createSecretH(w http.ResponseWriter, r *http.Request) error {
 		Created: now(),
 		Data:    body.Data,
 	}
-	if err := os.MkdirAll(filepath.Join(d.state, "secrets"), 0o755); err != nil {
+	if err := ensureSecretDir(filepath.Join(d.state, "secrets")); err != nil {
 		return err
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(d.secretPath(body.Name), b, 0o644); err != nil {
+	// 0600: the file carries the secret's values in plaintext on the
+	// daemon host; the store dir is 0700 (secretfs.go).
+	if err := writeSecretFile(filepath.Join(d.state, "secrets"), body.Name+".json", string(b)); err != nil {
 		return err
 	}
 	writeJSON(w, map[string]string{"ok": "true"})

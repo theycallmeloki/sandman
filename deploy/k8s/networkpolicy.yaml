@@ -1,0 +1,38 @@
+# Namespace ingress policy for the sandman namespace.
+#
+# The worker pods are hostNetwork:true and privileged (they run a
+# dockerd-in-Docker sidecar). Pod NetworkPolicy does not apply to
+# hostNetwork pods, so this policy does NOT protect the worker's 9595 exec
+# endpoint or its outbound traffic. The 9595 rule must be enforced on the
+# node/CNI (see deploy/ops/sandman-fabric-firewall.sh and the README).
+#
+# What this policy does cover is the ordinary hook Deployment. It denies
+# all ingress to the namespace, then allows only TCP 80 to the hook pod,
+# which the metacontroller calls. If metacontroller lives outside the
+# cluster (or you want to pin one namespace), add a namespaceSelector to
+# the hook rule instead of leaving the source open.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandman-default-deny-ingress
+  namespace: sandman
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandman-worker-hook-ingress
+  namespace: sandman
+spec:
+  podSelector:
+    matchLabels:
+      app: sandman-worker-hook
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 80

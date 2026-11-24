@@ -528,7 +528,13 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 			dir, ok := mountDirs[m.MountPath]
 			if !ok {
 				dir = filepath.Join(d.jobDir(id), "secrets", strconv.Itoa(len(mountDirs)))
-				os.MkdirAll(dir, 0o755)
+				// 0700 dir / 0600 files (secretfs.go): the bind carries
+				// plaintext secret values from the store.
+				if err := ensureSecretDir(dir); err != nil {
+					fail("secret mount: " + err.Error())
+					d.finishOutput(pl, outCommit, "", true)
+					return
+				}
 				mountDirs[m.MountPath] = dir
 				mountKeys[dir] = map[string]string{}
 				jx.extraMounts = append(jx.extraMounts, "-v", dir+":"+m.MountPath)
@@ -540,7 +546,11 @@ func (d *daemon) runJob(pl pipelineRec, heads []client.Commit, id, propagated st
 					return false
 				}
 				mountKeys[dir][key] = m.Name
-				os.WriteFile(filepath.Join(dir, key), []byte(val), 0o644)
+				if err := writeSecretFile(dir, key, val); err != nil {
+					fail("secret mount: " + err.Error())
+					d.finishOutput(pl, outCommit, "", true)
+					return false
+				}
 				return true
 			}
 			if m.Key != "" {

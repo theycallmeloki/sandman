@@ -59,6 +59,17 @@ func TestSecretsCRUD(t *testing.T) {
 	if err := c.CreateSecret("test-secret", map[string]string{"mykey": "bXktdmFsdWU="}); err != nil {
 		t.Fatalf("create secret: %v", err)
 	}
+	// secret material is private on disk: 0700 store dir, 0600 record
+	if fi, err := os.Stat(filepath.Join(daemonStateDir, "secrets")); err != nil {
+		t.Fatalf("stat secrets dir: %v", err)
+	} else if got := fi.Mode().Perm(); got != 0o700 {
+		t.Fatalf("secrets dir mode = %#o, want 0700", got)
+	}
+	if fi, err := os.Stat(filepath.Join(daemonStateDir, "secrets", "test-secret.json")); err != nil {
+		t.Fatalf("stat secret file: %v", err)
+	} else if got := fi.Mode().Perm(); got != 0o600 {
+		t.Fatalf("secret file mode = %#o, want 0600", got)
+	}
 
 	info, err := c.InspectSecret("test-secret")
 	if err != nil {

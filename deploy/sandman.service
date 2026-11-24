@@ -5,11 +5,30 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# The control plane runs as an unprivileged service account. It owns the
+# state directory and reaches the docker socket through the docker group;
+# it never needs root itself. `make install` creates the user/group and
+# fixes state ownership idempotently (see deploy/ops/README.md).
+# `SupplementaryGroups=docker` is the conventional socket group; if this
+# host's /var/run/docker.sock belongs to another group, use a drop-in
+# (`systemctl edit sandman`) to name that group and add the user to it.
+User=sandman
+Group=sandman
+SupplementaryGroups=docker
+# systemd creates/owns /var/lib/sandman with these permissions before
+# ExecStartPre. Existing state is chowned by `make install`.
+StateDirectory=sandman
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/sandman
+Environment=HOME=/var/lib/sandman
 ExecStartPre=/bin/mkdir -p /var/lib/sandman/jobs
 # Optional HTTP Basic Auth for the API, MCP, and dashboard. Create this
 # root-owned file (mode 0600) with SANDMAN_AUTH_USER=... and either
 # SANDMAN_AUTH_PASSWORD=... or SANDMAN_AUTH_PASSWORD_FILE=... and restart.
 # The leading '-' keeps the unit valid when the file is absent (auth off).
+# systemd reads this file before dropping to the sandman user, so the
+# file itself may remain root:root 0600. A password FILE named *inside*
+# it must be readable by the sandman user (root:sandman 0640).
 EnvironmentFile=-/etc/sandman/auth.env
 ExecStart=/usr/local/bin/sandman daemon
 Restart=on-failure

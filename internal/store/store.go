@@ -231,6 +231,14 @@ func validPath(p string) bool {
 // dirs and non-dir roots are skipped; files ending in .tmp (mid-rename
 // scratch) never enter an archive.
 func (s *Store) TarDir(tw *tar.Writer, dir, prefix string) error {
+	return s.TarDirFiltered(tw, dir, prefix, nil)
+}
+
+// TarDirFiltered is TarDir with a skip predicate: skip is called with each
+// path relative to dir (slash-separated) and whether it is a directory. A
+// skipped directory prunes its whole subtree. A nil predicate skips
+// nothing.
+func (s *Store) TarDirFiltered(tw *tar.Writer, dir, prefix string, skip func(rel string, isDir bool) bool) error {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -249,16 +257,23 @@ func (s *Store) TarDir(tw *tar.Writer, dir, prefix string) error {
 		if fi.IsDir() && p == dir {
 			return nil // children carry the prefix
 		}
-		if !fi.IsDir() && strings.HasSuffix(fi.Name(), ".tmp") {
-			return nil
-		}
-		defer func() { prev = p }()
 		rel, err := filepath.Rel(dir, p)
 		if err != nil {
 			return err
 		}
+		rel = filepath.ToSlash(rel)
+		if skip != nil && skip(rel, fi.IsDir()) {
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !fi.IsDir() && strings.HasSuffix(fi.Name(), ".tmp") {
+			return nil
+		}
+		defer func() { prev = p }()
 		hdr := &tar.Header{
-			Name:    prefix + "/" + filepath.ToSlash(rel),
+			Name:    prefix + "/" + rel,
 			Mode:    int64(fi.Mode().Perm()),
 			ModTime: fi.ModTime(),
 		}

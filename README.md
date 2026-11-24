@@ -676,9 +676,13 @@ blocks until it settles, exiting non-zero unless it succeeded; `logs
 Named metadata blobs with create/inspect/list/delete (the type is reported
 as "Opaque", the creation timestamp is system-assigned). Pipelines bind
 them explicitly — `transform.secrets` names existing secrets and mounts
-each as a file at `MountPath/<key>` and/or an environment variable. The
-trusted-LAN model (no tokens; see [Security posture](#security-posture))
-means any peer on the LAN can manage secrets and bind them into pipelines.
+each as a file at `MountPath/<key>` and/or an environment variable. On the
+daemon host the secret store (`<state>/secrets/`) is `0700` and each
+record `0600`; a job's mounted copies are also `0700`/`0600`. The store is
+never included in a backup (see [Backup and restore](#backup-and-restore)).
+The trusted-LAN model (no tokens; see
+[Security posture](#security-posture)) means any peer on the LAN can
+manage secrets and bind them into pipelines.
 
 ---
 
@@ -1129,11 +1133,16 @@ Data-plane CLI verbs default to the local daemon
 
 ### Backup and restore
 
-- `GET /api/v1/backup` — full control-plane state as a tar.gz: repos, tags,
-  pipelines, jobs, dedup, logs, spout markers, secrets, transactions,
-  triggers. The store part is captured under the store's write lock — the
-  single-writer's buffer — so the archive is a consistent point-in-time
-  state (a captured ref always has its commit in the same archive).
+- `GET /api/v1/backup` — control-plane state as a tar.gz: repos, tags,
+  pipelines, jobs, dedup, logs, spout markers, transactions,
+  triggers. **Secret material is excluded**: the secret store
+  (`secrets/`) and the per-job mounted secret copies
+  (`jobs/<id>/secrets/`) are never archived, so a backup cannot leak
+  plaintext values. The store part is captured under the store's write
+  lock — the single-writer's buffer — so the archive is a consistent
+  point-in-time state (a captured ref always has its commit in the same
+  archive). After a restore, recreate the secrets (bindings in pipeline
+  specs and job records name secrets only, never their values).
 - `sandman backup [dest]` — same, from the CLI.
 - Restore: stop the daemon, extract into the state dir, start.
 - `POST /api/v1/reset?yes=1` / `sandman reset --yes` — destroy every repo,
@@ -1264,6 +1273,32 @@ kubectl -n monitoring create secret generic sandman-auth \
 The worker image must be new enough to send those credentials; the
 current hook pins `worker-v0.2.56`. A worker that does not send them is
 rejected by an auth-enabled daemon and simply fails to join the fleet.
+
+### Secret handling, environment isolation, and the mutation audit trail
+
+- **Secrets on disk** — `<state>/secrets/` is `0700` and each secret
+  record `0600`; daemon startup re-tightens state written by an earlier
+  release (a missing store is normal and never blocks startup). Per-job
+  bind dirs (`jobs/<id>/secrets/`) and their files use the same
+  `0700`/`0600` modes.
+- **Backups never carry secrets** — `GET /api/v1/backup` omits the secret
+  store and prunes `jobs/<id>/secrets/`, the plaintext copies of mounted
+  values. Recreate secrets after restoring.
+- **The process backend does not inherit the daemon environment** — a
+  job run with `-runner process` receives an explicit allowlist
+  (`PATH`, `HOME`, `TMPDIR`, `TMP`, `TEMP`, `LANG`, `LANGUAGE`, `LC_*`,
+  `TZ`, `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `USER`,
+  `LOGNAME`, `SHELL`) plus its own declared env, which wins on key
+  conflicts. Daemon-only values such as `SANDMAN_AUTH_PASSWORD` or cloud
+  credentials never reach user code.
+- **Mutation audit trail** — every mutating HTTP request (`POST`, `PUT`,
+  `DELETE`, `PATCH`, including one rejected by Basic Auth) appends one
+  JSON line to `<state>/audit/mutations.jsonl` (`0700` dir, `0600` file):
+  timestamp, operation, method, route path, source IP, response status,
+  and duration. The log is append-only and survives restarts; requests
+  that only read are not recorded. Lines never contain bodies, headers,
+  credentials, query strings, or secret values, and no endpoint exposes
+  the file.
 
 ---
 

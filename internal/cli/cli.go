@@ -364,11 +364,13 @@ func dataPlaneCommands() []*cobra.Command {
 	}
 }
 
-// newBackupCmd snapshots the full control-plane state to a tar.gz: repos,
-// tags, pipelines, jobs, dedup, logs, spout markers, secrets, transactions,
-// triggers. The store part is captured under the store's write lock, so
-// the archive is a consistent point-in-time state. Restore is manual by
-// design: stop the daemon, extract into the state dir, start the daemon.
+// newBackupCmd snapshots control-plane state to a tar.gz: repos, tags,
+// pipelines, jobs, dedup, logs, spout markers, transactions, triggers.
+// Secret material is excluded by design (the store and the per-job mounted
+// copies), so a backup is never a credential dump. The store part is
+// captured under the store's write lock, so the archive is a consistent
+// point-in-time state. Restore is manual by design: stop the daemon,
+// extract into the state dir, start the daemon.
 func newBackupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "backup [dest]",

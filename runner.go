@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -257,6 +258,13 @@ func (containerRunner) Kill(name string) error {
 // identity is not applied (the process runs as the daemon's user), and
 // provisioning never fails — there is no image to obtain, so the crashed
 // state is unreachable here.
+//
+// Environment isolation: unlike the daemon's own subprocesses, a job does
+// NOT inherit the daemon's full environment. It receives only an explicit
+// allowlist of runtime variables (PATH, HOME, TMPDIR, LANG, LC_*, TZ,
+// DOCKER_HOST, …; see processRunnerEnvAllowlist) plus its own declared
+// env, so daemon-only secrets such as SANDMAN_AUTH_PASSWORD or cloud
+// credentials never reach user code.
 type processRunner struct{}
 
 // procMu guards the running-process registry (name → command) so Kill can
@@ -266,6 +274,69 @@ var (
 	procs   = map[string]*exec.Cmd{}
 	procSeq int
 )
+
+// processRunnerEnvAllowlist is the explicit set of daemon environment
+// variables a process-run job inherits. The process backend must not hand
+// user code the daemon's whole environment: that environment may carry
+// API credentials (SANDMAN_AUTH_*), cloud keys, or any other secret the
+// operator exported. Only ordinary runtime plumbing crosses the boundary,
+// plus the job's own explicit env (transform env, secret bindings, and
+// job metadata), which always wins on a key collision.
+var processRunnerEnvAllowlist = map[string]bool{
+	"PATH":              true, // find sh, python, … as the daemon would
+	"HOME":              true, // tool caches and dotfiles
+	"TMPDIR":            true, // scratch location
+	"TMP":               true,
+	"TEMP":              true,
+	"LANG":              true, // locale / encoding
+	"LANGUAGE":          true,
+	"TZ":                true, // timestamps
+	"DOCKER_HOST":       true, // docker client configuration, when used
+	"DOCKER_TLS_VERIFY": true,
+	"DOCKER_CERT_PATH":  true,
+	"USER":              true, // identity-aware tools
+	"LOGNAME":           true,
+	"SHELL":             true,
+}
+
+// processRunnerEnvAllowed reports whether key may be inherited: the fixed
+// allowlist above, or the LC_* locale family.
+func processRunnerEnvAllowed(key string) bool {
+	return processRunnerEnvAllowlist[key] || strings.HasPrefix(key, "LC_")
+}
+
+// processRunnerEnv builds the environment for one process-run job: the
+// allowlisted daemon variables first, then the job's explicit entries
+// (which override on a duplicate key). The result is sorted for stable
+// behavior and deduplicated — execve must never see two values for one
+// key, where which value wins would depend on the runtime's getenv.
+func processRunnerEnv(jobEnv []string) []string {
+	vals := make(map[string]string, len(jobEnv))
+	for _, kv := range os.Environ() {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || !processRunnerEnvAllowed(k) {
+			continue
+		}
+		vals[k] = v
+	}
+	for _, kv := range jobEnv {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		vals[k] = v
+	}
+	keys := make([]string, 0, len(vals))
+	for k := range vals {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+vals[k])
+	}
+	return out
+}
 
 // Run executes the command as a local process: env and workdir translated
 // through PathMap, output captured (log store + tail), exit code mapped
@@ -332,7 +403,7 @@ func (processRunner) Run(spec JobSpec) RunResult {
 		fmt.Fprintf(os.Stderr, "DEBUG runner: name=%s env=%v cmd=%v dir=%s pathmap=%v\n", spec.Name, env, cmdArgs, workdir, spec.PathMap)
 	}
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = processRunnerEnv(env)
 	cmd.Dir = workdir
 	if len(spec.Stdin) > 0 {
 		cmd.Stdin = strings.NewReader(strings.Join(spec.Stdin, "\n") + "\n")
