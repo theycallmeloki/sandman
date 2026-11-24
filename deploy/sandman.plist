@@ -45,6 +45,15 @@
 	<dict>
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:@SANDMAN_HOME@/.docker/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<!-- Optional HTTP Basic Auth for the API, MCP, and dashboard.
+		     Uncomment both and replace the values (or point
+		     SANDMAN_AUTH_PASSWORD_FILE at a 0600 file outside this plist,
+		     which is the better place for the secret):
+		<key>SANDMAN_AUTH_USER</key>
+		<string>ops</string>
+		<key>SANDMAN_AUTH_PASSWORD_FILE</key>
+		<string>/Users/you/.config/sandman/auth.pass</string>
+		-->
 	</dict>
 
 	<key>RunAtLoad</key>

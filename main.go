@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"sandman/client"
 	"sandman/internal/cli"
 )
 
@@ -36,9 +35,25 @@ var (
 	// addrFlag selects the control plane for the data-plane verbs
 	// (internal/cli); it defaults to the local daemon port.
 	addrFlag = flag.String("addr", defaultAddr(), "control-plane address (data-plane verbs)")
+	// auth flags attach HTTP Basic Auth to every control-plane request.
+	// Env fallbacks are applied after parsing so a flag default never
+	// echoes a credential in help output.
+	authUserFlag     = flag.String("auth-user", "", "control-plane HTTP Basic Auth user (default $SANDMAN_AUTH_USER)")
+	authPasswordFlag = flag.String("auth-password", "", "control-plane HTTP Basic Auth password (default $SANDMAN_AUTH_PASSWORD; prefer the env or -auth-password-file)")
+	authPasswordFile = flag.String("auth-password-file", "", "read the control-plane HTTP Basic Auth password from a file (default $SANDMAN_AUTH_PASSWORD_FILE)")
 	// versionFlag prints the binary and daemon versions and exits.
 	versionFlag = flag.Bool("version", false, "print binary and daemon versions")
 )
+
+// rootAuthUser etc. mirror the global auth flags for the persistent
+// after-verb position (`sandman repo list --auth-user X`).
+var rootAuthUser, rootAuthPass, rootAuthPassFile string
+
+// leadingAuthConfigured records that the leading-position auth flags (or
+// a complete environment pair) already installed credentials. The
+// after-verb resolution must not replace them unless it was given its
+// own auth flag.
+var leadingAuthConfigured bool
 
 func defaultAddr() string {
 	if a := os.Getenv("SANDMAN_ADDR"); a != "" {
@@ -58,10 +73,32 @@ func newRootCmd() *cobra.Command {
 	// --addr also works after the verb (`sandman repo list --addr X`);
 	// the leading-position -addr is consumed by the std flag package
 	root.PersistentFlags().StringVar(&rootAddr, "addr", "", "control-plane address (overrides $SANDMAN_ADDR)")
-	root.PersistentPreRun = func(_ *cobra.Command, _ []string) {
+	root.PersistentFlags().StringVar(&rootAuthUser, "auth-user", "", "control-plane HTTP Basic Auth user (overrides $SANDMAN_AUTH_USER)")
+	root.PersistentFlags().StringVar(&rootAuthPass, "auth-password", "", "control-plane HTTP Basic Auth password (prefer $SANDMAN_AUTH_PASSWORD or --auth-password-file)")
+	root.PersistentFlags().StringVar(&rootAuthPassFile, "auth-password-file", "", "read the control-plane HTTP Basic Auth password from a file")
+	root.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
 		if rootAddr != "" {
 			cli.SetAddr(rootAddr)
 		}
+		switch {
+		case rootAuthUser != "" || rootAuthPass != "" || rootAuthPassFile != "":
+			// After-verb flags may complete an environment-only pair
+			// (e.g. SANDMAN_AUTH_USER + --auth-password).
+			auth, err := authFromEnv(rootAuthUser, rootAuthPass, rootAuthPassFile)
+			if err != nil {
+				return fmt.Errorf("auth: %w", err)
+			}
+			cli.SetAuth(auth.User, auth.Password)
+		case !leadingAuthConfigured:
+			// No leading flags: apply a complete environment pair. A
+			// partial one is not fatal here — a DisableFlagParsing verb
+			// (daemon) may complete it from its own flags, and the
+			// daemon validates the final pair itself.
+			if auth, err := authFromEnv("", "", ""); err == nil && auth.enabled() {
+				cli.SetAuth(auth.User, auth.Password)
+			}
+		}
+		return nil
 	}
 	for _, f := range []struct {
 		use string
@@ -92,6 +129,19 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 	cli.SetAddr(*addrFlag)
+	auth, err := authFromEnv(*authUserFlag, *authPasswordFlag, *authPasswordFile)
+	if err != nil {
+		// An environment-only partial pair may be completed by the
+		// after-verb --auth-* flags; only explicit leading flags are
+		// terminal here. PersistentPreRunE re-resolves the environment
+		// when no leading credentials were installed.
+		if *authUserFlag != "" || *authPasswordFlag != "" || *authPasswordFile != "" {
+			die("auth: "+err.Error(), 2)
+		}
+	} else {
+		cli.SetAuth(auth.User, auth.Password)
+		leadingAuthConfigured = auth.enabled()
+	}
 	cli.SetVersion(Version)
 	if *versionFlag {
 		cli.PrintVersion()
@@ -116,6 +166,10 @@ usage: sandman [flags] <verb> [flags]
 
 global flags:
   -addr <host:port>   control-plane address (default $SANDMAN_ADDR or 127.0.0.1:4242)
+  -auth-user <user>   HTTP Basic Auth user for the control plane (default $SANDMAN_AUTH_USER)
+  -auth-password <pw> HTTP Basic Auth password (default $SANDMAN_AUTH_PASSWORD;
+                      prefer the env or -auth-password-file to keep it out of argv)
+  -auth-password-file <path>  read the password from a file (default $SANDMAN_AUTH_PASSWORD_FILE)
 
 verbs:
   daemon              run the node side (advertises via mDNS, serves jobs)
@@ -214,7 +268,7 @@ func cmdNodes(args []string) {
 	asJSON := fs.Bool("json", false, "emit JSON instead of a table")
 	fs.Parse(args)
 	if !*local {
-		hosts, err := client.New(*addr).Hosts()
+		hosts, err := cli.ClientForAddr(*addr).Hosts()
 		if err == nil {
 			if *asJSON {
 				b, _ := json.MarshalIndent(hosts, "", "  ")

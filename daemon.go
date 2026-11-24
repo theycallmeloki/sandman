@@ -126,6 +126,10 @@ type daemon struct {
 	// mcp is the Model Context Protocol endpoint server.
 	mcpMu sync.Mutex
 	mcp   *mcpServer
+
+	// auth gates the HTTP surface (API, MCP, dashboard) when enabled; the
+	// zero value leaves the port open, preserving the trusted-LAN default.
+	auth authConfig
 }
 
 func (d *daemon) getMCP() *mcpServer {
@@ -162,13 +166,23 @@ func cmdDaemon(args []string) {
 	name := fs.String("name", sanitizeName(hostname()), "advertised instance name")
 	state := fs.String("state", defaultState(), stateFlagHelp)
 	runner := fs.String("runner", "container", "execution backend: container (default) or process")
+	authUser := fs.String("auth-user", "", "HTTP Basic Auth user (default $SANDMAN_AUTH_USER; empty disables auth)")
+	authPass := fs.String("auth-password", "", "HTTP Basic Auth password (default $SANDMAN_AUTH_PASSWORD; prefer the env or -auth-password-file)")
+	authPassFile := fs.String("auth-password-file", "", "read the HTTP Basic Auth password from a file (default $SANDMAN_AUTH_PASSWORD_FILE)")
 	fs.Parse(args)
+	auth, err := authFromEnv(*authUser, *authPass, *authPassFile)
+	if err != nil {
+		log.Fatalf("auth: %v", err)
+	}
 
 	if err := os.MkdirAll(filepath.Join(*state, "jobs"), 0o755); err != nil {
 		log.Fatalf("state dir: %v", err)
 	}
-	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: store.New(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}, running: map[string]*runningJob{}}
+	d := &daemon{reg: newRegistry(*state, *name), state: *state, name: *name, store: store.New(*state), hosts: newHostRegistry(30 * time.Second), runner: containerRunner{}, running: map[string]*runningJob{}, auth: auth}
 	d.text = textBackend{nodeName: *name, handleNodes: d.handleNodes, handleStats: d.handleStats, handleRun: d.handleRun}
+	if auth.enabled() {
+		log.Printf("sandmand: HTTP Basic Auth enabled for the API, MCP, and dashboard")
+	}
 	d.store.SetOnFinish(func() { d.stateChanged.signal() })
 	if *runner == "process" {
 		d.runner = processRunner{}

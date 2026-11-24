@@ -6,6 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStartPre=/bin/mkdir -p /var/lib/sandman/jobs
+# Optional HTTP Basic Auth for the API, MCP, and dashboard. Create this
+# root-owned file (mode 0600) with SANDMAN_AUTH_USER=... and either
+# SANDMAN_AUTH_PASSWORD=... or SANDMAN_AUTH_PASSWORD_FILE=... and restart.
+# The leading '-' keeps the unit valid when the file is absent (auth off).
+EnvironmentFile=-/etc/sandman/auth.env
 ExecStart=/usr/local/bin/sandman daemon
 Restart=on-failure
 RestartSec=2

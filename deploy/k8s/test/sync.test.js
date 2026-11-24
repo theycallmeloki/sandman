@@ -129,6 +129,14 @@ test('worker env: DOCKER_HOST loopback dind + TMPDIR scratch', async () => {
   assert.strictEqual(env.TMPDIR, '/scratch');
 });
 
+test('worker receives control-plane auth from the sandman-auth Secret', async () => {
+  const res = await sync(workerNode);
+  const worker = res.body.attachments[0].spec.containers.find((c) => c.name === 'worker');
+  const auth = Object.fromEntries(worker.env.filter((e) => e.name.startsWith('SANDMAN_AUTH_')).map((e) => [e.name, e.valueFrom]));
+  assert.deepStrictEqual(auth.SANDMAN_AUTH_USER, { secretKeyRef: { name: 'sandman-auth', key: 'username' } });
+  assert.deepStrictEqual(auth.SANDMAN_AUTH_PASSWORD, { secretKeyRef: { name: 'sandman-auth', key: 'password' } });
+});
+
 test('plain node gets docker:dind sidecar, loopback-only, privileged', async () => {
   const res = await sync(workerNode);
   const dind = res.body.attachments[0].spec.containers.find((c) => c.name === 'dind');

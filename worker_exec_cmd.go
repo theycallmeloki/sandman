@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"sandman/client"
+	"sandman/internal/cli"
 )
 
 // adhocExecRequest builds the request for one ad-hoc execution. What an
@@ -82,7 +83,7 @@ func resolveWorkerHost(hosts []client.HostInfo, name, addr string) (client.HostI
 // code. It reports setup failures through errOut and never prints an env
 // value whose name looks secret.
 func clientWorkerRun(ctx context.Context, worker, addr, image string, env, argv []string, out, errOut io.Writer) int {
-	hosts, err := client.New(addr).Hosts()
+	hosts, err := cli.ClientForAddr(addr).Hosts()
 	if err != nil {
 		fmt.Fprintf(errOut, "sandman: cannot read the host registry from %s: %v\n", addr, err)
 		return 1

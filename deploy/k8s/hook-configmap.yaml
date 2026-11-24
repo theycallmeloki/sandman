@@ -24,7 +24,7 @@ data:
     // {status, body, headers} with the desired children in body.
     const controlPlane = 'http://192.168.1.15:4242';
     const workerPort = 9595;
-    const workerImage = 'miladyosregistry.transparentlyrotatableproxy.site/sandman:worker-v0.2.53';
+    const workerImage = 'miladyosregistry.transparentlyrotatableproxy.site/sandman:worker-v0.2.56';
     const dindImage = 'docker:dind';
     const gpuDindImage = 'nvidia/docker:dind';
 
@@ -122,10 +122,12 @@ data:
               image: workerImage,
               command: ['/usr/local/bin/sandman'],
               args: args,
-              // DOCKER_HOST is a unix socket on a shared volume — no TCP
-              // listener, so dockerd's per-restart port-state can never
-              // block startup (and nothing is exposed on the node)
+              // Control-plane Basic Auth. The Secret is created out of band
+              // (sandman/sandman-auth); the worker must use the same
+              // credentials as the authenticated daemon.
               env: [
+                { name: 'SANDMAN_AUTH_USER', valueFrom: { secretKeyRef: { name: 'sandman-auth', key: 'username' } } },
+                { name: 'SANDMAN_AUTH_PASSWORD', valueFrom: { secretKeyRef: { name: 'sandman-auth', key: 'password' } } },
                 { name: 'DOCKER_HOST', value: 'unix:///var/run/docker/docker.sock' },
                 { name: 'TMPDIR', value: '/scratch' },
               ],

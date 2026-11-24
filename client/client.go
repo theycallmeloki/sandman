@@ -67,10 +67,42 @@ func (e *Error) Error() string {
 type Client struct {
 	base string
 	hc   *http.Client
+
+	// authUser/authPass are sent as HTTP Basic Auth on every request when
+	// configured (see WithBasicAuth). The zero value sends no header.
+	authUser string
+	authPass string
 }
 
-func New(addr string) *Client {
-	return &Client{base: "http://" + addr, hc: &http.Client{Timeout: 60 * time.Second}}
+// Option configures a Client at construction.
+type Option func(*Client)
+
+// WithBasicAuth attaches HTTP Basic Auth credentials to every request.
+// A server with auth disabled ignores the header, so this is safe to set
+// unconditionally; both values must be non-empty to send anything.
+func WithBasicAuth(user, pass string) Option {
+	return func(c *Client) {
+		c.authUser = user
+		c.authPass = pass
+	}
+}
+
+// New returns a client for addr (host:port or a full http:// URL passed
+// without the scheme, as before). Options are optional: New(addr) keeps
+// its historical shape and sends no credentials.
+func New(addr string, opts ...Option) *Client {
+	c := &Client{base: "http://" + addr, hc: &http.Client{Timeout: 60 * time.Second}}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// setAuth adds the configured Basic credentials to req.
+func (c *Client) setAuth(req *http.Request) {
+	if c.authUser != "" && c.authPass != "" {
+		req.SetBasicAuth(c.authUser, c.authPass)
+	}
 }
 
 // Base returns the server URL (http://host:port).
@@ -115,6 +147,7 @@ func (c *Client) doClient(hc *http.Client, method, p string, in, out any) error 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return err
@@ -145,6 +178,7 @@ func (c *Client) doRaw(method, p string, body []byte) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	c.setAuth(req)
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return nil, err
@@ -426,6 +460,7 @@ func (c *Client) PutFileStream(commitID, p string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	c.setAuth(req)
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return err
@@ -467,6 +502,7 @@ func (c *Client) PutFileAppendStream(commitID, p string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	c.setAuth(req)
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return err
@@ -1619,6 +1655,7 @@ func (c *Client) FetchFileTo(w io.Writer, commitID, p string, download bool, tim
 	if err != nil {
 		return FileFetch{}, err
 	}
+	c.setAuth(req)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return FileFetch{}, err
@@ -1808,6 +1845,7 @@ func (c *Client) FollowLogs(p LogParams) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.setAuth(req)
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		return nil, err
@@ -1841,6 +1879,7 @@ func (c *Client) Backup(w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	c.setAuth(req)
 	// The shared c.hc carries a 60s total-request timeout — right for
 	// JSON verbs, fatal for an archive that grows with the logs: a
 	// deadline mid-transfer aborts the stream. Dedicated client with a

@@ -14,6 +14,9 @@ Type=simple
 # (README "Add an execution worker") writes this unit with the flags
 # baked in — edit them here and `systemctl restart sandman-worker` to
 # change name, advertise address, or placement labels.
+# Optional control-plane Basic Auth; absent file keeps the historical
+# unauthenticated trusted-LAN worker. The daemon must use the same pair.
+EnvironmentFile=-/etc/sandman/auth.env
 ExecStart=/usr/local/bin/sandman worker
 # a crashed or OOM-killed worker must come back: without a restart
 # policy the control plane's host TTL silently drops it from placement

@@ -57,8 +57,10 @@ Three things are deliberately *not* here, and they change how you operate:
   (macOS: `~/Library/Application Support/sandman`);
   `cat /var/lib/sandman/registry` is the fleet, `ls repos/in/commits` is
   the history. Everything is inspectable with standard tools.
-- **No auth on the wire.** Trusted-LAN by design: *the firewall is the
-  auth*. See [Security posture](#security-posture).
+- **Optional auth on the wire.** Off by default (trusted-LAN): *the
+  firewall is the auth*. Set `-auth-user` plus `-auth-password` /
+  `$SANDMAN_AUTH_PASSWORD` to gate the HTTP API, MCP, and dashboard with
+  HTTP Basic Auth. See [Security posture](#security-posture).
 
 ## Design principles
 
@@ -570,6 +572,12 @@ All endpoints hang off `/api/v1` on the daemon's port.
 Every endpoint has a cobra verb; the ergonomic ones are the cp/less-style
 file verbs. `-addr` selects the control plane (or `SANDMAN_ADDR`); it
 works in leading position or after the verb.
+
+When the daemon requires HTTP Basic Auth, pass `-auth-user` with either
+`-auth-password` or `-auth-password-file` (or set `SANDMAN_AUTH_USER` and
+`SANDMAN_AUTH_PASSWORD` / `SANDMAN_AUTH_PASSWORD_FILE`); the CLI attaches
+the credentials to every control-plane request. Prefer the environment or
+the secret file — a password flag is visible in the process list:
 
 ```sh
 sandman put data.csv in@master:data.csv        # upload: src(s) then dest
@@ -1192,12 +1200,70 @@ actually landed, and prints the final fleet view.
 
 ## Security posture
 
-Trusted-LAN by design: **the firewall is the auth**. The daemon is the only
-thing that touches the docker socket — clients speak the text protocol,
-never docker. A raw docker socket is root-equivalent; treat this fabric
-accordingly: private networks, or an L2 segment you control. No TLS, no
-tokens, no encryption (v1). The worker's exec endpoint is unauthenticated
-too — only expose it where the control plane can reach it.
+Trusted-LAN by default: **the firewall is the auth** — unless you turn on
+HTTP Basic Auth. The daemon is the only thing that touches the docker
+socket — clients speak the text protocol, never docker. A raw docker
+socket is root-equivalent; treat this fabric accordingly: private
+networks, or an L2 segment you control.
+
+### HTTP Basic Auth (optional, default off)
+
+Set both a user and a password to gate the daemon's HTTP surface — the
+JSON API, the MCP transport, and the embedded dashboard/UI. With neither
+set (the default), the port behaves exactly as before.
+
+```sh
+# flags (password visible in the process list)
+sandman daemon -auth-user ops -auth-password 's3cret'
+
+# environment (preferred)
+SANDMAN_AUTH_USER=ops SANDMAN_AUTH_PASSWORD='s3cret' sandman daemon
+
+# secret file (preferred; trailing newline trimmed)
+install -m 600 /dev/null /etc/sandman/auth.pass
+printf '%s\n' 's3cret' > /etc/sandman/auth.pass
+SANDMAN_AUTH_USER=ops SANDMAN_AUTH_PASSWORD_FILE=/etc/sandman/auth.pass sandman daemon
+```
+
+The flag forms are `-auth-user`, `-auth-password`, and
+`-auth-password-file`; the env forms are `SANDMAN_AUTH_USER`,
+`SANDMAN_AUTH_PASSWORD`, and `SANDMAN_AUTH_PASSWORD_FILE`. Credentials
+are compared in constant time. Authentication is all-or-nothing: a
+partial pair (a user with no password, or the reverse), or a literal
+password plus a password file, is rejected at startup. Credentials never
+appear in daemon logs or startup error messages.
+
+Unauthenticated requests to the HTTP surface get
+`401` with `WWW-Authenticate: Basic realm="sandman"` and the API's usual
+JSON error body; every other error keeps its existing shape. Clients
+opt in with `client.New(addr, client.WithBasicAuth(user, pass))`; the CLI
+uses `-auth-user` plus the password/env/file forms above. `curl` uses
+`-u user:pass`.
+
+Two limits are deliberate. The fabric's text protocol (the same port's
+non-HTTP verbs) and the worker's exec endpoint are separate protocols and
+are **not** covered by HTTP Basic Auth. The worker's host *registration*
+goes through `POST /api/v1/hosts`, which is part of the authenticated
+HTTP API; a worker can send the same credentials through
+`SANDMAN_AUTH_USER`/`SANDMAN_AUTH_PASSWORD` (or the matching worker
+flags). The in-cluster worker hook injects those values from the
+`sandman/sandman-auth` Secret, and the Prometheus ServiceMonitor reads
+the monitoring-namespace copy. Basic Auth over plain HTTP protects
+against accidental access, not a network observer: there is still no TLS
+or encryption (v1), and the worker's exec endpoint remains unauthenticated
+— only expose it where the control plane can reach it.
+
+```sh
+# Kubernetes worker and scrape credential (same values as the daemon)
+kubectl -n sandman create secret generic sandman-auth \
+  --from-literal=username=laneone --from-literal=password='replace-me'
+kubectl -n monitoring create secret generic sandman-auth \
+  --from-literal=username=laneone --from-literal=password='replace-me'
+```
+
+The worker image must be new enough to send those credentials; the
+current hook pins `worker-v0.2.56`. A worker that does not send them is
+rejected by an auth-enabled daemon and simply fails to join the fleet.
 
 ---
 
@@ -1205,7 +1271,9 @@ too — only expose it where the control plane can reach it.
 
 - mDNS is link-local: discovery works on one broadcast segment; `attach`
   covers the rest
-- Trusted-LAN only — no auth or encryption on the wire (v1, by design)
+- Trusted-LAN by default: HTTP Basic Auth is optional and covers the HTTP
+  API/MCP/dashboard plus worker registration when configured — the text
+  protocol and worker exec endpoint remain unauthenticated (see [Security posture](#security-posture))
 - No cluster scheduler or backfill: pipelines process commits in order, one
   job at a time per pipeline; parallelism and autoscaling are per-pipeline
 - Fabric `run` artifacts stay in the node's scratch dir

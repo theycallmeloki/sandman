@@ -32,6 +32,27 @@ var addr string
 // SetAddr selects the control-plane address for the data-plane verbs.
 func SetAddr(a string) { addr = a }
 
+// authUser/authPass are the HTTP Basic Auth credentials every client
+// request carries when both are set. Set from the binary's global flags,
+// their SANDMAN_AUTH_* fallbacks, or the persistent flags after a verb.
+var authUser, authPass string
+
+// SetAuth installs the control-plane HTTP Basic Auth credentials.
+// Empty values disable auth (the server default).
+func SetAuth(user, pass string) {
+	authUser, authPass = user, pass
+}
+
+// ClientForAddr builds a client for an explicit address (the fleet verbs
+// carry their own -addr) using the same auth configuration as the
+// data-plane verbs.
+func ClientForAddr(address string) *client.Client {
+	if authUser != "" && authPass != "" {
+		return client.New(address, client.WithBasicAuth(authUser, authPass))
+	}
+	return client.New(address)
+}
+
 // binVersion is the baked build version, injected by main (which owns
 // the -ldflags -X main.Version wiring and the daemon's /api/v1/version).
 var binVersion = "0.0.1"
@@ -112,7 +133,7 @@ func listingGlob(path string) string {
 // daemon predates this build).
 func PrintVersion() {
 	fmt.Printf("sandman %s\n", binVersion)
-	c := client.New(addr)
+	c := ClientForAddr(addr)
 	ver, err := c.Version()
 	if err != nil {
 		fmt.Printf("daemon: not reachable at %s\n", addr)
@@ -122,7 +143,7 @@ func PrintVersion() {
 }
 
 func cliClient() *client.Client {
-	return client.New(addr)
+	return ClientForAddr(addr)
 }
 
 // Commands returns the data-plane subtree (the cobra verbs over the

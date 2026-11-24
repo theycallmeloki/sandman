@@ -44,6 +44,13 @@ spec:
   - port: metrics
     interval: 30s
     path: /api/v1/metrics
+    basicAuth:
+      username:
+        name: sandman-auth
+        key: username
+      password:
+        name: sandman-auth
+        key: password
   namespaceSelector:
     matchNames:
     - monitoring

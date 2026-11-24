@@ -206,6 +206,9 @@ func (d *daemon) apiHandler() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	})
+	if d.auth.enabled() {
+		return basicAuth(d.auth, mux)
+	}
 	return mux
 }
 

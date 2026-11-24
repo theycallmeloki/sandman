@@ -149,6 +149,9 @@ func cmdWorker(args []string) {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
 	name := fs.String("name", "", "host name (default: this host's hostname)")
 	control := fs.String("control", "", "control plane URL, e.g. http://127.0.0.1:4242 (default: discover the daemon via mDNS)")
+	authUser := fs.String("auth-user", "", "control-plane HTTP Basic Auth user (default $SANDMAN_AUTH_USER)")
+	authPassword := fs.String("auth-password", "", "control-plane HTTP Basic Auth password (default $SANDMAN_AUTH_PASSWORD; prefer env or -auth-password-file)")
+	authPasswordFile := fs.String("auth-password-file", "", "read the control-plane HTTP Basic Auth password from a file (default $SANDMAN_AUTH_PASSWORD_FILE)")
 	port := fs.Int("port", 0, "exec endpoint port (0 = ephemeral)")
 	advertise := fs.String("advertise", "", "host:port the control plane must dial to reach this worker (required for placement on a remote host; binds the exec endpoint on all interfaces — the endpoint is unauthenticated, so only set this when the control plane is on another host)")
 	var labels multiFlag
@@ -156,6 +159,11 @@ func cmdWorker(args []string) {
 	var gpuFilter multiFlag
 	fs.Var(&gpuFilter, "gpu", "GPU device index this worker makes schedulable (repeatable; default: every GPU detected)")
 	fs.Parse(args)
+	controlAuth, err := authFromEnv(*authUser, *authPassword, *authPasswordFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sandman worker: auth: %v\n", err)
+		os.Exit(2)
+	}
 	if *name == "" {
 		// a bare `sandman worker` is a legal default worker: the unit and
 		// installer can omit every flag, and the node still joins the
@@ -362,7 +370,7 @@ func cmdWorker(args []string) {
 		fmt.Fprintf(os.Stderr, "sandman worker %s: GPUs schedulable: %v\n", *name, names)
 	}
 	for {
-		if err := registerHost(*control, *name, addr, labels, gpus); err != nil {
+		if err := registerHost(*control, *name, addr, labels, gpus, controlAuth); err != nil {
 			fmt.Fprintf(os.Stderr, "sandman worker %s: register: %v\n", *name, err)
 		}
 		select {
@@ -413,7 +421,7 @@ func detectGPUs(filter []string) []GpuInfo {
 
 // registerHost joins (or refreshes) the worker in the control plane's
 // host registry.
-func registerHost(control, name, addr string, labels []string, gpus []GpuInfo) error {
+func registerHost(control, name, addr string, labels []string, gpus []GpuInfo, auth authConfig) error {
 	body, err := json.Marshal(map[string]any{"name": name, "addr": addr, "labels": labels, "gpus": gpus})
 	if err != nil {
 		return err
@@ -423,6 +431,7 @@ func registerHost(control, name, addr string, labels []string, gpus []GpuInfo) e
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	auth.apply(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
