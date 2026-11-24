@@ -169,7 +169,7 @@ func (d *daemon) recordMutation(op string, r *http.Request, status int, dur time
 		log.Printf("audit: open log: %v", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := f.Chmod(0o600); err != nil {
 		log.Printf("audit: chmod log: %v", err)
 	}

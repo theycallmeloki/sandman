@@ -23,7 +23,7 @@ func readAuditRecords(t *testing.T, path string) []auditRecord {
 	if err != nil {
 		t.Fatalf("open audit log: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var recs []auditRecord
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
