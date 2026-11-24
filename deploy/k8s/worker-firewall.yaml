@@ -1,0 +1,65 @@
+# Protect the worker exec port on every non-control-plane node.
+#
+# Worker pods use hostNetwork:true, so pod NetworkPolicy cannot cover their
+# TCP 9595 listener. This privileged hostNetwork DaemonSet applies a
+# dedicated nftables ingress table in the host network namespace. It is
+# intentionally separate from the daemon host's 4242 rules.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sandman-worker-firewall
+  namespace: sandman
+  labels:
+    app: sandman-worker-firewall
+spec:
+  selector:
+    matchLabels:
+      app: sandman-worker-firewall
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: sandman-worker-firewall
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      containers:
+        - name: firewall
+          image: miladyosregistry.transparentlyrotatableproxy.site/sandman:worker-firewall-v0.2.57
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SANDMAN_CONTROL_PLANE
+              value: "192.168.1.15"
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+      volumes:
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: DirectoryOrCreate
