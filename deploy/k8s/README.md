@@ -54,3 +54,7 @@ If metacontroller runs in a known namespace, narrow the hook ingress rule
 with a `namespaceSelector` instead of allowing the port from any source.
 Validate the directory with `kubectl kustomize deploy/k8s` before letting
 ArgoCD reconcile it.
+
+## Worker exec firewall
+
+The `worker-firewall.yaml` DaemonSet runs a privileged hostNetwork nft helper on every non-control-plane node. It allows TCP 9595 only from `192.168.1.15` and drops all other ingress to that port. This is required because the worker pods themselves are hostNetwork and cannot be protected by Kubernetes NetworkPolicy.
