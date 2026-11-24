@@ -25,7 +25,7 @@ kubectl -n monitoring create secret generic sandman-auth \
 - `sandmand-monitor.yaml` attaches the same credentials to the
   ServiceMonitor scrape.
 - The worker image must be new enough to send the credentials; the hook
-  currently pins `sandman:worker-v0.2.56`.
+  currently pins `sandman:worker-v0.2.57`.
 
 If the daemon has auth disabled, the headers are harmless but the Secrets
 may be omitted once the hook is also updated to not require them.
