@@ -23,8 +23,9 @@ data:
     // function is called with {request: {body: input}} and must return
     // {status, body, headers} with the desired children in body.
     const controlPlane = 'http://192.168.1.15:4242';
+    const controlPlaneHost = '192.168.1.15';
     const workerPort = 9595;
-    const workerImage = 'miladyosregistry.transparentlyrotatableproxy.site/sandman:worker-v0.2.57';
+    const workerImage = 'miladyosregistry.transparentlyrotatableproxy.site/sandman:worker-v0.2.58';
     const dindImage = 'docker:dind';
     const gpuDindImage = 'nvidia/docker:dind';
 
@@ -116,6 +117,17 @@ data:
           // random-suffixed kube-api-access token volume, so every
           // dry-run sees a different name and delete+recreates forever.
           automountServiceAccountToken: false,
+          initContainers: [
+            {
+              name: 'firewall',
+              image: workerImage,
+              command: ['/usr/local/bin/worker-firewall'],
+              env: [
+                { name: 'SANDMAN_CONTROL_PLANE', value: controlPlaneHost },
+              ],
+              securityContext: { privileged: true, allowPrivilegeEscalation: true },
+            },
+          ],
           containers: [
             {
               name: 'worker',

@@ -8,4 +8,3 @@ resources:
 - sandmand-monitor.yaml
 - sandman-dashboard.yaml
 - networkpolicy.yaml
-- worker-firewall.yaml

@@ -19,4 +19,3 @@ nft add rule inet "$TABLE" input tcp dport 9595 ip saddr "$CONTROL_PLANE" accept
 nft add rule inet "$TABLE" input tcp dport 9595 drop
 
 nft list table inet "$TABLE"
-exec sleep infinity

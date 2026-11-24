@@ -137,6 +137,17 @@ test('worker receives control-plane auth from the sandman-auth Secret', async ()
   assert.deepStrictEqual(auth.SANDMAN_AUTH_PASSWORD, { secretKeyRef: { name: 'sandman-auth', key: 'password' } });
 });
 
+test('worker firewall is a privileged host-network init container', async () => {
+  const res = await sync(workerNode);
+  const pod = res.body.attachments[0];
+  const init = pod.spec.initContainers.find((c) => c.name === 'firewall');
+  assert.ok(init, 'firewall init container missing');
+  assert.strictEqual(init.image, 'miladyosregistry.transparentlyrotatableproxy.site/sandman:worker-v0.2.58');
+  assert.deepStrictEqual(init.command, ['/usr/local/bin/worker-firewall']);
+  assert.strictEqual(init.securityContext.privileged, true);
+  assert.deepStrictEqual(init.env, [{ name: 'SANDMAN_CONTROL_PLANE', value: '192.168.1.15' }]);
+});
+
 test('plain node gets docker:dind sidecar, loopback-only, privileged', async () => {
   const res = await sync(workerNode);
   const dind = res.body.attachments[0].spec.containers.find((c) => c.name === 'dind');

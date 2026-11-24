@@ -25,7 +25,7 @@ kubectl -n monitoring create secret generic sandman-auth \
 - `sandmand-monitor.yaml` attaches the same credentials to the
   ServiceMonitor scrape.
 - The worker image must be new enough to send the credentials; the hook
-  currently pins `sandman:worker-v0.2.57`.
+  currently pins `sandman:worker-v0.2.58`.
 
 If the daemon has auth disabled, the headers are harmless but the Secrets
 may be omitted once the hook is also updated to not require them.
@@ -57,4 +57,4 @@ ArgoCD reconcile it.
 
 ## Worker exec firewall
 
-The `worker-firewall.yaml` DaemonSet runs a privileged hostNetwork nft helper on every non-control-plane node. It allows TCP 9595 only from `192.168.1.15` and drops all other ingress to that port. This is required because the worker pods themselves are hostNetwork and cannot be protected by Kubernetes NetworkPolicy.
+Each worker pod runs a privileged `hostNetwork` init container from the same `sandman:worker-v0.2.58` image. The init container installs a `sandman_fabric_worker` nftables table that allows TCP 9595 only from `192.168.1.15` and drops all other ingress to that port. This is required because worker pods are `hostNetwork`; Kubernetes NetworkPolicy cannot cover their socket. The init container is fail-closed: if the firewall cannot be applied, the worker does not start. There is no separate firewall image or DaemonSet.

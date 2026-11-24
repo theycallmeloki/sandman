@@ -168,8 +168,9 @@ Lockout notes:
 - The example `sandman-fabric-firewall.service` persists the daemon-side
   rule. Install the script at `/usr/local/sbin/sandman-fabric-firewall`,
   adjust its `--peer` list, then `systemctl enable --now
-  sandman-fabric-firewall`. The Kubernetes worker DaemonSet persists the
-  worker-side 9595 rule on its nodes. The service file here is a template,
+  sandman-fabric-firewall`. Each worker pod's privileged init container applies and
+  refreshes the worker-side 9595 rule when the worker starts. There is no
+  separate firewall image or DaemonSet. The service file here is a template,
   not an automatic install step.
 - `--rollback` removes only `inet sandman_fabric`. It cannot restore a
   different firewall's rules that were changed outside this script.

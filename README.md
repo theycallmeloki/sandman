@@ -1271,7 +1271,7 @@ kubectl -n monitoring create secret generic sandman-auth \
 ```
 
 The worker image must be new enough to send those credentials; the
-current hook pins `worker-v0.2.57`. A worker that does not send them is
+current hook pins `worker-v0.2.58`. A worker that does not send them is
 rejected by an auth-enabled daemon and simply fails to join the fleet.
 
 ### Secret handling, environment isolation, and the mutation audit trail

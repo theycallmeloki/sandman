@@ -14,6 +14,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}"
 
 FROM docker:cli AS cli
 FROM alpine:3.20
+RUN apk add --no-cache nftables
 COPY --from=cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /out/sandman /usr/local/bin/sandman
+COPY deploy/k8s/worker-firewall/apply.sh /usr/local/bin/worker-firewall
+RUN chmod 0755 /usr/local/bin/worker-firewall
 ENTRYPOINT ["/usr/local/bin/sandman"]
